@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { authApi, AuthApiError } from '../lib/authApi';
 
 export default function Login() {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { user, login } = useAuth();
+  const { user, login, authError, clearAuthError } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -22,32 +23,27 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    clearAuthError();
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Giriş başarısız');
-      }
+      const data = await authApi.login<{ user: any }>({ identifier, password });
 
       login(data.user);
       navigate(from, { replace: true });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      if (err instanceof AuthApiError) {
+        setError(err.message);
+      } else {
+        setError('Giriş sırasında beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleLogin = () => {
-    window.location.href = '/api/auth/google/url';
+    window.location.href = authApi.getGoogleUrl();
   };
 
   return (
@@ -61,6 +57,14 @@ export default function Login() {
             Hesabınıza giriş yapın
           </p>
         </div>
+
+        {authError && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-sm">
+            <p className="font-medium">Auth API erişilemiyor</p>
+            <p>{authError}</p>
+            <p className="mt-1">Deploy ortamında backend çalışmıyor olabilir.</p>
+          </div>
+        )}
         
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">

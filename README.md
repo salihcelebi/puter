@@ -1,25 +1,26 @@
-<<<<<<< HEAD
 # puter
-puter
-=======
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+## Geliştirme
 
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/7468d003-aa06-44fc-baa2-be13335d9721
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
+1. Bağımlılıkları yükleyin:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. `.env` dosyanızı oluşturun (`.env.example` kopyalanabilir).
+3. Sunucu + frontend birlikte çalıştırın:
    `npm run dev`
->>>>>>> 9cbe9cd (Auto upload from local folder - 2026-03-10 20:41:04)
+
+## Build / Start
+
+- Frontend build: `npm run build`
+- Production server başlatma: `npm start`
+
+`npm start`, `server.ts` üzerinden Express API'yi ayağa kaldırır ve `dist` içindeki frontend build'ini servis eder.
+
+## Deploy Notu (Auth için kritik)
+
+Bu projede auth endpoint'leri (`/api/auth/*`) Express backend üzerinde çalışır.
+
+Eğer frontend ayrı bir hostta (ör. Netlify) yayınlanıyorsa, frontend ortamına aşağıdaki değişkeni verin:
+
+- `VITE_API_BASE_URL=https://<backend-host>`
+
+Böylece login/register/me/logout çağrıları backend'e yönlenir ve JSON parse hataları engellenir.
