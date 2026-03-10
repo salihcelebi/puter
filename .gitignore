@@ -9,3 +9,27 @@ coverage/
 
 # Local Netlify folder
 .netlify
+
+# Added by run-nisai-local.ps1
+# Logs
+logs/
+# Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+# Build
+.next/
+.nuxt/
+.cache/
+.turbo/
+# Env secrets
+.env
+.env.*
+# OS / Editor
+Thumbs.db
+.vscode/
+.idea/
+# Misc
+*.tmp
+*.bak
