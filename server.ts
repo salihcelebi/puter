@@ -139,6 +139,28 @@ async function startServer() {
   app.use("/api/assets", assetsRouter);
   app.use("/api/user", userRouter);
 
+
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: 'API endpoint bulunamadı',
+      code: 'API_NOT_FOUND',
+    });
+  });
+
+  app.use((error: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('Unhandled server error:', error);
+    if (res.headersSent) {
+      return next(error);
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: 'Sunucu hatası',
+      code: 'INTERNAL_SERVER_ERROR',
+    });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

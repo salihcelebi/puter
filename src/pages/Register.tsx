@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { authApi, AuthApiError } from '../lib/authApi';
 
 export default function Register() {
   const [email, setEmail] = useState('');
@@ -24,29 +25,23 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, kullanici_adi, gorunen_ad }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Kayıt başarısız');
-      }
+      const data = await authApi.register<{ user: any }>({ email, password, kullanici_adi, gorunen_ad });
 
       login(data.user);
       navigate('/dashboard');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      if (err instanceof AuthApiError) {
+        setError(err.message);
+      } else {
+        setError('Kayıt sırasında beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleLogin = () => {
-    window.location.href = '/api/auth/google/url';
+    window.location.href = authApi.getGoogleUrl();
   };
 
   return (
@@ -86,7 +81,7 @@ export default function Register() {
                 type="text"
                 required
                 className="appearance-none relative block w-full px-3 py-2 border border-zinc-300 rounded-lg placeholder-zinc-500 text-zinc-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="kullanici_adi"
+                placeholder="kullaniciadi"
                 value={kullanici_adi}
                 onChange={(e) => setKullaniciAdi(e.target.value)}
               />
@@ -121,7 +116,7 @@ export default function Register() {
               disabled={loading}
               className="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
             >
-              {loading ? 'Kayıt olunuyor...' : 'Kayıt Ol'}
+              {loading ? 'Kayıt yapılıyor...' : 'Kayıt Ol'}
             </button>
           </div>
         </form>
