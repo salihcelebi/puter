@@ -1,10 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const DB_FILE = process.env.NETLIFY ? '/tmp/kv.json' : path.join(__dirname, 'kv.json');
+const DB_FILE = process.env.NETLIFY
+  ? '/tmp/kv.json'
+  : path.join(process.cwd(), 'server', 'db', 'kv.json');
 
 // Initialize store from file
 let store = new Map<string, any>();
@@ -17,7 +16,6 @@ const saveStore = () => {
     console.error('Error saving KV store:', e);
   }
 };
-
 
 try {
   if (fs.existsSync(DB_FILE)) {
@@ -35,15 +33,15 @@ try {
 
 export const kv = {
   get: async (key: string) => store.get(key) || null,
-  set: async (key: string, value: any) => { 
-    store.set(key, value); 
+  set: async (key: string, value: any) => {
+    store.set(key, value);
     saveStore();
-    return true; 
+    return true;
   },
-  delete: async (key: string) => { 
-    store.delete(key); 
+  delete: async (key: string) => {
+    store.delete(key);
     saveStore();
-    return true; 
+    return true;
   },
   list: async (prefix: string) => {
     const results: any[] = [];

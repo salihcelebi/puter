@@ -1,12 +1,7 @@
 import { createServer as createViteServer } from "vite";
-import path from "path";
-import { fileURLToPath } from "url";
 import express from "express";
 
 import { createApiApp } from "./server/app.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = await createApiApp();
@@ -19,9 +14,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
+    const distDir = `${process.cwd()}/dist`;
+    app.use(express.static(distDir));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+      res.sendFile(`${distDir}/index.html`);
     });
   }
 
