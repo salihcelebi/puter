@@ -10,6 +10,7 @@ interface Asset {
   dosya_adi: string;
   fs_path: string;
   created_at: string;
+  source_job_id?: string | null;
 }
 
 export default function Assets() {
@@ -58,16 +59,17 @@ export default function Assets() {
     try {
       const response = await fetch(`/api/user/assets/${id}/download`);
       if (response.ok) {
-        const data = await response.json();
-        toast.success(data.message || 'İndirme başlatıldı');
-        // In a real app, you would create an invisible anchor tag and click it
-        // const url = window.URL.createObjectURL(new Blob([data]));
-        // const link = document.createElement('a');
-        // link.href = url;
-        // link.setAttribute('download', fileName);
-        // document.body.appendChild(link);
-        // link.click();
-        // link.parentNode?.removeChild(link);
+        // Part 3: download real binary asset stream from backend.
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', fileName);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+        toast.success('İndirme başlatıldı');
       } else {
         toast.error('İndirme başarısız');
       }

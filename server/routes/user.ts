@@ -1,110 +1,125 @@
 import { Router } from 'express';
 import { kv } from '../db/kv.js';
+import { fileSystem } from '../db/fs.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 
 export const userRouter = Router();
 
 userRouter.use(requireAuth);
 
-// Get user profile
 userRouter.get('/profile', async (req: AuthRequest, res) => {
   try {
     const user = await kv.get(`users:${req.user.id}`);
     if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı' });
-    
-    // Remove sensitive data
+
     const { sifre_hash, ...safeUser } = user;
     res.json(safeUser);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Sunucu hatası' });
   }
 });
 
-// Get user assets
 userRouter.get('/assets', async (req: AuthRequest, res) => {
   try {
     const allAssets = await kv.list('assets:');
     const userAssets = allAssets
-      .map(item => item.value)
-      .filter(asset => asset.kullanici_id === req.user.id)
+      .map((item) => item.value)
+      .filter((asset) => asset.kullanici_id === req.user.id)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      
+
     res.json(userAssets);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Varlıklar alınamadı' });
   }
 });
 
-// Delete an asset
 userRouter.delete('/assets/:id', async (req: AuthRequest, res) => {
   try {
     const assetId = req.params.id;
     const asset = await kv.get(`assets:${assetId}`);
-    
+
     if (!asset || asset.kullanici_id !== req.user.id) {
       return res.status(404).json({ error: 'Varlık bulunamadı' });
     }
-    
+
+    // Part 3: delete persisted file while keeping historical job relation consistent.
+    try {
+      await fileSystem.delete(asset.fs_path);
+    } catch {
+      // file already removed is tolerated.
+    }
+
     await kv.delete(`assets:${assetId}`);
-    // In a real app, also delete from fileSystem
-    
+
+    const jobs = await kv.list('aiJob:');
+    for (const item of jobs) {
+      if (item.value?.outputAssetId === assetId) {
+        await kv.set(item.key, {
+          ...item.value,
+          outputUrl: null,
+          outputAssetId: null,
+          metadata: {
+            ...(item.value.metadata || {}),
+            deletedOutputAssetId: assetId,
+          },
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
+
     res.json({ success: true });
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Varlık silinemedi' });
   }
 });
 
-// Download an asset
 userRouter.get('/assets/:id/download', async (req: AuthRequest, res) => {
   try {
     const assetId = req.params.id;
     const asset = await kv.get(`assets:${assetId}`);
-    
+
     if (!asset || asset.kullanici_id !== req.user.id) {
       return res.status(404).json({ error: 'Varlık bulunamadı' });
     }
-    
-    // In a real app, you would read the file from the file system and stream it
-    // For this mock, we'll just send a success response or a mock file
-    // res.download(asset.fs_path, asset.dosya_adi);
-    
-    res.json({ success: true, message: 'İndirme işlemi simüle edildi', url: asset.fs_path });
-  } catch (error) {
+
+    // Part 3: download now streams the real persisted file.
+    const file = await fileSystem.read(asset.fs_path);
+    res.setHeader('Content-Disposition', `attachment; filename="${asset.dosya_adi}"`);
+    res.setHeader('Content-Type', asset.tur === 'video' ? 'video/mp4' : asset.tur === 'audio' ? 'audio/mpeg' : 'image/png');
+    return res.send(file);
+  } catch {
     res.status(500).json({ error: 'Varlık indirilemedi' });
   }
 });
 
-// Get user usage history
 userRouter.get('/usage', async (req: AuthRequest, res) => {
   try {
     const allUsage = await kv.list('usage:');
     const userUsage = allUsage
-      .map(item => item.value)
-      .filter(usage => usage.kullanici_id === req.user.id)
+      .map((item) => item.value)
+      .filter((usage) => usage.kullanici_id === req.user.id)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      
+
     res.json(userUsage);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Kullanım geçmişi alınamadı' });
   }
 });
 
-// Get user credit history
 userRouter.get('/credits', async (req: AuthRequest, res) => {
   try {
     const allLedger = await kv.list('creditLedger:');
     const userLedger = allLedger
-      .map(item => item.value)
-      .filter(entry => entry.kullanici_id === req.user.id)
+      .map((item) => item.value)
+      .filter((entry) => entry.kullanici_id === req.user.id)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      
+
     res.json(userLedger);
-  } catch (error) {
+  } catch {
     res.status(500).json({ error: 'Kredi geçmişi alınamadı' });
   }
 });
 
-// Get user dashboard summary
 userRouter.get('/dashboard', async (req: AuthRequest, res) => {
   try {
     const userId = req.user.id;
@@ -113,90 +128,79 @@ userRouter.get('/dashboard', async (req: AuthRequest, res) => {
 
     const allUsage = await kv.list('usage:');
     const userUsage = allUsage
-      .map(item => item.value)
-      .filter(usage => usage.kullanici_id === userId)
+      .map((item) => item.value)
+      .filter((usage) => usage.kullanici_id === userId)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     const allAssets = await kv.list('assets:');
     const userAssets = allAssets
-      .map(item => item.value)
-      .filter(asset => asset.kullanici_id === userId)
+      .map((item) => item.value)
+      .filter((asset) => asset.kullanici_id === userId)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     const allPayments = await kv.list('payments:');
     const userPayments = allPayments
-      .map(item => item.value)
-      .filter(payment => payment.kullanici_id === userId && payment.durum === 'success');
+      .map((item) => item.value)
+      .filter((payment) => payment.kullanici_id === userId && payment.durum === 'success');
 
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const sevenDaysAgo = new Date(now);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
-    const thirtyDaysAgo = new Date(now);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    // Calculate metrics
     const todayUsedCredit = userUsage
-      .filter(u => new Date(u.created_at) >= today && u.durum === 'completed')
-      .reduce((sum, u) => sum + (u.kredi_maliyeti || 0), 0);
+      .filter((u) => new Date(u.created_at) >= today && (u.durum === 'completed' || u.durum === 'success'))
+      .reduce((sum, u) => sum + Number(u.kredi_maliyeti || 0), 0);
 
     const thisMonthSpending = userPayments
-      .filter(p => new Date(p.created_at) >= firstDayOfMonth)
+      .filter((p) => new Date(p.created_at) >= firstDayOfMonth)
       .reduce((sum, p) => sum + (p.tutar_tl || 0), 0);
 
-    const totalGenerations = userUsage.filter(u => u.durum === 'completed').length;
-    const activeTasks = userUsage.filter(u => u.durum === 'started' || u.durum === 'processing').length;
-    
+    const totalGenerations = userUsage.filter((u) => u.durum === 'completed' || u.durum === 'success').length;
+    const activeTasks = userUsage.filter((u) => u.durum === 'started' || u.durum === 'processing' || u.status === 'queued').length;
     const lastUsedModel = userUsage.length > 0 ? (userUsage[0].detaylar?.modelId || userUsage[0].modul) : '-';
 
-    // Chart Data - Last 7 Days Usage
     const last7DaysUsage = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date(now);
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
-      
-      const dayUsage = userUsage.filter(u => u.created_at.startsWith(dateStr) && u.durum === 'completed');
-      const creditUsed = dayUsage.reduce((sum, u) => sum + (u.kredi_maliyeti || 0), 0);
-      
+
+      const dayUsage = userUsage.filter((u) => u.created_at.startsWith(dateStr) && (u.durum === 'completed' || u.durum === 'success'));
+      const creditUsed = dayUsage.reduce((sum, u) => sum + Number(u.kredi_maliyeti || 0), 0);
+
       last7DaysUsage.push({
         date: date.toLocaleDateString('tr-TR', { weekday: 'short' }),
         fullDate: dateStr,
-        credits: creditUsed
+        credits: creditUsed,
       });
     }
 
-    // Chart Data - Tool Based Usage
-    const toolUsageMap = new Map();
-    userUsage.forEach(u => {
-      if (u.durum === 'completed') {
+    const toolUsageMap = new Map<string, number>();
+    userUsage.forEach((u) => {
+      if (u.durum === 'completed' || u.durum === 'success') {
         const current = toolUsageMap.get(u.modul) || 0;
-        toolUsageMap.set(u.modul, current + (u.kredi_maliyeti || 0));
+        toolUsageMap.set(u.modul, current + Number(u.kredi_maliyeti || 0));
       }
     });
-    
+
     const toolUsage = Array.from(toolUsageMap.entries()).map(([name, value]) => ({ name, value }));
 
     res.json({
       metrics: {
-        remainingCredit: Math.max(0, user.toplam_kredi - (user.kullanilan_kredi || 0)),
+        remainingCredit: Math.max(0, Number(user.toplam_kredi || 0) - Number(user.kullanilan_kredi || 0)),
         todayUsedCredit,
         thisMonthSpending,
         totalGenerations,
         activeTasks,
-        lastUsedModel
+        lastUsedModel,
       },
       recentActivity: userUsage.slice(0, 5),
       recentAssets: userAssets.slice(0, 4),
       charts: {
         last7DaysUsage,
-        toolUsage
-      }
+        toolUsage,
+      },
     });
-
   } catch (error) {
     console.error('Dashboard error:', error);
     res.status(500).json({ error: 'Dashboard verileri alınamadı' });

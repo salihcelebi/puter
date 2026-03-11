@@ -12,6 +12,7 @@ import { fileSystem } from "./db/fs.js";
 import { authService } from "./services/authService.js";
 import { kv } from "./db/kv.js";
 import { ensureModelsSeeded } from "./db/seed-model-prices.js";
+import { aiService } from "./services/aiService.js";
 
 dotenv.config();
 
@@ -37,8 +38,17 @@ export async function createApiApp() {
   app.use(express.json());
   app.use(cookieParser());
 
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  app.get("/api/health", async (req, res) => {
+    // Part 2: expose owner-runtime readiness without leaking secrets.
+    const models = await aiService.listVisibleModels();
+    res.json({
+      status: "ok",
+      ai: {
+        ownerRuntimeConfigured: aiService.isOwnerRuntimeConfigured(),
+        jobsEndpointEnabled: true,
+        visibleModelCount: models.length,
+      },
+    });
   });
 
   app.post('/api/test-sync', async (req, res) => {
