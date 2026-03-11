@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { kv } from '../db/kv.js';
 import { requireAdmin, AuthRequest } from '../middleware/auth.js';
 import { getPricingSettings, updatePricingSettings } from '../db/fiyatlandirma/fiyatlandirma.js';
+import { modelCatalogService } from '../services/modelCatalogService.js';
 
 export const adminRouter = Router();
 
@@ -31,7 +32,7 @@ adminRouter.put('/pricing', async (req: AuthRequest, res) => {
     const models = await kv.list('model:');
     for (const m of models) {
       const model = m.value;
-      const pm = model.profit_multiplier || 1;
+      const pm = Number(model.margin_multiplier ?? model.profit_multiplier ?? 1) || 1;
       
       model.sale_credit_input = model.raw_cost_input_usd !== null ? Math.ceil(model.raw_cost_input_usd * pm * creditPerUsd) : null;
       model.sale_credit_output = model.raw_cost_output_usd !== null ? Math.ceil(model.raw_cost_output_usd * pm * creditPerUsd) : null;
@@ -208,154 +209,14 @@ adminRouter.get('/summary', async (req: AuthRequest, res) => {
 // Users Management
 adminRouter.get('/models/stats', async (req: AuthRequest, res) => {
   try {
-    const usages = await kv.list('usage:');
-    const models = await kv.list('model:');
-    
-    // Create a map of models for quick lookup
-    const modelMap = new Map();
-    for (const m of models) {
-      modelMap.set(m.value.id, m.value);
-    }
-
-    const statsMap = new Map();
-
-    for (const u of usages) {
-      const log = u.value;
-      // Try to find modelId from details, or use module name as fallback
-      const modelId = log.detaylar?.modelId || log.modul;
-      
-      if (!statsMap.has(modelId)) {
-        statsMap.set(modelId, {
-          model_id: modelId,
-          model_name: modelMap.get(modelId)?.model_name || modelId,
-          provider_name: modelMap.get(modelId)?.provider_name || '-',
-          service_type: modelMap.get(modelId)?.service_type || log.modul,
-          usage_count: 0,
-          total_revenue_credits: 0,
-          total_cost_try: 0,
-          total_profit_try: 0
-        });
-      }
-      
-      const stat = statsMap.get(modelId);
-      stat.usage_count += 1;
-      stat.total_revenue_credits += (log.kredi_maliyeti || 0);
-      stat.total_cost_try += (log.ic_maliyet || 0);
-      
-      // We assume 1 USD = 100 credits, so 1 credit = 0.01 USD.
-      // We need to convert revenue to TRY to calculate profit.
-      // Since we don't have historical exchange rates in the log, we'll use the current rate from the model or a default.
-      const currentRate = modelMap.get(modelId)?.usd_try_rate || 35; 
-      const creditPerUsd = getPricingSettings().creditPerUsd;
-      const revenueUsd = (log.kredi_maliyeti || 0) / creditPerUsd;
-      const revenueTry = revenueUsd * currentRate;
-      
-      stat.total_profit_try += (revenueTry - (log.ic_maliyet || 0));
-    }
-
-    const statsArray = Array.from(statsMap.values()).sort((a, b) => b.usage_count - a.usage_count);
-    res.json(statsArray);
+    // Part 2.5: admin model state persists in model:* records.
+    const stats = await modelCatalogService.getUsageStats();
+    res.json(stats);
   } catch (error) {
-    res.status(500).json({ error: 'İstatistikler alınamadı' });
+    res.status(500).json({ error: 'Model istatistikleri alınamadı' });
   }
 });
 
-adminRouter.get('/users', async (req: AuthRequest, res) => {
-  try {
-    const users = await kv.list('users:');
-    const safeUsers = users.map(u => {
-      const { sifre_hash, ...safeUser } = u.value;
-      return safeUser;
-    });
-    res.json(safeUsers);
-  } catch (error) {
-    res.status(500).json({ error: 'Kullanıcılar alınamadı' });
-  }
-});
-
-adminRouter.put('/users/:id', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.params.id;
-    const updates = req.body;
-    
-    const user = await kv.get(`users:${userId}`);
-    if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı' });
-    
-    const updatedUser = { ...user, ...updates };
-    await kv.set(`users:${userId}`, updatedUser);
-    
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Kullanıcı güncellenemedi' });
-  }
-});
-
-// Add/Remove Credits
-adminRouter.post('/users/:id/credits', async (req: AuthRequest, res) => {
-  try {
-    const userId = req.params.id;
-    const { amount, action, reason } = req.body; // action: 'add' or 'remove'
-    
-    const user = await kv.get(`users:${userId}`);
-    if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı' });
-    
-    const numAmount = Number(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      return res.status(400).json({ error: 'Geçersiz miktar' });
-    }
-    
-    const oldBalance = user.toplam_kredi;
-    const newBalance = action === 'add' ? oldBalance + numAmount : Math.max(0, oldBalance - numAmount);
-    
-    user.toplam_kredi = newBalance;
-    await kv.set(`users:${userId}`, user);
-    
-    // Log ledger
-    await kv.set(`creditLedger:${Date.now()}_${userId}`, {
-      id: `${Date.now()}_${userId}`,
-      kullanici_id: userId,
-      islem_tipi: action === 'add' ? 'admin_add' : 'admin_remove',
-      miktar: numAmount,
-      onceki_bakiye: oldBalance,
-      sonraki_bakiye: newBalance,
-      aciklama: reason || 'Admin işlemi',
-      created_at: new Date().toISOString()
-    });
-    
-    res.json({ success: true, newBalance });
-  } catch (error) {
-    res.status(500).json({ error: 'Kredi işlemi başarısız' });
-  }
-});
-
-// Payments Management
-adminRouter.get('/payments', async (req: AuthRequest, res) => {
-  try {
-    const payments = await kv.list('payments:');
-    res.json(payments.map(p => p.value).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
-  } catch (error) {
-    res.status(500).json({ error: 'Ödemeler alınamadı' });
-  }
-});
-
-// Logs & Audits
-adminRouter.get('/logs', async (req: AuthRequest, res) => {
-  try {
-    const usages = await kv.list('usage:');
-    const errors = await kv.list('errors:');
-    
-    const allLogs = [
-      ...usages.map(u => ({ type: 'usage', ...u.value })),
-      ...errors.map(e => ({ type: 'error', ...e.value }))
-    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    
-    res.json(allLogs.slice(0, 500)); // Return last 500 logs
-  } catch (error) {
-    res.status(500).json({ error: 'Loglar alınamadı' });
-  }
-});
-
-// Models Settings
 adminRouter.get('/settings/models', async (req: AuthRequest, res) => {
   try {
     const settings = await kv.get('settings:models') || {
@@ -382,13 +243,23 @@ adminRouter.post('/settings/models', async (req: AuthRequest, res) => {
 });
 
 // Advanced Model Management
-import { MODEL_PRICES, USD_TRY_RATE_KEY, ensureModelsSeeded } from '../db/seed-model-prices.js';
+import { USD_TRY_RATE_KEY, ensureModelsSeeded } from '../db/seed-model-prices.js';
 
 adminRouter.get('/models', async (req: AuthRequest, res) => {
   try {
-    await ensureModelsSeeded();
-    const models = await kv.list('model:');
-    res.json(models.map(m => m.value));
+    const models = await modelCatalogService.listModels({
+      tab: req.query.tab,
+      provider: req.query.provider,
+      modelName: req.query.modelName,
+      serviceType: req.query.serviceType,
+      minInputCost: req.query.minInputCost,
+      maxInputCost: req.query.maxInputCost,
+      minOutputCost: req.query.minOutputCost,
+      maxOutputCost: req.query.maxOutputCost,
+      sortBy: req.query.sortBy,
+      sortDir: req.query.sortDir,
+    });
+    res.json(models);
   } catch (error) {
     res.status(500).json({ error: 'Modeller alınamadı' });
   }
@@ -433,8 +304,8 @@ adminRouter.post('/models/sync-test', async (req, res) => {
       const id = `${p.provider}_${p.model}`.replace(/[^a-zA-Z0-9_-]/g, '_');
       const existing = existingMap.get(id);
 
-      const profitMultiplier = existing?.profit_multiplier || 1;
-      const isActive = existing?.is_active ?? false;
+      const profitMultiplier = Number(existing?.margin_multiplier ?? existing?.profit_multiplier ?? 1) || 1;
+      const isActive = existing?.is_active ?? true;
 
       // Determine single price for non-llm
       let singlePrice = null;
@@ -464,6 +335,7 @@ adminRouter.post('/models/sync-test', async (req, res) => {
         service_type: standardizedServiceType,
         billing_unit: p.price_unit || '',
         is_active: isActive,
+        is_favorite: existing?.is_favorite ?? false,
         
         raw_cost_input_usd: p.input_price,
         raw_cost_output_usd: p.output_price,
@@ -475,6 +347,7 @@ adminRouter.post('/models/sync-test', async (req, res) => {
         raw_cost_output_try: p.output_price !== null ? Number((p.output_price * rate).toFixed(4)) : null,
         raw_cost_single_try: singlePrice !== null ? Number((singlePrice * rate).toFixed(4)) : null,
         
+        margin_multiplier: profitMultiplier,
         profit_multiplier: profitMultiplier,
         
         sale_cost_input_usd: p.input_price !== null ? Number((p.input_price * profitMultiplier).toFixed(4)) : null,
@@ -489,7 +362,12 @@ adminRouter.post('/models/sync-test', async (req, res) => {
         sale_credit_output: p.output_price !== null ? Math.ceil(p.output_price * profitMultiplier * getPricingSettings().creditPerUsd) : null,
         sale_credit_single: singlePrice !== null ? Math.ceil(singlePrice * profitMultiplier * getPricingSettings().creditPerUsd) : null,
         
-        metadata_json: p,
+        metadata_json: { ...(p as any), ...(existing?.metadata_json || {}) },
+        admin_override_pricing: existing?.admin_override_pricing ?? false,
+        usage_count: existing?.usage_count ?? 0,
+        revenue_try: existing?.revenue_try ?? 0,
+        cost_try: existing?.cost_try ?? 0,
+        profit_try: existing?.profit_try ?? 0,
         last_rate_sync_at: now,
         last_price_sync_at: now,
         created_at: existing?.created_at || now,
@@ -544,8 +422,8 @@ adminRouter.post('/models/sync', async (req: AuthRequest, res) => {
       const id = `${p.provider}_${p.model}`.replace(/[^a-zA-Z0-9_-]/g, '_');
       const existing = existingMap.get(id);
 
-      const profitMultiplier = existing?.profit_multiplier || 1;
-      const isActive = existing?.is_active ?? false;
+      const profitMultiplier = Number(existing?.margin_multiplier ?? existing?.profit_multiplier ?? 1) || 1;
+      const isActive = existing?.is_active ?? true;
 
       // Determine single price for non-llm
       let singlePrice = null;
@@ -575,6 +453,7 @@ adminRouter.post('/models/sync', async (req: AuthRequest, res) => {
         service_type: standardizedServiceType,
         billing_unit: p.price_unit || '',
         is_active: isActive,
+        is_favorite: existing?.is_favorite ?? false,
         
         raw_cost_input_usd: p.input_price,
         raw_cost_output_usd: p.output_price,
@@ -586,6 +465,7 @@ adminRouter.post('/models/sync', async (req: AuthRequest, res) => {
         raw_cost_output_try: p.output_price !== null ? Number((p.output_price * rate).toFixed(4)) : null,
         raw_cost_single_try: singlePrice !== null ? Number((singlePrice * rate).toFixed(4)) : null,
         
+        margin_multiplier: profitMultiplier,
         profit_multiplier: profitMultiplier,
         
         sale_cost_input_usd: p.input_price !== null ? Number((p.input_price * profitMultiplier).toFixed(4)) : null,
@@ -600,7 +480,12 @@ adminRouter.post('/models/sync', async (req: AuthRequest, res) => {
         sale_credit_output: p.output_price !== null ? Math.ceil(p.output_price * profitMultiplier * getPricingSettings().creditPerUsd) : null,
         sale_credit_single: singlePrice !== null ? Math.ceil(singlePrice * profitMultiplier * getPricingSettings().creditPerUsd) : null,
         
-        metadata_json: p,
+        metadata_json: { ...(p as any), ...(existing?.metadata_json || {}) },
+        admin_override_pricing: existing?.admin_override_pricing ?? false,
+        usage_count: existing?.usage_count ?? 0,
+        revenue_try: existing?.revenue_try ?? 0,
+        cost_try: existing?.cost_try ?? 0,
+        profit_try: existing?.profit_try ?? 0,
         last_rate_sync_at: now,
         last_price_sync_at: now,
         created_at: existing?.created_at || now,
@@ -620,37 +505,17 @@ adminRouter.post('/models/sync', async (req: AuthRequest, res) => {
 adminRouter.put('/models/:id', async (req: AuthRequest, res) => {
   try {
     const id = req.params.id;
-    const updates = req.body;
-    
-    const model = await kv.get(`model:${id}`);
-    if (!model) return res.status(404).json({ error: 'Model bulunamadı' });
-    
-    // Recalculate if profit_multiplier or usd_try_rate changed
-    let updatedModel = { ...model, ...updates, updated_at: new Date().toISOString() };
-    
-    if (updates.profit_multiplier !== undefined || updates.usd_try_rate !== undefined || updates.raw_cost_input_usd !== undefined || updates.raw_cost_output_usd !== undefined || updates.raw_cost_single_usd !== undefined) {
-      const pm = updatedModel.profit_multiplier;
-      const rate = updatedModel.usd_try_rate;
-      
-      updatedModel.sale_cost_input_usd = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * pm).toFixed(4)) : null;
-      updatedModel.sale_cost_output_usd = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * pm).toFixed(4)) : null;
-      updatedModel.sale_cost_single_usd = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * pm).toFixed(4)) : null;
-      
-      updatedModel.sale_cost_input_try = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * pm * rate).toFixed(4)) : null;
-      updatedModel.sale_cost_output_try = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * pm * rate).toFixed(4)) : null;
-      updatedModel.sale_cost_single_try = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * pm * rate).toFixed(4)) : null;
-      
-      updatedModel.raw_cost_input_try = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * rate).toFixed(4)) : null;
-      updatedModel.raw_cost_output_try = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * rate).toFixed(4)) : null;
-      updatedModel.raw_cost_single_try = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * rate).toFixed(4)) : null;
+    const updates = req.body || {};
+    const normalizedUpdates = {
+      ...updates,
+      ...(updates.profit_multiplier !== undefined ? { margin_multiplier: updates.profit_multiplier } : {}),
+      ...(updates.margin_multiplier !== undefined || updates.profit_multiplier !== undefined ? { admin_override_pricing: true } : {}),
+    };
 
-      updatedModel.sale_credit_input = updatedModel.raw_cost_input_usd !== null ? Math.ceil(updatedModel.raw_cost_input_usd * pm * getPricingSettings().creditPerUsd) : null;
-      updatedModel.sale_credit_output = updatedModel.raw_cost_output_usd !== null ? Math.ceil(updatedModel.raw_cost_output_usd * pm * getPricingSettings().creditPerUsd) : null;
-      updatedModel.sale_credit_single = updatedModel.raw_cost_single_usd !== null ? Math.ceil(updatedModel.raw_cost_single_usd * pm * getPricingSettings().creditPerUsd) : null;
-    }
-    
-    await kv.set(`model:${id}`, updatedModel);
-    res.json({ success: true, model: updatedModel });
+    const model = await modelCatalogService.updateModel(id, normalizedUpdates);
+    if (!model) return res.status(404).json({ error: 'Model bulunamadı' });
+
+    res.json({ success: true, model });
   } catch (error) {
     res.status(500).json({ error: 'Model güncellenemedi' });
   }
@@ -660,37 +525,14 @@ adminRouter.put('/models/bulk/update', async (req: AuthRequest, res) => {
   try {
     const { ids, updates } = req.body;
     if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array olmalı' });
-    
-    for (const id of ids) {
-      const model = await kv.get(`model:${id}`);
-      if (!model) continue;
-      
-      let updatedModel = { ...model, ...updates, updated_at: new Date().toISOString() };
-      
-      if (updates.profit_multiplier !== undefined || updates.usd_try_rate !== undefined || updates.raw_cost_input_usd !== undefined || updates.raw_cost_output_usd !== undefined || updates.raw_cost_single_usd !== undefined) {
-        const pm = updatedModel.profit_multiplier;
-        const rate = updatedModel.usd_try_rate;
-        
-        updatedModel.sale_cost_input_usd = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * pm).toFixed(4)) : null;
-        updatedModel.sale_cost_output_usd = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * pm).toFixed(4)) : null;
-        updatedModel.sale_cost_single_usd = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * pm).toFixed(4)) : null;
-        
-        updatedModel.sale_cost_input_try = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * pm * rate).toFixed(4)) : null;
-        updatedModel.sale_cost_output_try = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * pm * rate).toFixed(4)) : null;
-        updatedModel.sale_cost_single_try = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * pm * rate).toFixed(4)) : null;
-        
-        updatedModel.raw_cost_input_try = updatedModel.raw_cost_input_usd !== null ? Number((updatedModel.raw_cost_input_usd * rate).toFixed(4)) : null;
-        updatedModel.raw_cost_output_try = updatedModel.raw_cost_output_usd !== null ? Number((updatedModel.raw_cost_output_usd * rate).toFixed(4)) : null;
-        updatedModel.raw_cost_single_try = updatedModel.raw_cost_single_usd !== null ? Number((updatedModel.raw_cost_single_usd * rate).toFixed(4)) : null;
 
-        updatedModel.sale_credit_input = updatedModel.raw_cost_input_usd !== null ? Math.ceil(updatedModel.raw_cost_input_usd * pm * getPricingSettings().creditPerUsd) : null;
-        updatedModel.sale_credit_output = updatedModel.raw_cost_output_usd !== null ? Math.ceil(updatedModel.raw_cost_output_usd * pm * getPricingSettings().creditPerUsd) : null;
-        updatedModel.sale_credit_single = updatedModel.raw_cost_single_usd !== null ? Math.ceil(updatedModel.raw_cost_single_usd * pm * getPricingSettings().creditPerUsd) : null;
-      }
-      
-      await kv.set(`model:${id}`, updatedModel);
-    }
-    
+    const normalizedUpdates = {
+      ...(updates || {}),
+      ...(updates?.profit_multiplier !== undefined ? { margin_multiplier: updates.profit_multiplier } : {}),
+      ...(updates?.margin_multiplier !== undefined || updates?.profit_multiplier !== undefined ? { admin_override_pricing: true } : {}),
+    };
+
+    await modelCatalogService.bulkUpdate(ids, normalizedUpdates);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Toplu güncelleme başarısız' });

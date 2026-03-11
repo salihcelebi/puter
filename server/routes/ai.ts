@@ -218,6 +218,31 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
 aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
   try {
     const { prompt, imageUrl, model, duration, aspectRatio } = req.body;

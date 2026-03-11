@@ -3,12 +3,23 @@ import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
 import { fetchApiJson } from '../../lib/apiClient';
 
+interface AIModel {
+  id: string;
+  provider_name: string;
+  model_name: string;
+  service_type: string;
+  metadata_json?: any;
+  sale_credit_single: number | null;
+}
+
 export default function PhotoToVideo() {
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string } | null>(null);
   const [error, setError] = useState('');
+  const [models, setModels] = useState<AIModel[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState('');
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -16,6 +27,22 @@ export default function PhotoToVideo() {
     }
   };
 
+
+  // Part 2.5: AI pages consume persisted active catalog only.
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+        const photoVideoModels = data.filter((m) => m.service_type === 'video' || m.service_type === 'image_to_video')
+          .filter((m) => m.service_type !== 'video' || m.metadata_json?.supports_image_conditioning !== false);
+        setModels(photoVideoModels);
+        if (photoVideoModels.length > 0) setSelectedModelId(photoVideoModels[0].id);
+      } catch (e) {
+        setError('Model listesi alınamadı');
+      }
+    };
+    fetchModels();
+  }, []);
 
   // Part 2: poll backend job status instead of assuming immediate media readiness.
   useEffect(() => {
@@ -46,14 +73,14 @@ export default function PhotoToVideo() {
   }, [result?.jobId, result?.status]);
 
   const handleGenerate = async () => {
-    if (!prompt || !image) return;
+    if (!prompt || !image || !selectedModelId) return;
     setLoading(true);
     setError('');
     
     try {
       const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string }>('/api/ai/photo-to-video', {
         method: 'POST',
-        body: JSON.stringify({ prompt, imageUrl: image.name, clientRequestId: `p2v_${Date.now()}` }),
+        body: JSON.stringify({ prompt, imageUrl: image.name, modelId: selectedModelId, clientRequestId: `p2v_${Date.now()}` }),
       });
 
       setResult(data);
@@ -89,9 +116,10 @@ export default function PhotoToVideo() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Model</label>
-              <select className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                <option>Sora</option>
-                <option>Veo</option>
+              <select value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)} className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.provider_name} - {m.model_name}</option>
+                ))}
               </select>
             </div>
             <div>
