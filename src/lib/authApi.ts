@@ -1,4 +1,37 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const RAW_API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim();
+const NORMALIZED_API_BASE_URL = RAW_API_BASE_URL.replace(/\/$/, '');
+const ALLOW_CROSS_ORIGIN_API = String(import.meta.env.VITE_ALLOW_CROSS_ORIGIN_API || '').toLowerCase() === 'true';
+
+const resolveApiBaseUrl = () => {
+  if (!NORMALIZED_API_BASE_URL) {
+    return '';
+  }
+
+  if (typeof window === 'undefined') {
+    return NORMALIZED_API_BASE_URL;
+  }
+
+  if (ALLOW_CROSS_ORIGIN_API) {
+    return NORMALIZED_API_BASE_URL;
+  }
+
+  try {
+    const configured = new URL(NORMALIZED_API_BASE_URL, window.location.origin);
+    if (configured.origin !== window.location.origin) {
+      console.warn('[auth-api] Cross-origin VITE_API_BASE_URL ignored. Falling back to same-origin /api/*.', {
+        configuredOrigin: configured.origin,
+        currentOrigin: window.location.origin,
+      });
+      return '';
+    }
+  } catch {
+    return '';
+  }
+
+  return NORMALIZED_API_BASE_URL;
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const AUTH_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/me', '/api/auth/logout', '/api/auth/google/url'] as const;
 type AuthPath = (typeof AUTH_PATHS)[number];
