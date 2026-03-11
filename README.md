@@ -1769,7 +1769,7 @@ SATIR SAYISI: 24
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
 - Harici bağımlılıklar: `@tailwindcss/vite`, `@vitejs/plugin-react`, `path`, `vite`.  
 - Frontend giriş dosyaları ve tüm build zinciri bu config’ten etkilenir.  
-- `process.env.GEMINI_API_KEY` define ile frontend tarafına enjekte edilir.  
+- Frontend bundle’a AI sağlayıcı anahtarı enjekte edilmez; AI çağrıları backend sınırı arkasında tutulur.  
 
 5. EK NOT  
 - HMR davranışı `DISABLE_HMR` env değişkenine bağlıdır.  
@@ -1815,13 +1815,13 @@ SATIR SAYISI: 9
 
 2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
 - Fonksiyon tanımı yoktur.  
-- Değişkenler: `GEMINI_API_KEY`, `APP_URL`.  
+- Değişkenler: `APP_URL`, `PUTER_OWNER_AI_BASE_URL`, `PUTER_OWNER_AI_TOKEN`.  
 
 3. DOSYA YOLU  
 - `.env.example`
 
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
-- `server/services/aiService.ts` `GEMINI_API_KEY` ile ilişkilidir.  
+- `server/services/aiService.ts` owner runtime (`PUTER_OWNER_AI_BASE_URL`, `PUTER_OWNER_AI_TOKEN`) ile ilişkilidir.  
 - `vite.config.ts` env yüklemesiyle ilişkilidir.  
 - Dağıtım ve local kurulum adımlarında referans dosyasıdır.  
 
@@ -2045,7 +2045,7 @@ authService.ts      aiService.ts       billingService.ts       kv.ts            
                      |
                      +------> fileSystem.ts ------> .data/fs/*
                      |
-                     +------> GoogleGenAI
+                     +------> Owner Runtime API
                      |
                      +------> creditLedger:* / usage:* / assets:*
 
