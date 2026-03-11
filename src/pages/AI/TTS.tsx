@@ -45,9 +45,10 @@ export default function TTS() {
     setError('');
     
     try {
-      const data = await fetchApiJson<{ url: string; assetId: string }>('/api/ai/tts', {
+      // Part 2: switch to voiceName contract and keep response compatibility.
+      const data = await fetchApiJson<{ url: string; assetId: string; requestId?: string; modelId?: string }>('/api/ai/tts', {
         method: 'POST',
-        body: JSON.stringify({ text, voice: 'Kore', modelId: selectedModelId }),
+        body: JSON.stringify({ text, voiceName: 'Kore', modelId: selectedModelId, clientRequestId: `tts_${Date.now()}` }),
       });
       
       setResult(data);

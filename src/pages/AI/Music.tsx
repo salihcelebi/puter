@@ -19,9 +19,11 @@ export default function Music() {
   
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [musicCapability, setMusicCapability] = useState<{ supported: boolean; reason?: string; code?: string } | null>(null);
 
   useEffect(() => {
     fetchModels();
+    fetchCapability();
   }, []);
 
   const fetchModels = async () => {
@@ -37,17 +39,28 @@ export default function Music() {
     }
   };
 
+
+  // Part 2: music remains capability-gated to avoid fake success behavior.
+  const fetchCapability = async () => {
+    try {
+      const capability = await fetchApiJson<{ supported: boolean; reason?: string; code?: string }>('/api/ai/music/capability');
+      setMusicCapability(capability);
+    } catch (capError: any) {
+      setMusicCapability({ supported: false, reason: capError.message, code: capError.code });
+    }
+  };
+
   const selectedModel = models.find(m => m.id === selectedModelId);
 
   const handleGenerate = async () => {
-    if (!prompt || !selectedModelId) return;
+    if (!prompt || !selectedModelId || musicCapability?.supported === false) return;
     setLoading(true);
     setError('');
     
     try {
       const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/music', {
         method: 'POST',
-        body: JSON.stringify({ prompt, tags: ['Pop', 'Kadın Vokal'], modelId: selectedModelId }),
+        body: JSON.stringify({ prompt, tags: ['Pop', 'Kadın Vokal'], modelId: selectedModelId, clientRequestId: `music_${Date.now()}` }),
       });
 
       setResult(data);
@@ -201,6 +214,12 @@ export default function Music() {
           </div>
         )}
 
+        {musicCapability?.supported === false && (
+          <div className="bg-amber-50 text-amber-700 p-3 rounded-lg text-sm mb-4 border border-amber-200">
+            {musicCapability.reason || 'Müzik özelliği henüz hazır değil'} ({musicCapability.code || 'FEATURE_NOT_READY'})
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border border-red-200">
             {error}
@@ -225,7 +244,7 @@ export default function Music() {
             <span className="text-xs text-zinc-500 mb-1 hidden sm:block">= 3 kredi</span>
             <button
               onClick={handleGenerate}
-              disabled={loading || !prompt}
+              disabled={loading || !prompt || musicCapability?.supported === false}
               className="w-full sm:w-auto px-6 py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors flex justify-center items-center gap-2"
             >
               {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>}

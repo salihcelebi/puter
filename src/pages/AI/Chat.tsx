@@ -63,11 +63,13 @@ export default function Chat() {
     setLoading(true);
 
     try {
-      const data = await fetchApiJson<{ response: string }>('/api/ai/chat', {
+      // Part 2: include request ids and tolerate normalized backend response envelope.
+      const data = await fetchApiJson<{ response: string; requestId?: string; modelId?: string }>('/api/ai/chat', {
         method: 'POST',
         body: JSON.stringify({
           prompt: input,
-          modelId: selectedModelId
+          modelId: selectedModelId,
+          clientRequestId: `chat_${Date.now()}`
         })
       });
 

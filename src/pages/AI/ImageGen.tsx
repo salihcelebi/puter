@@ -44,9 +44,10 @@ export default function ImageGen() {
     setError('');
     
     try {
-      const data = await fetchApiJson<{ url: string; assetId: string }>('/api/ai/image', {
+      // Part 2: keep UI backward-compatible while passing normalized request fields.
+      const data = await fetchApiJson<{ url: string; assetId: string; requestId?: string; modelId?: string }>('/api/ai/image', {
         method: 'POST',
-        body: JSON.stringify({ prompt, modelId: selectedModelId }),
+        body: JSON.stringify({ prompt, modelId: selectedModelId, clientRequestId: `image_${Date.now()}` }),
       });
       
       setResult(data);

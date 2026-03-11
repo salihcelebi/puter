@@ -14,7 +14,7 @@ interface AIModel {
 export default function VideoGen() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string } | null>(null);
   const [error, setError] = useState('');
   
   const [models, setModels] = useState<AIModel[]>([]);
@@ -42,6 +42,35 @@ export default function VideoGen() {
 
   const selectedModel = models.find(m => m.id === selectedModelId);
 
+  // Part 2: keep job polling honest, avoid false-ready media state.
+  useEffect(() => {
+    if (!result?.jobId || !result.status || result.status === 'completed' || result.status === 'failed') return;
+
+    const timer = setInterval(async () => {
+      try {
+        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string }>(`/api/ai/jobs/${result.jobId}`);
+        if (job.status === 'completed') {
+          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl }));
+          clearInterval(timer);
+          return;
+        }
+        if (job.status === 'failed') {
+          setError(job.error || 'Video işi başarısız oldu');
+          setResult(prev => ({ ...(prev || {}), status: 'failed' }));
+          clearInterval(timer);
+          return;
+        }
+
+        setResult(prev => ({ ...(prev || {}), status: job.status }));
+      } catch (pollError: any) {
+        setError(pollError.message || 'Video durumu alınamadı');
+        clearInterval(timer);
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [result?.jobId, result?.status]);
+
   useEffect(() => {
     if (selectedModel) {
       // Cost calculation: baseCost * (duration / 5)
@@ -57,13 +86,14 @@ export default function VideoGen() {
     setError('');
     
     try {
-      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string }>('/api/ai/video', {
         method: 'POST',
         body: JSON.stringify({ 
           prompt,
           modelId: selectedModelId,
           duration,
-          aspectRatio
+          aspectRatio,
+          clientRequestId: `video_${Date.now()}`
         }),
       });
 
@@ -166,7 +196,8 @@ export default function VideoGen() {
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
           ) : result?.jobId ? (
             <div className="text-center text-zinc-500">
-              Üretim işi kuyruğa alındı. Job ID: <span className="font-mono">{result.jobId}</span>
+              Üretim durumu: <span className="font-semibold">{result.status || 'queued'}</span><br />
+              Job ID: <span className="font-mono">{result.jobId}</span>
             </div>
           ) : (
             <div className="text-center text-zinc-400">
