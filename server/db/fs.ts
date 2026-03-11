@@ -5,7 +5,11 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const BASE_DIR = path.join(process.cwd(), '.data', 'fs');
+import { getWritableBaseDir, isServerlessRuntime } from './runtime.js';
+
+const BASE_DIR = isServerlessRuntime()
+  ? path.join(getWritableBaseDir(), 'data', 'fs')
+  : path.join(getWritableBaseDir(), '.data', 'fs');
 
 export const fileSystem = {
   init: async () => {
