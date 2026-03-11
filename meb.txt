@@ -1,0 +1,109 @@
+Aşağıya istediğin sırayla, **yalnızca me.puter odağında** yazıyorum.
+Dayanak olarak yüklediğin dosyadaki me.puter mimari notlarını kullandım.  
+
+## 1) Puter nedir? — me.puter bağlamında 10 cümle
+
+1. Puter, tarayıcıdan ve sunucu tarafında kullanılabilen bir yapay zeka ve bulut çalışma katmanıdır. 
+2. Puter.js içinde sohbet, görsel, OCR, video, TTS, STT ve speech-to-speech gibi hazır yardımcı işlevler vardır. 
+3. me.puter bağlamında Puter, senin uygulamanın arka planda kullandığı iç sağlayıcı gibi çalışır. 
+4. Bu modelde Puter, son kullanıcıya görünen bir hesap sistemi değil, senin backend katmanının arkasındaki motor olur. 
+5. Puter Worker veya Node backend üzerinden çağrıldığında, AI işlemleri senin kontrol ettiğin sunucu sınırında çalıştırılabilir. 
+6. Böylece Puter çağrıları doğrudan frontend’den değil, senin `/api/ai/*` uç noktalarının arkasından akar. 
+7. Puter burada model erişimi, üretim, dosya işleme ve bazı depolama/KV yetenekleri sağlayan temel altyapıdır. 
+8. Senin ürün mantığın ise auth, kredi düşümü, loglama, hız limiti ve model izinleri gibi kuralları Puter’ın üstüne koyar. 
+9. Yani Puter tek başına ürün değildir; ürünün AI omurgasını taşıyan altyapı katmanıdır. 
+10. me.puter yaklaşımında doğru kullanım, Puter’ı görünmez iç motor yapmak ve tüm kontrolü uygulama backend’inde toplamaktır. 
+
+## 2) me.puter nedir? — 7 cümle
+
+1. me.puter, Worker içinde dağıtımı yapan kişinin yani sahibin Puter kaynaklarını temsil eder. 
+2. Bu bağlamda çalışan AI çağrıları, merkezi ve paylaşımlı uygulama kaynakları üzerinden yürür. 
+3. me.puter kullanıldığında Puter auth token’ı kullanıcıda değil, sunucu tarafında tutulur. 
+4. Bu yapı sayesinde kullanıcıya yerel uygulama girişi sunulurken Puter arka planda görünmez kalır. 
+5. me.puter, owner-pays yani maliyetin yönetici veya uygulama sahibi tarafında toplandığı mimariye uygundur. 
+6. Bu nedenle kredi, kota, hız limiti, log ve model allowlist gibi tüm yönetişim kuralları senin backend katmanında uygulanmalıdır. 
+7. Kısacası me.puter, Puter’ı kullanıcı hesabı deneyimi olmadan, merkezi ve kontrollü bir AI çalışma alanı olarak kullanma biçimidir. 
+
+## 3) Senin istediklerin
+
+İstediğin 3 madde zaten net:
+
+1. Kullanıcıların Puter ile kimlik doğrulaması yapmasını istemiyorsun. 
+2. Maliyet sahipliğinin sende olmasını, kullanıcı düzeyinde iç kredi, kota ve yönetici gözetimi yürütmek istiyorsun. 
+3. Merkezi denetim/log sınırı, özel hız limitleme, kötüye kullanım önleme ve model allowlist istiyorsun. 
+
+Söylemeyi unutmuş olabileceğin 3 kritik madde daha:
+
+4. **Tüm AI çağrılarının sadece sunucu tarafında çalışmasını** istemelisin; böylece owner auth token gizli kalır ve istemciye sızmaz. 
+5. **Üretilen görsel, ses ve video çıktılarının kalıcı depolamasının sana ait olmasını** istemelisin; çünkü dönen URL veya data yapıları her zaman kalıcı kabul edilmemelidir. 
+6. **Uzun süren işlemler için job, polling, idempotency ve tekrar deneme güvenliği** istemelisin; özellikle video ve fotoğraftan video süreçlerinde bu kritik olur. 
+
+---
+
+# Şimdi sadece me.puter’e göre süreçler
+
+## Sohbet süreci — me.puter
+
+1. Kullanıcı senin uygulamana giriş yapar; Puter’a değil, senin auth sistemine bağlanır. 
+2. Frontend, mesajı doğrudan modele değil, senin `POST /api/ai/chat` endpoint’ine yollar. 
+3. Backend önce kullanıcı yetkisini, kredi durumunu, kota sınırını ve model iznini kontrol eder. 
+4. Ardından Worker içinde `me.puter.ai.chat()` ya da owner token ile başlatılmış Node üstünden `puter.ai.chat()` çağrılır. 
+5. Araç kullanımı varsa, tool execution istemcide değil backend içinde çalıştırılır. 
+6. Akışlı cevap gerekiyorsa backend cevabı proxy eder; yani stream önce backend’e gelir, sonra kullanıcıya aktarılır. 
+7. Sonunda log yazılır, kredi düşülür ve yanıt kullanıcıya döner. 
+
+## İmaj süreci — me.puter
+
+1. Kullanıcı prompt’u senin `POST /api/ai/image` endpoint’ine yollar. 
+2. Backend, kullanıcı hakkı, günlük limit, çözünürlük sınırı ve model allowlist kontrolü yapar. 
+3. Sonra `me.puter.ai.txt2img()` çağrılır. 
+4. Üretim sonucu data URL içeren bir görsel nesnesi olarak gelir. 
+5. Bu çıktıyı kalıcı kullanmak istiyorsan backend bunu senin depolamana kaydeder. 
+6. Kullanıcıya doğrudan ham geçici veri yerine stabil dosya referansı veya senin URL’in verilir. 
+7. İşlem sonunda log, maliyet tahmini ve kredi kaydı yazılır. 
+
+## Video süreci — me.puter
+
+1. Kullanıcı isteği senin `POST /api/ai/video` endpoint’ine gelir. 
+2. Backend model, süre, kalite ve bütçe sınırlarını kontrol eder. 
+3. Sonra `me.puter.ai.txt2vid()` çağrılır. 
+4. Bu işlem dakikalar sürebileceği için tek istek açık bırakmak yerine job sistemi kullanmak daha güvenlidir. 
+5. Yani endpoint çoğu zaman önce bir `job_id` döner, arka planda üretim devam eder. 
+6. Video hazır olduğunda sonuç senin depolamana kaydedilir ve kullanıcı `GET /api/ai/jobs/:id` benzeri bir uçtan durum öğrenir. 
+7. Retry durumlarında çift ücret oluşmaması için idempotency mantığı gerekir. 
+
+## Kod süreci — me.puter
+
+1. Puter’da ayrı bir yerel “kod üretme” helper’ı değil, genel sohbet/model yüzeyi vardır. 
+2. Bu yüzden kod üretimi, düz mantıkta `chat` sürecinin özel bir kullanım senaryosudur. 
+3. Kullanıcı kod isteğini senin `POST /api/ai/chat` ya da istersen `POST /api/ai/code` endpoint’ine yollar.
+4. Backend, hangi modellerin kod için kullanılabileceğini allowlist ile sınırlar. 
+5. Gerekirse araç çağırma ile dosya analizi, formatlama veya repo içi işlem backend tarafında yürütülür. 
+6. Üretilen kod yanıtı loglanır, kredi düşülür ve kullanıcıya döner. 
+7. Yani “kod” modülü aslında me.puter içinde kontrollü sohbet + tool orchestration katmanıdır. 
+
+## TTS süreci — me.puter
+
+1. Kullanıcı metni senin `POST /api/ai/tts` endpoint’ine yollar. 
+2. Backend metin boyunu, ses izinlerini, provider seçimini ve kullanıcı limitini kontrol eder. 
+3. Sonra `me.puter.ai.txt2speech()` çağrılır. 
+4. Çıktı bir ses nesnesi veya uzak/bloba işaret eden kaynak olarak gelir. 
+5. Kalıcı erişim isteniyorsa sesi senin depolamana alman gerekir. 
+6. Aynı metin ve aynı ses için cache yapılırsa gereksiz maliyet düşer. 
+7. Sonunda kredi, log ve indirme/oynatma referansı kullanıcıya verilir. 
+
+## Fotoğraftan video oluşturma süreci — me.puter
+
+1. Kullanıcı resmi senin `POST /api/ai/photo-to-video` endpoint’ine yükler. 
+2. Backend resmi alır ve önce kendi depolamana kaydeder. 
+3. Sonra bu resmi uygun image reference alanına bağlayarak `me.puter.ai.txt2vid()` çağrısı yapar. 
+4. Burada ayrı bir yerel `img2vid` helper’ı yoktur; süreç `txt2vid` üstünden orkestre edilir. 
+5. İşlem uzun sürebileceği için job/polling yapısı en güvenli çözümdür. 
+6. Video hazır olunca senin depolamana yazılır ve kullanıcıya stabil sonuç referansı verilir. 
+7. İşlem sonunda kredi düşümü, log ve yönetici görünürlüğü tamamlanır. 
+
+## Tek cümlelik sonuç
+
+Senin istediğin yapı için me.puter, **kullanıcının hiç Puter görmediği; tüm AI çağrılarının senin backend’inden geçtiği; maliyet, log, kredi, kota ve güvenlik kontrolünün tamamen sende toplandığı merkezi AI omurgasıdır**. 
+
+İstersen bir sonraki mesajda bunu sana doğrudan **“ürün gereksinim dokümanı” formatında 1 sayfalık net maddeler halinde** yazayım.
