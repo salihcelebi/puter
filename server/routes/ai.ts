@@ -16,6 +16,12 @@ type AiErrorCode =
   | 'JOB_NOT_FOUND'
   | 'JOB_STATUS_NOT_IMPLEMENTED'
   | 'OWNER_RUNTIME_CALL_FAILED'
+  | 'OWNER_RUNTIME_JOB_NOT_FOUND'
+  | 'JOB_SYNC_FAILED'
+  | 'JOB_FINALIZE_FAILED'
+  | 'ASSET_WRITE_FAILED'
+  | 'CREDIT_COMMIT_FAILED'
+  | 'CREDIT_REFUND_FAILED'
   | 'INSUFFICIENT_CREDIT';
 
 interface RouteError extends Error {
@@ -28,27 +34,16 @@ function fail(message: string, code: AiErrorCode): never {
 
 function normalizeError(error: RouteError) {
   const code = (error.code || 'FEATURE_NOT_READY') as AiErrorCode;
-  if (code === 'NO_TOKEN' || code === 'UNAUTHORIZED') {
-    return { status: 401, code };
+  if (code === 'NO_TOKEN' || code === 'UNAUTHORIZED') return { status: 401, code };
+  if (code === 'INVALID_INPUT') return { status: 400, code };
+  if (code === 'MODEL_NOT_ALLOWED' || code === 'NO_ACTIVE_MODEL') return { status: 422, code };
+  if (code === 'JOB_NOT_FOUND' || code === 'OWNER_RUNTIME_JOB_NOT_FOUND') return { status: 404, code };
+  if (code === 'INSUFFICIENT_CREDIT') return { status: 402, code };
+  if (code === 'JOB_SYNC_FAILED' || code === 'JOB_FINALIZE_FAILED' || code === 'ASSET_WRITE_FAILED' || code === 'CREDIT_COMMIT_FAILED' || code === 'CREDIT_REFUND_FAILED') {
+    return { status: 500, code };
   }
-  if (code === 'INVALID_INPUT') {
-    return { status: 400, code };
-  }
-  if (code === 'MODEL_NOT_ALLOWED' || code === 'NO_ACTIVE_MODEL') {
-    return { status: 422, code };
-  }
-  if (code === 'JOB_NOT_FOUND') {
-    return { status: 404, code };
-  }
-  if (code === 'INSUFFICIENT_CREDIT') {
-    return { status: 402, code };
-  }
-  if (code === 'OWNER_RUNTIME_UNAVAILABLE' || code === 'OWNER_RUNTIME_CALL_FAILED' || code === 'FEATURE_NOT_READY') {
-    return { status: 503, code };
-  }
-  if (code === 'JOB_STATUS_NOT_IMPLEMENTED') {
-    return { status: 501, code };
-  }
+  if (code === 'OWNER_RUNTIME_UNAVAILABLE' || code === 'OWNER_RUNTIME_CALL_FAILED' || code === 'FEATURE_NOT_READY') return { status: 503, code };
+  if (code === 'JOB_STATUS_NOT_IMPLEMENTED') return { status: 501, code };
   return { status: 400, code: 'FEATURE_NOT_READY' as AiErrorCode };
 }
 
@@ -64,7 +59,6 @@ aiRouter.use(requireAuth);
 
 aiRouter.get('/models', async (_req: AuthRequest, res) => {
   try {
-    // Part 2: keep model catalog as a backend-governed allowlist projection.
     const models = await aiService.listVisibleModels();
     res.json(models);
   } catch (error: any) {
@@ -75,19 +69,14 @@ aiRouter.get('/models', async (_req: AuthRequest, res) => {
 aiRouter.post('/chat', async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId, conversationId } = req.body || {};
-    if (!prompt || typeof prompt !== 'string') {
-      fail('prompt alanı zorunludur', 'INVALID_INPUT');
-    }
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
 
     const result = await aiService.runFeature({
       feature: 'chat',
       userId: req.user.id,
       modelId,
       clientRequestId,
-      payload: {
-        prompt,
-        conversationId,
-      },
+      payload: { prompt, conversationId },
     });
 
     res.json(result);
@@ -99,9 +88,7 @@ aiRouter.post('/chat', async (req: AuthRequest, res) => {
 aiRouter.post('/image', async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId } = req.body || {};
-    if (!prompt || typeof prompt !== 'string') {
-      fail('prompt alanı zorunludur', 'INVALID_INPUT');
-    }
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
 
     const result = await aiService.runFeature({
       feature: 'image',
@@ -120,10 +107,7 @@ aiRouter.post('/image', async (req: AuthRequest, res) => {
 aiRouter.post('/tts', async (req: AuthRequest, res) => {
   try {
     const { text, modelId, voiceName, voice, clientRequestId } = req.body || {};
-    const normalizedVoiceName = voiceName || voice;
-    if (!text || typeof text !== 'string') {
-      fail('text alanı zorunludur', 'INVALID_INPUT');
-    }
+    if (!text || typeof text !== 'string') fail('text alanı zorunludur', 'INVALID_INPUT');
 
     const result = await aiService.runFeature({
       feature: 'tts',
@@ -132,7 +116,7 @@ aiRouter.post('/tts', async (req: AuthRequest, res) => {
       clientRequestId,
       payload: {
         text,
-        voiceName: normalizedVoiceName || 'Kore',
+        voiceName: voiceName || voice || 'Kore',
       },
     });
 
@@ -145,9 +129,7 @@ aiRouter.post('/tts', async (req: AuthRequest, res) => {
 aiRouter.post('/video', async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
-    if (!prompt || typeof prompt !== 'string') {
-      fail('prompt alanı zorunludur', 'INVALID_INPUT');
-    }
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
 
     const result = await aiService.runFeature({
       feature: 'video',
@@ -162,6 +144,56 @@ aiRouter.post('/video', async (req: AuthRequest, res) => {
     });
 
     res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
+    if (!imageUrl || typeof imageUrl !== 'string') fail('imageUrl alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'photoToVideo',
+      userId: req.user.id,
+      modelId: modelId || model,
+      clientRequestId,
+      payload: {
+        prompt: String(prompt || ''),
+        imageUrl,
+        duration: Number(duration || 5),
+        aspectRatio: aspectRatio || '16:9',
+      },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    return res.json(result);
+  } catch (error: any) {
+    return sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
   } catch (error: any) {
     sendError(res, error);
   }
@@ -270,9 +302,7 @@ aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
 aiRouter.post('/music', async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};
-    if (!prompt || typeof prompt !== 'string') {
-      fail('prompt alanı zorunludur', 'INVALID_INPUT');
-    }
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
 
     const result = await musicAdapter.generateMusic(req.user.id, prompt, Array.isArray(tags) ? tags : []);
     res.json(result);

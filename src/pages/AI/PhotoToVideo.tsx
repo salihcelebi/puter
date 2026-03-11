@@ -16,7 +16,7 @@ export default function PhotoToVideo() {
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string; sourceAssetId?: string | null; assetId?: string | null; errorCode?: string | null } | null>(null);
   const [error, setError] = useState('');
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -50,15 +50,15 @@ export default function PhotoToVideo() {
 
     const timer = setInterval(async () => {
       try {
-        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string }>(`/api/ai/jobs/${result.jobId}`);
+        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string; errorCode?: string | null; sourceAssetId?: string | null; assetId?: string | null }>(`/api/ai/jobs/${result.jobId}`);
         if (job.status === 'completed') {
-          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl }));
+          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl, sourceAssetId: job.sourceAssetId || prev?.sourceAssetId || null, assetId: job.assetId || null, errorCode: null }));
           clearInterval(timer);
           return;
         }
         if (job.status === 'failed') {
-          setError(job.error || 'Fotoğraftan video işi başarısız oldu');
-          setResult(prev => ({ ...(prev || {}), status: 'failed' }));
+          setError(`${job.errorCode || 'JOB_FAILED'}: ${job.error || 'Fotoğraftan video işi başarısız oldu'}`);
+          setResult(prev => ({ ...(prev || {}), status: 'failed', errorCode: job.errorCode || 'JOB_FAILED' }));
           clearInterval(timer);
           return;
         }
@@ -78,7 +78,7 @@ export default function PhotoToVideo() {
     setError('');
     
     try {
-      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string }>('/api/ai/photo-to-video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string; sourceAssetId?: string | null; billing?: { creditReserved?: number } }>('/api/ai/photo-to-video', {
         method: 'POST',
         body: JSON.stringify({ prompt, imageUrl: image.name, modelId: selectedModelId, clientRequestId: `p2v_${Date.now()}` }),
       });
@@ -168,12 +168,12 @@ export default function PhotoToVideo() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result?.url ? (
+          ) : result?.status === 'completed' && result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
           ) : result?.jobId ? (
             <div className="text-center text-zinc-500">
               Üretim durumu: <span className="font-semibold">{result.status || 'queued'}</span><br />
-              Job ID: <span className="font-mono">{result.jobId}</span>
+              Job ID: <span className="font-mono">{result.jobId}</span>{result.sourceAssetId ? <><br />Source Asset: <span className='font-mono'>{result.sourceAssetId}</span></> : null}
             </div>
           ) : (
             <div className="text-center text-zinc-400 p-6">

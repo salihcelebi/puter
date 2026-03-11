@@ -14,7 +14,7 @@ interface AIModel {
 export default function VideoGen() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string; assetId?: string | null; errorCode?: string | null } | null>(null);
   const [error, setError] = useState('');
   
   const [models, setModels] = useState<AIModel[]>([]);
@@ -42,21 +42,21 @@ export default function VideoGen() {
 
   const selectedModel = models.find(m => m.id === selectedModelId);
 
-  // Part 2: keep job polling honest, avoid false-ready media state.
+  // Part 3: render media only after completed status from persisted job polling.
   useEffect(() => {
     if (!result?.jobId || !result.status || result.status === 'completed' || result.status === 'failed') return;
 
     const timer = setInterval(async () => {
       try {
-        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string }>(`/api/ai/jobs/${result.jobId}`);
+        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string; errorCode?: string | null; assetId?: string | null }>(`/api/ai/jobs/${result.jobId}`);
         if (job.status === 'completed') {
-          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl }));
+          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl, assetId: job.assetId || null, errorCode: null }));
           clearInterval(timer);
           return;
         }
         if (job.status === 'failed') {
-          setError(job.error || 'Video işi başarısız oldu');
-          setResult(prev => ({ ...(prev || {}), status: 'failed' }));
+          setError(`${job.errorCode || 'JOB_FAILED'}: ${job.error || 'Video işi başarısız oldu'}`);
+          setResult(prev => ({ ...(prev || {}), status: 'failed', errorCode: job.errorCode || 'JOB_FAILED' }));
           clearInterval(timer);
           return;
         }
@@ -86,7 +86,7 @@ export default function VideoGen() {
     setError('');
     
     try {
-      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string }>('/api/ai/video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string; billing?: { creditReserved?: number }; sourceAssetId?: string | null }>('/api/ai/video', {
         method: 'POST',
         body: JSON.stringify({ 
           prompt,
@@ -192,12 +192,12 @@ export default function VideoGen() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result?.url ? (
+          ) : result?.status === 'completed' && result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
           ) : result?.jobId ? (
             <div className="text-center text-zinc-500">
               Üretim durumu: <span className="font-semibold">{result.status || 'queued'}</span><br />
-              Job ID: <span className="font-mono">{result.jobId}</span>
+              Job ID: <span className="font-mono">{result.jobId}</span>{result.assetId ? <><br />Asset: <span className='font-mono'>{result.assetId}</span></> : null}
             </div>
           ) : (
             <div className="text-center text-zinc-400">

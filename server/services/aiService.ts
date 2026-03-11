@@ -2,7 +2,8 @@ import { kv } from '../db/kv.js';
 import { fileSystem } from '../db/fs.js';
 
 type AIFeature = 'chat' | 'image' | 'tts' | 'video' | 'photoToVideo';
-type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'not_found';
+type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'canceled' | 'not_found';
+type LedgerAction = 'reserve' | 'commit' | 'refund' | 'usage';
 
 interface ModelRecord {
   id: string;
@@ -28,17 +29,27 @@ interface OwnerRuntimeCall {
 
 interface StoredJob {
   id: string;
-  userId: string;
   feature: 'video' | 'photoToVideo';
-  modelId: string;
-  status: Exclude<JobStatus, 'not_found'>;
-  runtimeJobId: string;
+  userId: string;
   requestId: string;
   clientRequestId: string;
-  outputUrl?: string;
-  error?: string;
-  updatedAt: string;
+  modelId: string;
+  status: Exclude<JobStatus, 'not_found'>;
+  providerJobId: string;
+  sourceAssetId?: string | null;
+  outputAssetId?: string | null;
+  outputUrl?: string | null;
+  errorCode?: string | null;
+  errorMessageRedacted?: string | null;
+  creditReserved: number;
+  creditCommitted: number;
+  internalCostTry: number;
   createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  metadata: Record<string, unknown>;
+  usageId?: string;
+  reserveLedgerId?: string;
 }
 
 interface RuntimeError extends Error {
@@ -49,6 +60,29 @@ function fail(message: string, code: string): never {
   throw Object.assign(new Error(message), { code });
 }
 
+function createId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createRequestId(prefix: string) {
+  return createId(prefix);
+}
+
+function normalizeClientRequestId(clientRequestId?: string) {
+  return clientRequestId?.trim() || createRequestId('cli');
+}
+
+function toJobFeature(feature: AIFeature): 'video' | 'photoToVideo' {
+  return feature === 'photoToVideo' ? 'photoToVideo' : 'video';
+}
+
+function acceptedServiceTypes(feature: AIFeature) {
+  if (feature === 'chat') return new Set(['llm', 'chat']);
+  if (feature === 'image') return new Set(['image']);
+  if (feature === 'tts') return new Set(['tts', 'audio']);
+  return new Set(['video', 'image_to_video']);
+}
+
 function getOwnerRuntimeConfig() {
   return {
     baseUrl: process.env.PUTER_OWNER_AI_BASE_URL,
@@ -56,24 +90,32 @@ function getOwnerRuntimeConfig() {
   };
 }
 
-function createRequestId(prefix: string) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+function mapOwnerStatus(status?: string): JobStatus {
+  if (!status) return 'processing';
+  const normalized = status.toLowerCase();
+  if (normalized === 'queued') return 'queued';
+  if (normalized === 'processing' || normalized === 'running' || normalized === 'in_progress') return 'processing';
+  if (normalized === 'completed' || normalized === 'done' || normalized === 'succeeded' || normalized === 'success') return 'completed';
+  if (normalized === 'failed' || normalized === 'error') return 'failed';
+  if (normalized === 'canceled' || normalized === 'cancelled') return 'canceled';
+  if (normalized === 'not_found') return 'not_found';
+  return 'processing';
 }
 
-function normalizeClientRequestId(clientRequestId?: string) {
-  return clientRequestId?.trim() || createRequestId('cli');
+function redactedErrorMessage(input?: unknown) {
+  if (!input) return null;
+  const msg = String(input).slice(0, 180);
+  return msg.replace(/bearer\s+[a-z0-9\-_.]+/gi, 'bearer [redacted]');
 }
 
-function acceptedServiceTypes(feature: AIFeature) {
-  if (feature === 'chat') return new Set(['llm', 'chat']);
-  if (feature === 'image') return new Set(['image']);
-  if (feature === 'tts') return new Set(['tts', 'audio']);
-  return new Set(['video']);
+function parseAssetIdFromUrl(assetUrl?: string) {
+  if (!assetUrl) return null;
+  const match = assetUrl.match(/\/api\/assets\/([^/?#]+)/);
+  return match?.[1] || null;
 }
 
 async function callOwnerRuntime<T>(operation: string, payload: unknown): Promise<T> {
   const { baseUrl, token } = getOwnerRuntimeConfig();
-
   if (!baseUrl || !token) {
     fail('Owner AI runtime kullanılamıyor', 'OWNER_RUNTIME_UNAVAILABLE');
   }
@@ -94,8 +136,8 @@ async function callOwnerRuntime<T>(operation: string, payload: unknown): Promise
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = typeof data?.error === 'string' ? data.error : 'Owner AI runtime hatası';
-    const code = typeof data?.code === 'string' ? data.code : 'FEATURE_NOT_READY';
+    const message = typeof (data as any)?.error === 'string' ? (data as any).error : 'Owner AI runtime hatası';
+    const code = typeof (data as any)?.code === 'string' ? (data as any).code : 'OWNER_RUNTIME_CALL_FAILED';
     fail(message, code);
   }
 
@@ -106,24 +148,16 @@ async function resolveModel(feature: AIFeature, modelId?: string): Promise<Model
   const accepted = acceptedServiceTypes(feature);
 
   if (modelId) {
-    const model = await kv.get(`model:${modelId}`);
-    if (!model || !model.is_active) {
-      fail('Aktif model bulunamadı', 'NO_ACTIVE_MODEL');
-    }
-    if (!accepted.has(model.service_type)) {
-      fail('Model bu özellik için izinli değil', 'MODEL_NOT_ALLOWED');
-    }
-    return model as ModelRecord;
+    const model = (await kv.get(`model:${modelId}`)) as ModelRecord | null;
+    if (!model || !model.is_active) fail('Aktif model bulunamadı', 'NO_ACTIVE_MODEL');
+    if (!accepted.has(model.service_type)) fail('Model bu özellik için izinli değil', 'MODEL_NOT_ALLOWED');
+    return model;
   }
 
   const candidates = (await kv.list('model:'))
     .map((item) => item.value as ModelRecord)
     .filter((model) => model.is_active && accepted.has(model.service_type));
-
-  if (!candidates.length) {
-    fail('Aktif model bulunamadı', 'NO_ACTIVE_MODEL');
-  }
-
+  if (!candidates.length) fail('Aktif model bulunamadı', 'NO_ACTIVE_MODEL');
   return candidates[0];
 }
 
@@ -135,13 +169,13 @@ function estimateBilling(feature: AIFeature, model: ModelRecord, payload: Record
     const cost = Math.max(
       1,
       Math.ceil(
-        (estimatedInputTokens / 1000) * Number(model.sale_credit_input || 0) +
-          (estimatedOutputTokens / 1000) * Number(model.sale_credit_output || 0),
+        (estimatedInputTokens / 1000) * Number(model.sale_credit_input || 0)
+        + (estimatedOutputTokens / 1000) * Number(model.sale_credit_output || 0),
       ),
     );
     const internalCost =
-      (estimatedInputTokens / 1000) * Number(model.raw_cost_input_try || 0) +
-      (estimatedOutputTokens / 1000) * Number(model.raw_cost_output_try || 0);
+      (estimatedInputTokens / 1000) * Number(model.raw_cost_input_try || 0)
+      + (estimatedOutputTokens / 1000) * Number(model.raw_cost_output_try || 0);
     return { cost, internalCost };
   }
 
@@ -152,27 +186,33 @@ function estimateBilling(feature: AIFeature, model: ModelRecord, payload: Record
     cost = Math.max(1, Math.ceil(unitCost * (duration / 5)));
   }
 
-  const internalCost = Number(model.raw_cost_single_try || 0);
-  return { cost, internalCost };
+  return { cost, internalCost: Number(model.raw_cost_single_try || 0) };
 }
 
-async function writeAsset(userId: string, type: 'image' | 'audio', base64: string, ext: 'png' | 'mp3') {
+async function writeAssetFromBuffer(userId: string, type: 'image' | 'audio' | 'video', buffer: Buffer, ext: string, sourceJobId?: string) {
   const fileName = `${type}_${Date.now()}.${ext}`;
-  const folder = type === 'image' ? 'images' : 'audio';
+  // Part 3: enforce deterministic output folders for asset persistence.
+  const folder = type === 'image' ? 'images' : type === 'audio' ? 'audio' : 'video';
   const filePath = `/users/${userId}/${folder}/${fileName}`;
-  await fileSystem.write(filePath, Buffer.from(base64, 'base64'));
+  await fileSystem.write(filePath, buffer);
 
-  const assetId = `ast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const assetId = createId('ast');
   await kv.set(`assets:${assetId}`, {
     id: assetId,
     kullanici_id: userId,
+    userId,
     tur: type,
     dosya_adi: fileName,
     fs_path: filePath,
     created_at: new Date().toISOString(),
+    source_job_id: sourceJobId || null,
   });
 
   return { assetId, url: `/api/assets/${assetId}` };
+}
+
+async function writeAsset(userId: string, type: 'image' | 'audio', base64: string, ext: 'png' | 'mp3') {
+  return writeAssetFromBuffer(userId, type, Buffer.from(base64, 'base64'), ext);
 }
 
 export const aiService = {
@@ -199,46 +239,324 @@ export const aiService = {
       }));
   },
 
-  async checkAndDeductCredit(userId: string, cost: number, module: string): Promise<boolean> {
+  async createLedgerEntry(userId: string, action: LedgerAction, amount: number, description: string, requestId?: string, jobId?: string) {
     const user = await kv.get(`users:${userId}`);
-    if (!user || user.toplam_kredi - user.kullanilan_kredi < cost) {
-      return false;
-    }
-
-    user.kullanilan_kredi += cost;
-    await kv.set(`users:${userId}`, user);
-
-    const ledgerId = `ldg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    if (!user) fail('Kullanıcı bulunamadı', 'UNAUTHORIZED');
+    const before = Number(user.toplam_kredi || 0) - Number(user.kullanilan_kredi || 0);
+    const after = before + amount;
+    const ledgerId = createId('ldg');
+    const now = new Date().toISOString();
     await kv.set(`creditLedger:${ledgerId}`, {
       id: ledgerId,
+      userId,
       kullanici_id: userId,
-      islem_tipi: 'usage',
-      miktar: -cost,
-      onceki_bakiye: user.toplam_kredi - (user.kullanilan_kredi - cost),
-      sonraki_bakiye: user.toplam_kredi - user.kullanilan_kredi,
-      aciklama: `${module} kullanımı`,
-      created_at: new Date().toISOString(),
+      requestId: requestId || null,
+      jobId: jobId || null,
+      action,
+      islem_tipi: action === 'reserve' || action === 'commit' ? 'usage' : action,
+      miktar: amount,
+      onceki_bakiye: before,
+      sonraki_bakiye: after,
+      aciklama: description,
+      created_at: now,
+      updated_at: now,
     });
-
-    return true;
+    return ledgerId;
   },
 
-  async logUsage(userId: string, module: string, cost: number, internalCost: number, status: 'success' | 'failed', details: any) {
-    const usageId = `usg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    const log = {
+  async reserveCredit(userId: string, amount: number, requestId: string, feature: string, jobId?: string) {
+    const user = await kv.get(`users:${userId}`);
+    if (!user || Number(user.toplam_kredi || 0) - Number(user.kullanilan_kredi || 0) < amount) {
+      fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
+    }
+    user.kullanilan_kredi = Number(user.kullanilan_kredi || 0) + amount;
+    await kv.set(`users:${userId}`, user);
+    return this.createLedgerEntry(userId, 'reserve', -amount, `${feature} kredi rezervasyonu`, requestId, jobId);
+  },
+
+  async commitCredit(userId: string, amount: number, requestId: string, feature: string, jobId?: string) {
+    return this.createLedgerEntry(userId, 'commit', 0, `${feature} kredi commit`, requestId, jobId);
+  },
+
+  async refundCredit(userId: string, amount: number, requestId: string, feature: string, jobId?: string) {
+    const user = await kv.get(`users:${userId}`);
+    if (!user) fail('Kullanıcı bulunamadı', 'UNAUTHORIZED');
+    user.kullanilan_kredi = Math.max(0, Number(user.kullanilan_kredi || 0) - amount);
+    await kv.set(`users:${userId}`, user);
+    return this.createLedgerEntry(userId, 'refund', amount, `${feature} kredi iadesi`, requestId, jobId);
+  },
+
+  async upsertUsage(args: {
+    usageId?: string;
+    userId: string;
+    feature: string;
+    modelId: string;
+    requestId: string;
+    jobId?: string;
+    status: 'queued' | 'processing' | 'completed' | 'failed' | 'canceled' | 'success';
+    creditReserved: number;
+    creditCommitted: number;
+    internalCostTry: number;
+    assetId?: string | null;
+    errorCode?: string | null;
+    details?: Record<string, unknown>;
+  }) {
+    const usageId = args.usageId || createId('usg');
+    const now = new Date().toISOString();
+    const prev = (await kv.get(`usage:${usageId}`)) || {};
+    const legacyStatus = args.status === 'completed' ? 'success' : args.status === 'failed' ? 'failed' : 'started';
+
+    const usage = {
+      ...prev,
       id: usageId,
-      kullanici_id: userId,
-      modul: module,
-      kredi_maliyeti: cost,
-      ic_maliyet: internalCost,
-      durum: status,
-      detaylar: details,
-      created_at: new Date().toISOString(),
+      userId: args.userId,
+      kullanici_id: args.userId,
+      feature: args.feature,
+      modul: args.feature,
+      modelId: args.modelId,
+      requestId: args.requestId,
+      jobId: args.jobId || null,
+      status: args.status,
+      durum: legacyStatus,
+      creditReserved: args.creditReserved,
+      creditCommitted: args.creditCommitted,
+      kredi_maliyeti: args.creditCommitted || args.creditReserved,
+      internalCostTry: args.internalCostTry,
+      ic_maliyet: args.internalCostTry,
+      assetId: args.assetId || null,
+      errorCode: args.errorCode || null,
+      detaylar: {
+        ...(prev.detaylar || {}),
+        ...(args.details || {}),
+        modelId: args.modelId,
+      },
+      created_at: prev.created_at || now,
+      updated_at: now,
     };
 
-    await kv.set(`usage:${usageId}`, log);
-    await kv.set(`userUsage:${userId}:${usageId}`, usageId);
+    await kv.set(`usage:${usageId}`, usage);
+    await kv.set(`userUsage:${args.userId}:${usageId}`, usageId);
     return usageId;
+  },
+
+  // Compatibility helper for existing modules.
+  async checkAndDeductCredit(userId: string, cost: number, module: string): Promise<boolean> {
+    try {
+      await this.reserveCredit(userId, cost, createRequestId('req'), module);
+      await this.commitCredit(userId, cost, createRequestId('req'), module);
+      return true;
+    } catch (error: any) {
+      if (error.code === 'INSUFFICIENT_CREDIT') return false;
+      throw error;
+    }
+  },
+
+  // Compatibility helper for existing modules.
+  async logUsage(userId: string, module: string, cost: number, internalCost: number, status: 'success' | 'failed', details: any) {
+    return this.upsertUsage({
+      userId,
+      feature: module,
+      modelId: String(details?.modelId || module),
+      requestId: String(details?.requestId || createRequestId('req')),
+      jobId: details?.jobId,
+      status: status === 'success' ? 'completed' : 'failed',
+      creditReserved: cost,
+      creditCommitted: status === 'success' ? cost : 0,
+      internalCostTry: internalCost,
+      assetId: details?.assetId || null,
+      errorCode: details?.code || null,
+      details,
+    });
+  },
+
+  async createJobRecord(input: {
+    jobId: string;
+    feature: 'video' | 'photoToVideo';
+    userId: string;
+    requestId: string;
+    clientRequestId: string;
+    modelId: string;
+    providerJobId: string;
+    sourceAssetId?: string | null;
+    creditReserved: number;
+    internalCostTry: number;
+    metadata?: Record<string, unknown>;
+  }) {
+    const now = new Date().toISOString();
+    const record: StoredJob = {
+      id: input.jobId,
+      feature: input.feature,
+      userId: input.userId,
+      requestId: input.requestId,
+      clientRequestId: input.clientRequestId,
+      modelId: input.modelId,
+      status: 'queued',
+      providerJobId: input.providerJobId,
+      sourceAssetId: input.sourceAssetId || null,
+      outputAssetId: null,
+      outputUrl: null,
+      errorCode: null,
+      errorMessageRedacted: null,
+      creditReserved: input.creditReserved,
+      creditCommitted: 0,
+      internalCostTry: input.internalCostTry,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      metadata: input.metadata || {},
+    };
+
+    await kv.set(`aiJob:${input.jobId}`, record);
+    await kv.set(`userAiJob:${input.userId}:${input.jobId}`, input.jobId);
+    await kv.set(`clientJob:${input.userId}:${input.feature}:${input.clientRequestId}`, input.jobId);
+    return record;
+  },
+
+  async updateJobRecord(jobId: string, patch: Partial<StoredJob>) {
+    const current = await this.getStoredJob(jobId);
+    if (!current) return null;
+    const updated = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    await kv.set(`aiJob:${jobId}`, updated);
+    return updated as StoredJob;
+  },
+
+  async getStoredJob(jobId: string) {
+    return (await kv.get(`aiJob:${jobId}`)) as StoredJob | null;
+  },
+
+  async syncJobStatusFromOwnerRuntime(job: StoredJob) {
+    try {
+      const runtime = await callOwnerRuntime<{
+        status?: string;
+        outputUrl?: string;
+        outputAssetUrl?: string;
+        base64Video?: string;
+        videoBase64?: string;
+        outputBase64?: string;
+        error?: string;
+        errorCode?: string;
+        metadata?: Record<string, unknown>;
+      }>('jobs/status', {
+        jobId: job.providerJobId,
+        feature: job.feature,
+      });
+
+      const status = mapOwnerStatus(runtime.status);
+      if (status === 'not_found') {
+        fail('Owner runtime job bulunamadı', 'OWNER_RUNTIME_JOB_NOT_FOUND');
+      }
+    }
+
+      return {
+        status,
+        outputUrl: runtime.outputAssetUrl || runtime.outputUrl || null,
+        outputBase64: runtime.outputBase64 || runtime.base64Video || runtime.videoBase64 || null,
+        errorCode: runtime.errorCode || null,
+        errorMessageRedacted: redactedErrorMessage(runtime.error),
+        metadata: runtime.metadata || {},
+      };
+    } catch (error: any) {
+      if (error.code === 'OWNER_RUNTIME_JOB_NOT_FOUND') throw error;
+      fail(error.message || 'Job sync başarısız', 'JOB_SYNC_FAILED');
+    }
+  },
+
+  async finalizeCompletedJob(job: StoredJob, sync: { outputUrl: string | null; outputBase64: string | null; metadata: Record<string, unknown> }) {
+    try {
+      let output = job.outputUrl || null;
+      let outputAssetId = job.outputAssetId || null;
+
+      if (sync.outputBase64) {
+        const saved = await writeAssetFromBuffer(job.userId, 'video', Buffer.from(sync.outputBase64, 'base64'), 'mp4', job.id);
+        output = saved.url;
+        outputAssetId = saved.assetId;
+      } else if (sync.outputUrl && sync.outputUrl.startsWith('http')) {
+        const response = await fetch(sync.outputUrl);
+        if (!response.ok) fail('Output asset indirilemedi', 'ASSET_WRITE_FAILED');
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const saved = await writeAssetFromBuffer(job.userId, 'video', buffer, 'mp4', job.id);
+        output = saved.url;
+        outputAssetId = saved.assetId;
+      } else if (sync.outputUrl && sync.outputUrl.startsWith('/api/assets/')) {
+        outputAssetId = parseAssetIdFromUrl(sync.outputUrl);
+        output = sync.outputUrl;
+      }
+
+      if (!output) fail('Output asset yazılamadı', 'ASSET_WRITE_FAILED');
+
+      await this.commitCredit(job.userId, job.creditReserved, job.requestId, job.feature, job.id);
+      const completedAt = new Date().toISOString();
+      const updated = await this.updateJobRecord(job.id, {
+        status: 'completed',
+        outputUrl: output,
+        outputAssetId,
+        creditCommitted: job.creditReserved,
+        completedAt,
+        errorCode: null,
+        errorMessageRedacted: null,
+        metadata: {
+          ...(job.metadata || {}),
+          ...(sync.metadata || {}),
+        },
+      });
+      await this.upsertUsage({
+        usageId: updated?.usageId,
+        userId: job.userId,
+        feature: job.feature,
+        modelId: job.modelId,
+        requestId: job.requestId,
+        jobId: job.id,
+        status: 'completed',
+        creditReserved: job.creditReserved,
+        creditCommitted: job.creditReserved,
+        internalCostTry: job.internalCostTry,
+        assetId: outputAssetId,
+        details: { outputUrl: output },
+      });
+      return updated || job;
+    } catch (error: any) {
+      if (error.code === 'ASSET_WRITE_FAILED') throw error;
+      fail(error.message || 'Job finalize başarısız', 'JOB_FINALIZE_FAILED');
+    }
+
+  async finalizeFailedJob(job: StoredJob, errorCode?: string | null, errorMessage?: string | null) {
+    try {
+      if (job.creditCommitted === 0) {
+        await this.refundCredit(job.userId, job.creditReserved, job.requestId, job.feature, job.id);
+      }
+    } catch {
+      fail('Kredi iadesi başarısız', 'CREDIT_REFUND_FAILED');
+    }
+
+    const completedAt = new Date().toISOString();
+    const updated = await this.updateJobRecord(job.id, {
+      status: 'failed',
+      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
+      errorMessageRedacted: errorMessage || 'İş başarısız oldu',
+      completedAt,
+      creditCommitted: 0,
+    });
+
+    await this.upsertUsage({
+      usageId: updated?.usageId,
+      userId: job.userId,
+      feature: job.feature,
+      modelId: job.modelId,
+      requestId: job.requestId,
+      jobId: job.id,
+      status: 'failed',
+      creditReserved: job.creditReserved,
+      creditCommitted: 0,
+      internalCostTry: job.internalCostTry,
+      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
+      details: { error: errorMessage || 'failed' },
+    });
+
+    return updated || job;
   },
 
   async runFeature(input: {
@@ -262,228 +580,211 @@ export const aiService = {
       payload: input.payload,
     };
 
-    // Part 2: normalize owner-runtime AI response for backward-compatible UI.
     if (input.feature === 'chat') {
-      try {
-        const runtime = await callOwnerRuntime<{ response?: string; text?: string; meta?: Record<string, unknown> }>('chat', runtimeInput);
-        const hasCredit = await this.checkAndDeductCredit(input.userId, billing.cost, 'chat');
-        if (!hasCredit) fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
-
-        const response = runtime.response || runtime.text || '';
-        await this.logUsage(input.userId, 'chat', billing.cost, billing.internalCost, 'success', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          feature: 'chat',
-        });
-
-        return {
-          response,
-          requestId,
-          modelId: model.id,
-          billing: {
-            creditCost: billing.cost,
-            internalCost: billing.internalCost,
-          },
-          meta: runtime.meta || null,
-        };
-      } catch (error: any) {
-        await this.logUsage(input.userId, 'chat', billing.cost, billing.internalCost, 'failed', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          error: error.message,
-          code: (error as RuntimeError).code,
-        });
-        throw error;
-      }
+      const runtime = await callOwnerRuntime<{ response?: string; text?: string; meta?: Record<string, unknown> }>('chat', runtimeInput);
+      await this.reserveCredit(input.userId, billing.cost, requestId, 'chat');
+      await this.commitCredit(input.userId, billing.cost, requestId, 'chat');
+      await this.upsertUsage({
+        userId: input.userId,
+        feature: 'chat',
+        modelId: model.id,
+        requestId,
+        status: 'completed',
+        creditReserved: billing.cost,
+        creditCommitted: billing.cost,
+        internalCostTry: billing.internalCost,
+        details: { clientRequestId },
+      });
+      return {
+        response: runtime.response || runtime.text || '',
+        requestId,
+        modelId: model.id,
+        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+        meta: runtime.meta || null,
+      };
     }
 
     if (input.feature === 'image') {
-      try {
-        const runtime = await callOwnerRuntime<{ base64Image?: string; imageBase64?: string; meta?: Record<string, unknown> }>('image', runtimeInput);
-        const base64Image = runtime.base64Image || runtime.imageBase64;
-        if (!base64Image) fail('Görsel üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
-
-        const hasCredit = await this.checkAndDeductCredit(input.userId, billing.cost, 'image');
-        if (!hasCredit) fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
-
-        const asset = await writeAsset(input.userId, 'image', base64Image, 'png');
-        await this.logUsage(input.userId, 'image', billing.cost, billing.internalCost, 'success', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          assetId: asset.assetId,
-          feature: 'image',
-        });
-
-        return {
-          ...asset,
-          requestId,
-          modelId: model.id,
-          billing: {
-            creditCost: billing.cost,
-            internalCost: billing.internalCost,
-          },
-          meta: runtime.meta || null,
-        };
-      } catch (error: any) {
-        await this.logUsage(input.userId, 'image', billing.cost, billing.internalCost, 'failed', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          error: error.message,
-          code: (error as RuntimeError).code,
-        });
-        throw error;
-      }
+      const runtime = await callOwnerRuntime<{ base64Image?: string; imageBase64?: string; meta?: Record<string, unknown> }>('image', runtimeInput);
+      const base64Image = runtime.base64Image || runtime.imageBase64;
+      if (!base64Image) fail('Görsel üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
+      await this.reserveCredit(input.userId, billing.cost, requestId, 'image');
+      const asset = await writeAsset(input.userId, 'image', base64Image, 'png');
+      await this.commitCredit(input.userId, billing.cost, requestId, 'image');
+      await this.upsertUsage({
+        userId: input.userId,
+        feature: 'image',
+        modelId: model.id,
+        requestId,
+        status: 'completed',
+        creditReserved: billing.cost,
+        creditCommitted: billing.cost,
+        internalCostTry: billing.internalCost,
+        assetId: asset.assetId,
+        details: { clientRequestId },
+      });
+      return {
+        ...asset,
+        requestId,
+        modelId: model.id,
+        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+        meta: runtime.meta || null,
+      };
     }
 
     if (input.feature === 'tts') {
-      try {
-        const runtime = await callOwnerRuntime<{ base64Audio?: string; audioBase64?: string; meta?: Record<string, unknown> }>('tts', runtimeInput);
-        const base64Audio = runtime.base64Audio || runtime.audioBase64;
-        if (!base64Audio) fail('Ses üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
+      const runtime = await callOwnerRuntime<{ base64Audio?: string; audioBase64?: string; meta?: Record<string, unknown> }>('tts', runtimeInput);
+      const base64Audio = runtime.base64Audio || runtime.audioBase64;
+      if (!base64Audio) fail('Ses üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
+      await this.reserveCredit(input.userId, billing.cost, requestId, 'tts');
+      const asset = await writeAsset(input.userId, 'audio', base64Audio, 'mp3');
+      await this.commitCredit(input.userId, billing.cost, requestId, 'tts');
+      await this.upsertUsage({
+        userId: input.userId,
+        feature: 'tts',
+        modelId: model.id,
+        requestId,
+        status: 'completed',
+        creditReserved: billing.cost,
+        creditCommitted: billing.cost,
+        internalCostTry: billing.internalCost,
+        assetId: asset.assetId,
+        details: { clientRequestId },
+      });
+      return {
+        ...asset,
+        requestId,
+        modelId: model.id,
+        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+        meta: runtime.meta || null,
+      };
+    }
 
-        const hasCredit = await this.checkAndDeductCredit(input.userId, billing.cost, 'tts');
-        if (!hasCredit) fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
-
-        const asset = await writeAsset(input.userId, 'audio', base64Audio, 'mp3');
-        await this.logUsage(input.userId, 'tts', billing.cost, billing.internalCost, 'success', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          assetId: asset.assetId,
-          feature: 'tts',
-        });
-
+    const feature = toJobFeature(input.feature);
+    const dedupeKey = `clientJob:${input.userId}:${feature}:${clientRequestId}`;
+    const existingJobId = await kv.get(dedupeKey);
+    if (existingJobId) {
+      const existing = await this.getStoredJob(String(existingJobId));
+      if (existing) {
         return {
-          ...asset,
-          requestId,
-          modelId: model.id,
-          billing: {
-            creditCost: billing.cost,
-            internalCost: billing.internalCost,
-          },
-          meta: runtime.meta || null,
+          jobId: existing.id,
+          status: existing.status,
+          requestId: existing.requestId,
+          modelId: existing.modelId,
+          sourceAssetId: existing.sourceAssetId || null,
+          billing: { creditReserved: existing.creditReserved, creditCommitted: existing.creditCommitted, internalCostTry: existing.internalCostTry },
         };
-      } catch (error: any) {
-        await this.logUsage(input.userId, 'tts', billing.cost, billing.internalCost, 'failed', {
-          requestId,
-          clientRequestId,
-          modelId: model.id,
-          error: error.message,
-          code: (error as RuntimeError).code,
-        });
-        throw error;
       }
     }
 
     const operation = input.feature === 'photoToVideo' ? 'photo-to-video' : 'video';
-    const module = input.feature === 'photoToVideo' ? 'photo_to_video' : 'video';
+    const runtime = await callOwnerRuntime<{ jobId?: string; status?: string; providerJobId?: string; meta?: Record<string, unknown> }>(operation, runtimeInput);
+    if (!runtime.jobId && !runtime.providerJobId) fail('Video işi başlatılamadı', 'OWNER_RUNTIME_CALL_FAILED');
 
-    try {
-      const runtime = await callOwnerRuntime<{ jobId?: string; status?: string; meta?: Record<string, unknown> }>(operation, runtimeInput);
-      if (!runtime.jobId) fail('Video işi başlatılamadı', 'OWNER_RUNTIME_CALL_FAILED');
+    const jobId = String(runtime.jobId || runtime.providerJobId);
+    const sourceAssetId = parseAssetIdFromUrl(String(input.payload.imageUrl || ''));
+    const reserveLedgerId = await this.reserveCredit(input.userId, billing.cost, requestId, feature, jobId);
+    const job = await this.createJobRecord({
+      jobId,
+      feature,
+      userId: input.userId,
+      requestId,
+      clientRequestId,
+      modelId: model.id,
+      providerJobId: jobId,
+      sourceAssetId,
+      creditReserved: billing.cost,
+      internalCostTry: billing.internalCost,
+      metadata: runtime.meta || {},
+    });
 
-      const hasCredit = await this.checkAndDeductCredit(input.userId, billing.cost, module);
-      if (!hasCredit) fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
+    const usageId = await this.upsertUsage({
+      userId: input.userId,
+      feature,
+      modelId: model.id,
+      requestId,
+      jobId,
+      status: 'queued',
+      creditReserved: billing.cost,
+      creditCommitted: 0,
+      internalCostTry: billing.internalCost,
+      details: { clientRequestId },
+    });
+    await this.updateJobRecord(jobId, { usageId, reserveLedgerId });
 
-      const now = new Date().toISOString();
-      const storedJob: StoredJob = {
-        id: runtime.jobId,
-        userId: input.userId,
-        feature: input.feature,
-        modelId: model.id,
-        status: 'queued',
-        runtimeJobId: runtime.jobId,
-        requestId,
-        clientRequestId,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await kv.set(`aiJob:${runtime.jobId}`, storedJob);
-
-      await this.logUsage(input.userId, module, billing.cost, billing.internalCost, 'success', {
-        requestId,
-        clientRequestId,
-        modelId: model.id,
-        jobId: runtime.jobId,
-        feature: input.feature,
-      });
-
-      return {
-        jobId: runtime.jobId,
-        status: 'queued',
-        requestId,
-        modelId: model.id,
-        billing: {
-          creditCost: billing.cost,
-          internalCost: billing.internalCost,
-        },
-        meta: runtime.meta || null,
-      };
-    } catch (error: any) {
-      await this.logUsage(input.userId, module, billing.cost, billing.internalCost, 'failed', {
-        requestId,
-        clientRequestId,
-        modelId: model.id,
-        error: error.message,
-        code: (error as RuntimeError).code,
-        feature: input.feature,
-      });
-      throw error;
-    }
+    return {
+      jobId,
+      status: 'queued',
+      requestId,
+      modelId: model.id,
+      sourceAssetId: sourceAssetId || null,
+      billing: { creditReserved: billing.cost, creditCommitted: 0, internalCostTry: billing.internalCost },
+      meta: runtime.meta || null,
+    };
   },
 
-  // Part 2: keep job polling honest, avoid false-ready media state.
+  // Part 3: sync persisted job state before returning poll response.
   async getJobStatus(userId: string, jobId: string) {
-    const job = await kv.get(`aiJob:${jobId}`) as StoredJob | null;
+    const job = await this.getStoredJob(jobId);
     if (!job || job.userId !== userId) {
-      return {
-        status: 'not_found' as JobStatus,
-        jobId,
-        code: 'JOB_NOT_FOUND',
-      };
+      return { status: 'not_found' as JobStatus, jobId, code: 'JOB_NOT_FOUND' };
     }
 
-    try {
-      const runtime = await callOwnerRuntime<{ status?: JobStatus; outputUrl?: string; error?: string }>('jobs/status', {
-        jobId: job.runtimeJobId,
-        feature: job.feature,
-      });
-
-      const status = runtime.status || job.status;
-      const updatedJob: StoredJob = {
-        ...job,
-        status: status === 'not_found' ? 'failed' : status,
-        outputUrl: runtime.outputUrl || job.outputUrl,
-        error: runtime.error || job.error,
-        updatedAt: new Date().toISOString(),
-      };
-
-      await kv.set(`aiJob:${jobId}`, updatedJob);
-
-      return {
-        status,
-        jobId,
-        requestId: job.requestId,
-        modelId: job.modelId,
-        outputUrl: updatedJob.outputUrl,
-        error: updatedJob.error,
-      };
-    } catch (error: any) {
-      if ((error as RuntimeError).code === 'FEATURE_NOT_READY') {
-        return {
-          status: job.status,
-          jobId,
-          requestId: job.requestId,
-          modelId: job.modelId,
-          outputUrl: job.outputUrl,
-          error: job.error,
-        };
+    let latest = job;
+    if (!['completed', 'failed', 'canceled'].includes(job.status)) {
+      try {
+        const synced = await this.syncJobStatusFromOwnerRuntime(job);
+        if (synced.status === 'completed') {
+          latest = await this.finalizeCompletedJob(job, synced);
+        } else if (synced.status === 'failed' || synced.status === 'canceled') {
+          latest = await this.finalizeFailedJob(job, synced.errorCode, synced.errorMessageRedacted);
+          if (synced.status === 'canceled') {
+            latest = (await this.updateJobRecord(job.id, { status: 'canceled' })) || latest;
+          }
+        } else {
+          latest = (await this.updateJobRecord(job.id, { status: synced.status })) || latest;
+          if (latest.usageId) {
+            await this.upsertUsage({
+              usageId: latest.usageId,
+              userId: latest.userId,
+              feature: latest.feature,
+              modelId: latest.modelId,
+              requestId: latest.requestId,
+              jobId: latest.id,
+              status: latest.status,
+              creditReserved: latest.creditReserved,
+              creditCommitted: latest.creditCommitted,
+              internalCostTry: latest.internalCostTry,
+            });
+          }
+        }
+      } catch (error: any) {
+        if (error.code === 'OWNER_RUNTIME_JOB_NOT_FOUND') {
+          latest = await this.finalizeFailedJob(job, 'OWNER_RUNTIME_JOB_NOT_FOUND', 'Owner runtime işi bulunamadı');
+        } else {
+          fail(error.message || 'Job sync hatası', error.code || 'JOB_SYNC_FAILED');
+        }
       }
-      throw error;
     }
+
+    return {
+      jobId: latest.id,
+      status: latest.status,
+      feature: latest.feature,
+      requestId: latest.requestId,
+      modelId: latest.modelId,
+      assetId: latest.outputAssetId || null,
+      outputUrl: latest.outputUrl || null,
+      sourceAssetId: latest.sourceAssetId || null,
+      errorCode: latest.errorCode || null,
+      error: latest.errorMessageRedacted || null,
+      billing: {
+        creditReserved: latest.creditReserved,
+        creditCommitted: latest.creditCommitted,
+        internalCostTry: latest.internalCostTry,
+      },
+      updatedAt: latest.updatedAt,
+      completedAt: latest.completedAt || null,
+    };
   },
 };

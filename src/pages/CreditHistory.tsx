@@ -7,6 +7,9 @@ import toast from 'react-hot-toast';
 interface LedgerEntry {
   id: string;
   islem_tipi: 'topup' | 'usage' | 'refund' | 'adjustment';
+  action?: 'reserve' | 'commit' | 'refund' | 'usage';
+  requestId?: string | null;
+  jobId?: string | null;
   miktar: number;
   onceki_bakiye: number;
   sonraki_bakiye: number;
@@ -48,7 +51,7 @@ export default function CreditHistory() {
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-zinc-900">Kredi Geçmişi</h1>
         <p className="text-zinc-500">Hesabınıza eklenen ve harcanan tüm krediler.</p>
@@ -71,6 +74,7 @@ export default function CreditHistory() {
                   <th className="p-4">Tarih</th>
                   <th className="p-4">İşlem</th>
                   <th className="p-4">Açıklama</th>
+                  <th className="p-4">Job / Request</th>
                   <th className="p-4 text-right">Miktar</th>
                   <th className="p-4 text-right">Bakiye</th>
                 </tr>
@@ -84,15 +88,15 @@ export default function CreditHistory() {
                     <td className="p-4">
                       <div className="flex items-center gap-2">
                         {getIcon(entry.islem_tipi)}
-                        <span className="font-medium text-zinc-900 capitalize">
-                          {entry.islem_tipi === 'topup' ? 'Yükleme' : 
-                           entry.islem_tipi === 'usage' ? 'Kullanım' : 
-                           entry.islem_tipi === 'refund' ? 'İade' : 'Düzeltme'}
-                        </span>
+                        <span className="font-medium text-zinc-900 capitalize">{entry.action || entry.islem_tipi}</span>
                       </div>
                     </td>
                     <td className="p-4 text-sm text-zinc-500 max-w-xs truncate" title={entry.aciklama}>
                       {entry.aciklama}
+                    </td>
+                    <td className="p-4 text-xs text-zinc-500">
+                      <div>Job: {entry.jobId || '-'}</div>
+                      <div>Req: {entry.requestId || '-'}</div>
                     </td>
                     <td className="p-4 text-right">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

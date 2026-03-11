@@ -8,7 +8,14 @@ interface UsageLog {
   id: string;
   modul: string;
   kredi_maliyeti: number;
-  durum: 'success' | 'failed' | 'started';
+  durum: 'success' | 'failed' | 'started' | 'completed';
+  status?: 'queued' | 'processing' | 'completed' | 'failed' | 'canceled';
+  jobId?: string | null;
+  requestId?: string;
+  assetId?: string | null;
+  creditReserved?: number;
+  creditCommitted?: number;
+  errorCode?: string | null;
   detaylar: any;
   created_at: string;
 }
@@ -40,7 +47,8 @@ export default function UsageHistory() {
   const getIcon = (module: string) => {
     switch (module) {
       case 'image': return <ImageIcon className="w-5 h-5 text-blue-500" />;
-      case 'video': return <Video className="w-5 h-5 text-purple-500" />;
+      case 'video':
+      case 'photoToVideo': return <Video className="w-5 h-5 text-purple-500" />;
       case 'tts': return <Music className="w-5 h-5 text-emerald-500" />;
       case 'chat': return <MessageSquare className="w-5 h-5 text-zinc-500" />;
       default: return <Activity className="w-5 h-5 text-zinc-500" />;
@@ -48,16 +56,13 @@ export default function UsageHistory() {
   };
 
   const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'success': return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
-      case 'failed': return <XCircle className="w-5 h-5 text-red-500" />;
-      case 'started': return <Clock className="w-5 h-5 text-blue-500" />;
-      default: return null;
-    }
+    if (status === 'completed' || status === 'success') return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
+    if (status === 'failed' || status === 'canceled') return <XCircle className="w-5 h-5 text-red-500" />;
+    return <Clock className="w-5 h-5 text-blue-500" />;
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-6xl mx-auto">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-zinc-900">Kullanım Geçmişi</h1>
         <p className="text-zinc-500">Yaptığınız tüm işlemler ve harcanan krediler.</p>
@@ -79,44 +84,49 @@ export default function UsageHistory() {
                 <tr className="bg-zinc-50 border-b border-zinc-200 text-sm font-medium text-zinc-500">
                   <th className="p-4">Tarih</th>
                   <th className="p-4">Modül</th>
-                  <th className="p-4">Detay</th>
+                  <th className="p-4">Job / Request</th>
                   <th className="p-4">Durum</th>
-                  <th className="p-4 text-right">Kredi</th>
+                  <th className="p-4 text-right">Reserve/Commit</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
-                {logs.map((log) => (
-                  <tr key={log.id} className="hover:bg-zinc-50 transition-colors">
-                    <td className="p-4 text-sm text-zinc-600 whitespace-nowrap">
-                      {format(new Date(log.created_at), 'd MMM yyyy HH:mm', { locale: tr })}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        {getIcon(log.modul)}
-                        <span className="font-medium text-zinc-900 capitalize">{log.modul}</span>
-                      </div>
-                    </td>
-                    <td className="p-4 text-sm text-zinc-500 max-w-xs truncate" title={log.detaylar?.prompt || log.detaylar?.text || '-'}>
-                      {log.detaylar?.prompt || log.detaylar?.text || '-'}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-1.5">
-                        {getStatusIcon(log.durum)}
-                        <span className={`text-sm capitalize ${
-                          log.durum === 'success' ? 'text-emerald-600' :
-                          log.durum === 'failed' ? 'text-red-600' : 'text-blue-600'
-                        }`}>
-                          {log.durum === 'success' ? 'Başarılı' : log.durum === 'failed' ? 'Hata' : 'Bekliyor'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-4 text-right">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                        -{log.kredi_maliyeti}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {logs.map((log) => {
+                  const status = log.status || log.durum;
+                  return (
+                    <tr key={log.id} className="hover:bg-zinc-50 transition-colors">
+                      <td className="p-4 text-sm text-zinc-600 whitespace-nowrap">
+                        {format(new Date(log.created_at), 'd MMM yyyy HH:mm', { locale: tr })}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          {getIcon(log.modul)}
+                          <span className="font-medium text-zinc-900 capitalize">{log.modul}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-xs text-zinc-500">
+                        <div>Job: {log.jobId || '-'}</div>
+                        <div>Req: {log.requestId || '-'}</div>
+                        <div>Asset: {log.assetId || '-'}</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-1.5">
+                          {getStatusIcon(status)}
+                          <span className={`text-sm capitalize ${
+                            status === 'completed' || status === 'success' ? 'text-emerald-600' :
+                            status === 'failed' || status === 'canceled' ? 'text-red-600' : 'text-blue-600'
+                          }`}>
+                            {status}
+                          </span>
+                        </div>
+                        {log.errorCode ? <div className="text-xs text-red-500">{log.errorCode}</div> : null}
+                      </td>
+                      <td className="p-4 text-right text-xs">
+                        <div>R: {log.creditReserved ?? log.kredi_maliyeti ?? 0}</div>
+                        <div>C: {log.creditCommitted ?? 0}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
