@@ -2,7 +2,14 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { kv } from '../db/kv.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-me-in-prod';
+const getJwtSecret = () => {
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret || jwtSecret.length < 32) {
+    throw new Error('JWT_SECRET is required and must be at least 32 characters.');
+  }
+
+  return jwtSecret;
+};
 
 export interface User {
   id: string;
@@ -36,7 +43,7 @@ export const authService = {
   async createUser(data: Partial<User>): Promise<User> {
     const id = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const now = new Date().toISOString();
-    
+
     const user: User = {
       id,
       email: data.email!,
@@ -47,7 +54,7 @@ export const authService = {
       auth_provider: data.auth_provider || 'local',
       aktif_mi: true,
       rol: data.rol || 'user',
-      toplam_kredi: data.toplam_kredi !== undefined ? data.toplam_kredi : 100, // Initial free credits
+      toplam_kredi: data.toplam_kredi !== undefined ? data.toplam_kredi : 100,
       kullanilan_kredi: 0,
       olusturma_tarihi: now,
       son_giris_tarihi: now,
@@ -71,37 +78,60 @@ export const authService = {
   },
 
   generateToken(user: User): string {
-    return jwt.sign(
-      { id: user.id, email: user.email, rol: user.rol },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    return jwt.sign({ id: user.id, email: user.email, rol: user.rol }, getJwtSecret(), { expiresIn: '7d' });
   },
 
   verifyToken(token: string): any {
     try {
-      return jwt.verify(token, JWT_SECRET);
+      return jwt.verify(token, getJwtSecret());
     } catch (e) {
       return null;
     }
   },
 
-  async ensureDefaultAdmin() {
-    const adminUser = await this.findUserByUsername('admin');
-    if (!adminUser) {
-      const salt = await bcrypt.genSalt(10);
-      const sifre_hash = await bcrypt.hash('admin', salt);
-      
-      await this.createUser({
-        email: 'admin@nisai.site',
-        kullanici_adi: 'admin',
-        gorunen_ad: 'Sistem Yöneticisi',
-        sifre_hash,
-        auth_provider: 'local',
-        rol: 'admin',
-        toplam_kredi: 999999,
-      });
-      console.log('Default admin user created (admin / admin)');
+  async ensureAdminFromEnv() {
+    const adminUsername = process.env.ADMIN_USERNAME;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminUsername || !adminPassword) {
+      throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD are required.');
     }
+
+    const existingAdminByUsername = await this.findUserByUsername(adminUsername);
+    if (existingAdminByUsername) {
+      if (existingAdminByUsername.rol !== 'admin') {
+        existingAdminByUsername.rol = 'admin';
+        await kv.set(`users:${existingAdminByUsername.id}`, existingAdminByUsername);
+      }
+      return;
+    }
+
+    const adminEmail = process.env.ADMIN_EMAIL || `${adminUsername}@local.admin`;
+    const existingAdminByEmail = await this.findUserByEmail(adminEmail);
+    if (existingAdminByEmail) {
+      if (existingAdminByEmail.rol !== 'admin') {
+        existingAdminByEmail.rol = 'admin';
+        await kv.set(`users:${existingAdminByEmail.id}`, existingAdminByEmail);
+      }
+      if (existingAdminByEmail.kullanici_adi !== adminUsername) {
+        await kv.set(`userByUsername:${adminUsername}`, existingAdminByEmail.id);
+      }
+      return;
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const sifre_hash = await bcrypt.hash(adminPassword, salt);
+
+    await this.createUser({
+      email: adminEmail,
+      kullanici_adi: adminUsername,
+      gorunen_ad: 'Sistem Yöneticisi',
+      sifre_hash,
+      auth_provider: 'local',
+      rol: 'admin',
+      toplam_kredi: 999999,
+    });
+
+    console.log(`Admin user created from env (${adminUsername})`);
   }
 };

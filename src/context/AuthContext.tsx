@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { authApi, AuthApiError } from '../lib/authApi';
 
 interface User {
   id: string;
@@ -13,9 +14,11 @@ interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  authError: string | null;
   login: (user: User) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
+  clearAuthError: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -23,19 +26,28 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const checkAuth = async () => {
     try {
-      const response = await fetch('/api/auth/me');
-      if (response.ok) {
-        const data = await response.json();
-        setUser(data.user);
-      } else {
-        setUser(null);
-      }
+      const data = await authApi.me<{ user: User }>();
+      setUser(data.user);
+      setAuthError(null);
     } catch (error) {
-      console.error('Auth check failed:', error);
-      setUser(null);
+      if (error instanceof AuthApiError) {
+        if (error.status === 401) {
+          setUser(null);
+          setAuthError(null);
+        } else {
+          console.error('Auth check failed:', error);
+          setUser(null);
+          setAuthError(error.message);
+        }
+      } else {
+        console.error('Auth check failed:', error);
+        setUser(null);
+        setAuthError('Auth API erişilemiyor. Deploy ortamında backend çalışmıyor olabilir.');
+      }
     } finally {
       setLoading(false);
     }
@@ -47,19 +59,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const login = (userData: User) => {
     setUser(userData);
+    setAuthError(null);
   };
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      setUser(null);
+      await authApi.logout<{ message: string }>();
     } catch (error) {
       console.error('Logout failed:', error);
+    } finally {
+      setUser(null);
     }
   };
 
+  const clearAuthError = () => setAuthError(null);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, checkAuth }}>
+    <AuthContext.Provider value={{ user, loading, authError, login, logout, checkAuth, clearAuthError }}>
       {children}
     </AuthContext.Provider>
   );

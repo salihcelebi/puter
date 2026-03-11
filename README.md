@@ -1,25 +1,42 @@
-<<<<<<< HEAD
 # puter
-puter
-=======
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+## Mimari (Kesin Karar)
 
-This contains everything you need to run your app locally.
+Bu repo için kalıcı çözüm **Option A**: 
 
-View your app in AI Studio: https://ai.studio/apps/7468d003-aa06-44fc-baa2-be13335d9721
+- Frontend: Netlify (Vite static build)
+- Backend API/Auth: Ayrı Node/Express host (örn. Render)
 
-## Run Locally
+`/api/auth/*` endpoint'leri Express üzerinde çalıştığı için yalnızca static Netlify yayını ile login çalışmaz.
+Frontend bu yüzden `VITE_API_BASE_URL` ile backend hostuna gider.
 
-**Prerequisites:**  Node.js
+## Gerekli Ortam Değişkenleri
 
+### Backend
+- `JWT_SECRET` (zorunlu, en az 32 karakter)
+- `ADMIN_USERNAME` (zorunlu)
+- `ADMIN_PASSWORD` (zorunlu)
+- `ADMIN_EMAIL` (opsiyonel)
+- `GEMINI_API_KEY` (AI uçları için)
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
->>>>>>> 9cbe9cd (Auto upload from local folder - 2026-03-10 20:41:04)
+### Frontend (Netlify)
+- `VITE_API_BASE_URL=https://<backend-host>`
+
+## Geliştirme
+
+1. Bağımlılıkları yükleyin: `npm install`
+2. `.env` oluşturun: `.env.example` dosyasını kopyalayın
+3. Sunucuyu başlatın: `npm run dev`
+
+## Build / Start
+
+- Frontend build: `npm run build`
+- Production server: `npm start`
+
+## Netlify Production Deploy
+
+```bash
+NETLIFY_AUTH_TOKEN=... NETLIFY_SITE_ID=... npx netlify deploy --build --prod
+```
+
+Deploy öncesi Netlify ortamında mutlaka `VITE_API_BASE_URL` tanımlayın.

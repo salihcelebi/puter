@@ -6,11 +6,20 @@ import { requireAuth, AuthRequest } from '../middleware/auth.js';
 export const authRouter = Router();
 
 // Cookie options for security
+const isProd = process.env.NODE_ENV === 'production';
 const cookieOptions = {
   httpOnly: true,
-  secure: true,
-  sameSite: 'none' as const,
+  secure: isProd,
+  sameSite: (isProd ? 'none' : 'lax') as const,
   maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+};
+
+const sendAuthError = (res: any, status: number, message: string, code?: string) => {
+  return res.status(status).json({
+    success: false,
+    error: message,
+    ...(code ? { code } : {}),
+  });
 };
 
 authRouter.post('/register', async (req, res) => {
@@ -18,12 +27,12 @@ authRouter.post('/register', async (req, res) => {
     const { email, password, kullanici_adi, gorunen_ad } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+      return sendAuthError(res, 400, 'Email and password are required', 'VALIDATION_ERROR');
     }
 
     const existingUser = await authService.findUserByEmail(email);
     if (existingUser) {
-      return res.status(400).json({ error: 'Email already in use' });
+      return sendAuthError(res, 400, 'Email already in use', 'EMAIL_EXISTS');
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -41,10 +50,10 @@ authRouter.post('/register', async (req, res) => {
     res.cookie('token', token, cookieOptions);
 
     const { sifre_hash: _, ...safeUser } = user;
-    res.status(201).json({ user: safeUser });
+    return res.status(201).json({ success: true, user: safeUser });
   } catch (error) {
     console.error('Register error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    return sendAuthError(res, 500, 'Internal server error', 'REGISTER_ERROR');
   }
 });
 
@@ -53,7 +62,7 @@ authRouter.post('/login', async (req, res) => {
     const { identifier, password } = req.body;
 
     if (!identifier || !password) {
-      return res.status(400).json({ error: 'Kullanıcı adı/E-posta ve şifre gereklidir' });
+      return sendAuthError(res, 400, 'Kullanıcı adı/E-posta ve şifre gereklidir', 'VALIDATION_ERROR');
     }
 
     let user = await authService.findUserByEmail(identifier);
@@ -62,16 +71,16 @@ authRouter.post('/login', async (req, res) => {
     }
 
     if (!user || !user.sifre_hash) {
-      return res.status(401).json({ error: 'Geçersiz kimlik bilgileri' });
+      return sendAuthError(res, 401, 'Geçersiz kimlik bilgileri', 'INVALID_CREDENTIALS');
     }
 
     const isMatch = await bcrypt.compare(password, user.sifre_hash);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Geçersiz kimlik bilgileri' });
+      return sendAuthError(res, 401, 'Geçersiz kimlik bilgileri', 'INVALID_CREDENTIALS');
     }
 
     if (!user.aktif_mi) {
-      return res.status(403).json({ error: 'Hesabınız devre dışı bırakılmış' });
+      return sendAuthError(res, 403, 'Hesabınız devre dışı bırakılmış', 'ACCOUNT_DISABLED');
     }
 
     await authService.updateLastLogin(user.id);
@@ -80,33 +89,42 @@ authRouter.post('/login', async (req, res) => {
     res.cookie('token', token, cookieOptions);
 
     const { sifre_hash: _, ...safeUser } = user;
-    res.json({ user: safeUser });
+    return res.json({ success: true, user: safeUser });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: 'Sunucu hatası' });
+    return sendAuthError(res, 500, 'Sunucu hatası', 'LOGIN_ERROR');
   }
 });
 
 authRouter.post('/logout', (req, res) => {
-  res.clearCookie('token');
-  res.json({ message: 'Logged out successfully' });
+  try {
+    res.clearCookie('token');
+    return res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    return sendAuthError(res, 500, 'Sunucu hatası', 'LOGOUT_ERROR');
+  }
 });
 
 authRouter.get('/me', requireAuth, (req: AuthRequest, res) => {
-  const { sifre_hash: _, ...safeUser } = req.user;
-  res.json({ user: safeUser });
+  try {
+    const { sifre_hash: _, ...safeUser } = req.user;
+    return res.json({ success: true, user: safeUser });
+  } catch (error) {
+    console.error('Me error:', error);
+    return sendAuthError(res, 500, 'Sunucu hatası', 'ME_ERROR');
+  }
 });
 
 // Mock Google OAuth endpoints
 authRouter.get('/google/url', (req, res) => {
   // In a real app, this would return the Google OAuth URL
-  res.json({ url: '/api/auth/google/callback?code=mock_code' });
+  return res.json({ success: true, url: '/api/auth/google/callback?code=mock_code' });
 });
 
 authRouter.get('/google/callback', async (req, res) => {
   try {
     // Mock Google OAuth callback
-    // In a real app, you would exchange the code for tokens and get user info
     const mockEmail = 'google_user@example.com';
     let user = await authService.findUserByEmail(mockEmail);
 
@@ -121,7 +139,7 @@ authRouter.get('/google/callback', async (req, res) => {
     }
 
     if (!user.aktif_mi) {
-      return res.status(403).json({ error: 'Account is deactivated' });
+      return sendAuthError(res, 403, 'Account is deactivated', 'ACCOUNT_DISABLED');
     }
 
     await authService.updateLastLogin(user.id);
@@ -129,10 +147,9 @@ authRouter.get('/google/callback', async (req, res) => {
     const token = authService.generateToken(user);
     res.cookie('token', token, cookieOptions);
 
-    // Redirect to frontend dashboard
-    res.redirect('/dashboard');
+    return res.redirect('/dashboard');
   } catch (error) {
     console.error('Google OAuth error:', error);
-    res.redirect('/giris?error=oauth_failed');
+    return res.redirect('/giris?error=oauth_failed');
   }
 });
