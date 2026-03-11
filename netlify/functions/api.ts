@@ -7,7 +7,9 @@ let cachedHandler: ReturnType<typeof serverless> | null = null;
 async function getHandler() {
   if (!cachedHandler) {
     const app = await createApiApp();
-    cachedHandler = serverless(app);
+    cachedHandler = serverless(app, {
+      basePath: "/.netlify/functions/api",
+    });
   }
 
   return cachedHandler;
