@@ -15,7 +15,26 @@ async function getHandler() {
   return cachedHandler;
 }
 
+function normalizeSetCookie(response: any) {
+  const headers = response?.headers || {};
+  const rawSetCookie = headers['set-cookie'] || headers['Set-Cookie'];
+
+  if (!rawSetCookie) {
+    return response;
+  }
+
+  const cookieValues = Array.isArray(rawSetCookie) ? rawSetCookie : [rawSetCookie];
+  return {
+    ...response,
+    multiValueHeaders: {
+      ...(response?.multiValueHeaders || {}),
+      'set-cookie': cookieValues,
+    },
+  };
+}
+
 export const handler = async (event: any, context: any) => {
   const currentHandler = await getHandler();
-  return currentHandler(event, context);
+  const response = await currentHandler(event, context);
+  return normalizeSetCookie(response);
 };
