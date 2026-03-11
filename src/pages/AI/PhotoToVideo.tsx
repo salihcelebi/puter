@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import AILayout from '../../components/AILayout';
+import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 export default function PhotoToVideo() {
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string } | null>(null);
   const [error, setError] = useState('');
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -14,23 +16,50 @@ export default function PhotoToVideo() {
     }
   };
 
+
+  // Part 2: poll backend job status instead of assuming immediate media readiness.
+  useEffect(() => {
+    if (!result?.jobId || !result.status || result.status === 'completed' || result.status === 'failed') return;
+
+    const timer = setInterval(async () => {
+      try {
+        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string }>(`/api/ai/jobs/${result.jobId}`);
+        if (job.status === 'completed') {
+          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl }));
+          clearInterval(timer);
+          return;
+        }
+        if (job.status === 'failed') {
+          setError(job.error || 'Fotoğraftan video işi başarısız oldu');
+          setResult(prev => ({ ...(prev || {}), status: 'failed' }));
+          clearInterval(timer);
+          return;
+        }
+        setResult(prev => ({ ...(prev || {}), status: job.status }));
+      } catch (pollError: any) {
+        setError(pollError.message || 'İş durumu alınamadı');
+        clearInterval(timer);
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [result?.jobId, result?.status]);
+
   const handleGenerate = async () => {
     if (!prompt || !image) return;
     setLoading(true);
     setError('');
     
     try {
-      // Gerçek uygulamada FormData kullanılmalı
-      const response = await fetch('/api/ai/video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string }>('/api/ai/photo-to-video', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, image: 'mock_image_data' }),
+        body: JSON.stringify({ prompt, imageUrl: image.name, clientRequestId: `p2v_${Date.now()}` }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Video üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Fotoğraftan video işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -111,8 +140,13 @@ export default function PhotoToVideo() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result ? (
+          ) : result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
+          ) : result?.jobId ? (
+            <div className="text-center text-zinc-500">
+              Üretim durumu: <span className="font-semibold">{result.status || 'queued'}</span><br />
+              Job ID: <span className="font-mono">{result.jobId}</span>
+            </div>
           ) : (
             <div className="text-center text-zinc-400 p-6">
               <svg className="mx-auto h-12 w-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -1,33 +1,79 @@
-import { kv } from '../db/kv.js';
 import { aiService } from './aiService.js';
-import { getPricingSettings } from '../db/fiyatlandirma/fiyatlandirma.js';
+
+function fail(message: string, code: string): never {
+  throw Object.assign(new Error(message), { code });
+}
+
+async function callOwnerRuntime<T>(operation: string, payload: Record<string, unknown>): Promise<T> {
+  const baseUrl = process.env.PUTER_OWNER_AI_BASE_URL;
+  const token = process.env.PUTER_OWNER_AI_TOKEN;
+
+  if (!baseUrl || !token) {
+    fail('Owner AI runtime kullanılamıyor', 'OWNER_RUNTIME_UNAVAILABLE');
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, '')}/${operation}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    fail('Owner runtime çağrısı başarısız', 'OWNER_RUNTIME_CALL_FAILED');
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = typeof data?.error === 'string' ? data.error : 'Owner AI runtime hatası';
+    fail(message, data?.code || 'FEATURE_NOT_READY');
+  }
+
+  return data as T;
+}
 
 export const musicAdapter = {
+  // Part 2: music is not a native helper; expose honest capability to UI.
+  async getCapability() {
+    return {
+      supported: false,
+      mode: 'capability_only',
+      code: 'FEATURE_NOT_READY',
+      reason: 'Music üretimi native yardımcı değil, ayrı adapter zinciri gerektirir.',
+    };
+  },
+
   async generateMusic(userId: string, prompt: string, tags: string[]) {
+    const capability = await this.getCapability();
+    if (!capability.supported) {
+      fail(capability.reason, capability.code);
+    }
+
     const internalCost = 0.05;
-    const cost = Math.ceil(internalCost * getPricingSettings().creditPerUsd);
-    
-    const hasCredit = await aiService.checkAndDeductCredit(userId, cost, 'music');
-    if (!hasCredit) throw new Error('Yetersiz kredi');
+    const cost = Math.ceil(internalCost * 100);
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const assetId = `ast_${Date.now()}`;
-      await kv.set(`assets:${assetId}`, {
-        id: assetId,
-        kullanici_id: userId,
-        tur: 'music',
-        dosya_adi: `mock_music_${Date.now()}.mp3`,
-        fs_path: `/mock/path`,
-        created_at: new Date().toISOString()
-      });
+      const result = await callOwnerRuntime<{ jobId: string }>('music', { prompt, tags });
+      if (!result.jobId) {
+        fail('Müzik işi başlatılamadı', 'OWNER_RUNTIME_CALL_FAILED');
+      }
 
-      await aiService.logUsage(userId, 'music', cost, internalCost, 'success', { prompt, tags, assetId });
-      return { assetId, url: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` };
+      const hasCredit = await aiService.checkAndDeductCredit(userId, cost, 'music');
+      if (!hasCredit) fail('Yetersiz kredi', 'INSUFFICIENT_CREDIT');
+
+      await aiService.logUsage(userId, 'music', cost, internalCost, 'success', { prompt, tags, jobId: result.jobId });
+      return { jobId: result.jobId, status: 'queued' };
     } catch (error: any) {
-      await aiService.logUsage(userId, 'music', cost, internalCost, 'failed', { prompt, error: error.message });
+      await aiService.logUsage(userId, 'music', cost, internalCost, 'failed', {
+        prompt,
+        tags,
+        error: error.message,
+        code: error.code,
+      });
       throw error;
     }
-  }
+  },
 };
