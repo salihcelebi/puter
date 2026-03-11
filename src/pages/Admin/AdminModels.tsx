@@ -108,8 +108,12 @@ export default function AdminModels() {
 
   const [stats, setStats] = useState<any[]>([]);
 
+  // Part 2.5: admin model tabs consume persisted catalog through backend query filters.
   useEffect(() => {
     fetchModels();
+  }, [activeTab, filters]);
+
+  useEffect(() => {
     fetchStats();
   }, []);
 
@@ -128,7 +132,26 @@ export default function AdminModels() {
   const fetchModels = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/models');
+      const tabMap: Record<string, string> = {
+        active: 'active',
+        prices: 'raw',
+        inactive: 'inactive',
+        popular: 'favorites',
+        credits: 'sales',
+      };
+      const params = new URLSearchParams();
+      params.set('tab', tabMap[activeTab]);
+      if (filters.provider) params.set('provider', filters.provider);
+      if (filters.model) params.set('modelName', filters.model);
+      if (filters.service_type) params.set('serviceType', filters.service_type);
+      if (filters.input_price) {
+        params.set('minInputCost', filters.input_price);
+      }
+      if (filters.output_price) {
+        params.set('minOutputCost', filters.output_price);
+      }
+
+      const res = await fetch(`/api/admin/models?${params.toString()}`);
       if (!res.ok) {
         let msg = 'Modeller alınamadı';
         try {

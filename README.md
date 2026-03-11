@@ -15,7 +15,7 @@
 5. Yönetici tarafı; kullanıcı yönetimi, kredi müdahalesi, ödeme geçmişi, loglar, model kataloğu ve fiyat senkronizasyonu ekranlarını içerir.  
 6. Veritabanı olarak klasik SQL yerine `server/db/kv.ts` üzerinden çalışan JSON dosya tabanlı bir KV yaklaşımı kullanılmıştır.  
 7. Fiziksel medya dosyaları `.data/fs` altında saklanır; metadata ise KV tarafında tutulur.  
-8. Sohbet, görsel ve TTS tarafında gerçek Gemini çağrıları vardır; video ve müzik tarafında ise bu snapshot’ta simülasyon/mock davranış görülür.  
+8. AI çağrıları owner-controlled backend sınırında owner runtime’a yönlendirilir; video ve photo-to-video job/polling ile izlenir, music native olmadığı için capability-gated pasif durumda tutulur.  
 9. Ana Express uygulamasından bağımsız olarak `worker.js` altında ayrı bir fiyat katalog / kur senkronizasyon hattı da bulunur.  
 10. Sistemin genel zinciri; kullanıcı girişi → yetki kontrolü → kredi kontrolü → AI üretimi → log / ledger / asset kaydı → kullanıcı ve admin ekranlarında görünürlük şeklindedir.  
 
@@ -31,7 +31,7 @@ SATIR SAYISI: 161
 
 2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
 - `startServer()`: Sunucunun tüm başlangıç sırasını çalıştırır; `fileSystem.init()`, `authService.ensureDefaultAdmin()`, `ensureModelsSeeded()`, middleware kurulumu, route mount işlemi, Vite/production ayrımı ve `listen` çağrısı burada yapılır.  
-- `GET /api/health`: Basit sağlık kontrolü döner.  
+- `GET /api/health`: Servis durumu ile owner-runtime readiness bilgisini döner.  
 - `POST /api/test-sync`: TCMB veya fallback kur kaynağından USD/TRY oranı alır, ardından `https://turk.puter.work/api/prices` verisini çekip `model:*` kayıtlarını KV içine senkronize eder.  
 
 3. DOSYA YOLU  
@@ -262,10 +262,10 @@ SATIR SAYISI: 223
 2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
 - `checkAndDeductCredit(userId, cost, module)`: Kullanıcının bakiye yeterliliğini kontrol eder, kullanım kredisi düşer ve ledger kaydı yazar.  
 - `logUsage(userId, module, cost, internalCost, status, details)`: `usage:*` ve `userUsage:*` kayıtlarını üretir.  
-- `generateChat(userId, prompt, modelId)`: Model kaydı varsa tahmini token maliyeti hesaplar, kredi düşer, Gemini text üretimi yapar.  
-- `generateImage(userId, prompt)`: Gemini image üretimi çağırır, base64 görseli dosya sistemine yazar, asset kaydı açar.  
-- `generateTTS(userId, text, voiceName)`: Gemini TTS çağırır, base64 sesi mp3 olarak yazar, asset kaydı açar.  
-- `generateVideo(userId, prompt, modelId, duration, aspectRatio)`: Bu snapshot’ta gerçek video provider çağrısı yapmaz; bekleme sonrası mock asset kaydı ve sabit örnek video URL’si döner.  
+- `runFeature({ feature: 'chat', ... })`: Model allowlist çözümleme yapar, owner runtime chat çağrısını başlatır, normalize response döner.  
+- `runFeature({ feature: 'image', ... })`: Owner runtime image çağrısı yapar, base64 sonucu asset katmanına yazar.  
+- `runFeature({ feature: 'tts', ... })`: Owner runtime TTS çağrısı yapar, sesi asset katmanına yazar.  
+- `runFeature({ feature: 'video' | 'photoToVideo', ... })`: Owner runtime job başlatır, backend `aiJob:*` kaydıyla polling sözleşmesini sürdürür.  
 
 3. DOSYA YOLU  
 - `server/services/aiService.ts`
@@ -323,7 +323,7 @@ SATIR SAYISI: 31
 - Gerçek müzik sağlayıcısı yerine simüle URL dönen bir ara katmandır.  
 
 2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
-- `generateMusic(userId, prompt, tags)`: Kredi düşer, mock asset kaydı açar, usage log yazar ve sabit mp3 URL’si döner.  
+- `getCapability()`: Müzik özelliğinin native olmadığını dürüstçe bildirir; `generateMusic()` capability yoksa kodlu hata döner.  
 
 3. DOSYA YOLU  
 - `server/services/musicAdapter.ts`
@@ -334,7 +334,7 @@ SATIR SAYISI: 31
 - Tüketen frontend sayfası: `src/pages/AI/Music.tsx`.  
 
 5. EK NOT  
-- Bu snapshot’ta gerçek müzik üretimi yok, adapter + mock davranış var.  
+- Bu snapshot’ta gerçek müzik üretimi yok; capability endpoint ile kontrollü pasif durum döner.  
 - Asset metadata kaydı oluşur ama fiziksel dosya yazılmaz.  
 - AI tarafında yardımcı servis dosyasıdır.  
 
@@ -1075,7 +1075,7 @@ SATIR SAYISI: 203
 - Harici bağımlılık: React.  
 
 5. EK NOT  
-- Bu snapshot’ta backend gerçek video üretmiyor; sabit örnek video URL’si döndürüyor.  
+- Video ve photo-to-video akışları queued job başlatır; frontend `/api/ai/jobs/:id` ile polling yapar.  
 - Buna rağmen UI gerçek üretim ekranı gibi tasarlanmıştır.  
 - Kısmen simülasyonlu AI sayfasıdır.  
 
@@ -1132,7 +1132,7 @@ SATIR SAYISI: 183
 - Harici bağımlılık: React.  
 
 5. EK NOT  
-- Backend gerçek Gemini TTS çağrısı yapıyor görünür.  
+- Backend TTS çağrısını owner runtime üzerinden server-controlled boundary içinde yürütür.  
 - Ancak dönen URL yine `/api/assets/:id` formatında olduğu için gerçek medya stream route’u placeholder kaldığından oynatma zinciri tamamlanmış görünmeyebilir.  
 - Kritik AI sayfalarından biridir.  
 
@@ -1160,7 +1160,7 @@ SATIR SAYISI: 178
 - Harici bağımlılık: React.  
 
 5. EK NOT  
-- Müzik tarafında mock mp3 URL kullanıldığı için bu ekranın oynatma zinciri, image/TTS’ye göre daha işlevsel görünür.  
+- Müzik tarafı capability-gated durumdadır; sahte başarı veya sample mp3 oynatımı hedeflenmez.  
 - Gerçek provider çağrısı bu snapshot’ta yoktur.  
 - Kısmen simülasyonlu AI sayfasıdır.  
 
@@ -1769,7 +1769,7 @@ SATIR SAYISI: 24
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
 - Harici bağımlılıklar: `@tailwindcss/vite`, `@vitejs/plugin-react`, `path`, `vite`.  
 - Frontend giriş dosyaları ve tüm build zinciri bu config’ten etkilenir.  
-- `process.env.GEMINI_API_KEY` define ile frontend tarafına enjekte edilir.  
+- Frontend bundle’a AI sağlayıcı anahtarı enjekte edilmez; AI çağrıları backend sınırı arkasında tutulur.  
 
 5. EK NOT  
 - HMR davranışı `DISABLE_HMR` env değişkenine bağlıdır.  
@@ -1815,13 +1815,13 @@ SATIR SAYISI: 9
 
 2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
 - Fonksiyon tanımı yoktur.  
-- Değişkenler: `GEMINI_API_KEY`, `APP_URL`.  
+- Değişkenler: `APP_URL`, `PUTER_OWNER_AI_BASE_URL`, `PUTER_OWNER_AI_TOKEN`.  
 
 3. DOSYA YOLU  
 - `.env.example`
 
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
-- `server/services/aiService.ts` `GEMINI_API_KEY` ile ilişkilidir.  
+- `server/services/aiService.ts` owner runtime (`PUTER_OWNER_AI_BASE_URL`, `PUTER_OWNER_AI_TOKEN`) ile ilişkilidir.  
 - `vite.config.ts` env yüklemesiyle ilişkilidir.  
 - Dağıtım ve local kurulum adımlarında referans dosyasıdır.  
 
@@ -1992,7 +1992,7 @@ DOSYA ADI: `src/admin/adminService.ts`, `src/auth/authService.ts`, `src/billing/
 6. Giriş başarılı olunca `ProtectedRoute` ve `Layout` korumalı kullanıcı alanlarını açar.  
 7. Kullanıcı AI sayfalarından birinde üretim başlattığında ilgili sayfa `/api/ai/*` endpoint’ine istek atar.  
 8. `server/routes/ai.ts`, `requireAuth` ile kullanıcıyı doğrular ve isteği `aiService` veya `musicAdapter` içine yönlendirir.  
-9. `server/services/aiService.ts` veya `server/services/musicAdapter.ts` önce kredi kontrolü yapar, sonra üretimi/simülasyonu çalıştırır, ardından usage log ve ledger kaydı açar.  
+9. `server/services/aiService.ts` owner runtime çağrısını normalize eder; başarılı çağrılarda kredi/usage kaydını işler, job işlerinde polling sözleşmesini sürdürür.  
 10. Görsel/TTS tarafında fiziksel dosya gerekiyorsa `server/db/fs.ts` dosya yazar; metadata `server/db/kv.ts` içine `assets:*` olarak kaydedilir.  
 11. Kullanıcı `Account`, `Assets`, `UsageHistory`, `CreditHistory` ekranlarından `/api/user/*` endpoint’leriyle kendi verilerini geri okur.  
 12. Satın alma akışında `Billing` ve `Checkout` sayfaları `/api/billing/packages` ve `/api/billing/checkout` çağrılarıyla ödeme başlatır.  
@@ -2045,7 +2045,7 @@ authService.ts      aiService.ts       billingService.ts       kv.ts            
                      |
                      +------> fileSystem.ts ------> .data/fs/*
                      |
-                     +------> GoogleGenAI
+                     +------> Owner Runtime API
                      |
                      +------> creditLedger:* / usage:* / assets:*
 
