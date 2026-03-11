@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface AIModel {
   id: string;
@@ -13,7 +14,7 @@ interface AIModel {
 export default function VideoGen() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string } | null>(null);
   const [error, setError] = useState('');
   
   const [models, setModels] = useState<AIModel[]>([]);
@@ -28,18 +29,11 @@ export default function VideoGen() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
-        const videoModels = data.filter(m => m.service_type === 'video');
-        setModels(videoModels);
-        if (videoModels.length > 0) {
-          setSelectedModelId(videoModels[0].id);
-        }
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const videoModels = data.filter(m => m.service_type === 'video');
+      setModels(videoModels);
+      if (videoModels.length > 0) {
+        setSelectedModelId(videoModels[0].id);
       }
     } catch (error) {
       console.error('Modeller alınamadı', error);
@@ -63,12 +57,8 @@ export default function VideoGen() {
     setError('');
     
     try {
-      const response = await fetch('/api/ai/video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/video', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ 
           prompt,
           modelId: selectedModelId,
@@ -76,11 +66,11 @@ export default function VideoGen() {
           aspectRatio
         }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Video üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Video işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
       toast.error(err.message);
@@ -172,8 +162,12 @@ export default function VideoGen() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result ? (
+          ) : result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
+          ) : result?.jobId ? (
+            <div className="text-center text-zinc-500">
+              Üretim işi kuyruğa alındı. Job ID: <span className="font-mono">{result.jobId}</span>
+            </div>
           ) : (
             <div className="text-center text-zinc-400">
               <svg className="mx-auto h-12 w-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

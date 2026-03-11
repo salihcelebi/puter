@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface AIModel {
   id: string;
@@ -13,7 +14,7 @@ interface AIModel {
 export default function Music() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string } | null>(null);
   const [error, setError] = useState('');
   
   const [models, setModels] = useState<AIModel[]>([]);
@@ -25,18 +26,11 @@ export default function Music() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
-        const musicModels = data.filter(m => m.service_type === 'music');
-        setModels(musicModels);
-        if (musicModels.length > 0) {
-          setSelectedModelId(musicModels[0].id);
-        }
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const musicModels = data.filter(m => m.service_type === 'music');
+      setModels(musicModels);
+      if (musicModels.length > 0) {
+        setSelectedModelId(musicModels[0].id);
       }
     } catch (error) {
       console.error('Modeller alınamadı', error);
@@ -51,19 +45,15 @@ export default function Music() {
     setError('');
     
     try {
-      const response = await fetch('/api/ai/music', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/music', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({ prompt, tags: ['Pop', 'Kadın Vokal'], modelId: selectedModelId }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Müzik üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Müzik işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
       toast.error(err.message);
@@ -198,10 +188,16 @@ export default function Music() {
           </div>
         </div>
 
-        {result && (
+        {result?.url && (
           <div className="mb-6 p-4 bg-white border border-zinc-200 rounded-xl shadow-sm">
             <h3 className="text-sm font-medium text-zinc-700 mb-2">Üretilen Müzik:</h3>
             <audio src={result.url} controls className="w-full" />
+          </div>
+        )}
+
+        {result?.jobId && !result?.url && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl shadow-sm text-amber-800 text-sm">
+            Müzik işi kuyruğa alındı. Job ID: <span className="font-mono">{result.jobId}</span>
           </div>
         )}
 

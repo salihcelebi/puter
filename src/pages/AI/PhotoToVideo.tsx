@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import AILayout from '../../components/AILayout';
+import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 export default function PhotoToVideo() {
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string } | null>(null);
   const [error, setError] = useState('');
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -20,17 +22,15 @@ export default function PhotoToVideo() {
     setError('');
     
     try {
-      // Gerçek uygulamada FormData kullanılmalı
-      const response = await fetch('/api/ai/video', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/photo-to-video', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, image: 'mock_image_data' }),
+        body: JSON.stringify({ prompt, imageUrl: image.name }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Video üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Fotoğraftan video işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -111,8 +111,12 @@ export default function PhotoToVideo() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result ? (
+          ) : result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
+          ) : result?.jobId ? (
+            <div className="text-center text-zinc-500">
+              Üretim işi kuyruğa alındı. Job ID: <span className="font-mono">{result.jobId}</span>
+            </div>
           ) : (
             <div className="text-center text-zinc-400 p-6">
               <svg className="mx-auto h-12 w-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -11,7 +11,7 @@ async function callOwnerRuntime<T>(operation: string, payload: Record<string, un
   const { baseUrl, token } = getOwnerRuntimeConfig();
 
   if (!baseUrl || !token) {
-    throw new Error('Owner AI runtime yapılandırılmamış');
+    throw Object.assign(new Error('Owner AI runtime kullanılamıyor'), { code: 'OWNER_RUNTIME_UNAVAILABLE' });
   }
 
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/${operation}`, {
@@ -26,7 +26,7 @@ async function callOwnerRuntime<T>(operation: string, payload: Record<string, un
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = typeof data?.error === 'string' ? data.error : 'Owner AI runtime hatası';
-    throw new Error(message);
+    throw Object.assign(new Error(message), { code: data?.code || 'FEATURE_NOT_READY' });
   }
 
   return data as T;

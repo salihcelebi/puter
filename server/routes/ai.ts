@@ -37,7 +37,7 @@ aiRouter.post('/chat', async (req: AuthRequest, res) => {
     const response = await aiService.generateChat(req.user.id, prompt, modelId);
     res.json({ response });
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
 
@@ -47,7 +47,7 @@ aiRouter.post('/image', async (req: AuthRequest, res) => {
     const result = await aiService.generateImage(req.user.id, prompt);
     res.json(result);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
 
@@ -57,7 +57,7 @@ aiRouter.post('/tts', async (req: AuthRequest, res) => {
     const result = await aiService.generateTTS(req.user.id, text, voice);
     res.json(result);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
 
@@ -67,7 +67,7 @@ aiRouter.post('/video', async (req: AuthRequest, res) => {
     const result = await aiService.generateVideo(req.user.id, prompt, model, duration, aspectRatio);
     res.json(result);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
 
@@ -83,13 +83,14 @@ aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
     );
     res.json(result);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
 
 aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
   res.status(501).json({
     error: 'Job durumu owner runtime üzerinden sağlanmalı',
+    code: 'JOB_STATUS_NOT_IMPLEMENTED',
     jobId: req.params.id,
   });
 });
@@ -100,6 +101,6 @@ aiRouter.post('/music', async (req: AuthRequest, res) => {
     const result = await musicAdapter.generateMusic(req.user.id, prompt, tags);
     res.json(result);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   }
 });
