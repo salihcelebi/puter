@@ -1,9 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
-const DB_FILE = process.env.NETLIFY
-  ? '/tmp/kv.json'
-  : path.join(process.cwd(), 'server', 'db', 'kv.json');
+import { getWritableBaseDir, isServerlessRuntime } from './runtime.js';
+
+const DB_FILE = isServerlessRuntime()
+  ? path.join(getWritableBaseDir(), 'kv.json')
+  : path.join(getWritableBaseDir(), 'server', 'db', 'kv.json');
 
 // Initialize store from file
 let store = new Map<string, any>();
