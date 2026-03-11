@@ -23,7 +23,7 @@ aiRouter.get('/models', async (req: AuthRequest, res) => {
         sale_credit_input: m.sale_credit_input,
         sale_credit_output: m.sale_credit_output,
         sale_credit_single: m.sale_credit_single,
-        metadata_json: m.metadata_json
+        metadata_json: m.metadata_json,
       }));
     res.json(activeModels);
   } catch (error) {
@@ -69,6 +69,29 @@ aiRouter.post('/video', async (req: AuthRequest, res) => {
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
+});
+
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, model, duration, aspectRatio } = req.body;
+    const result = await aiService.generateVideo(
+      req.user.id,
+      `${prompt || ''}\nSource image: ${imageUrl || ''}`.trim(),
+      model,
+      duration,
+      aspectRatio,
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  res.status(501).json({
+    error: 'Job durumu owner runtime üzerinden sağlanmalı',
+    jobId: req.params.id,
+  });
 });
 
 aiRouter.post('/music', async (req: AuthRequest, res) => {
