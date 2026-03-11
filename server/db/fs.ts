@@ -5,7 +5,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const BASE_DIR = path.join(process.cwd(), '.data', 'fs');
+const BASE_DIR = process.env.NETLIFY ? path.join('/tmp', 'data', 'fs') : path.join(process.cwd(), '.data', 'fs');
 
 export const fileSystem = {
   init: async () => {

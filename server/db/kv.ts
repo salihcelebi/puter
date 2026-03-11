@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DB_FILE = path.join(__dirname, 'kv.json');
+const DB_FILE = process.env.NETLIFY ? '/tmp/kv.json' : path.join(__dirname, 'kv.json');
 
 // Initialize store from file
 let store = new Map<string, any>();
