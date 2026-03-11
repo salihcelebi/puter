@@ -199,6 +199,106 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      fail('imageUrl alanı zorunludur', 'INVALID_INPUT');
+    }
+
+    const result = await aiService.runFeature({
+      feature: 'photoToVideo',
+      userId: req.user.id,
+      modelId: modelId || model,
+      clientRequestId,
+      payload: {
+        prompt: String(prompt || ''),
+        imageUrl,
+        duration: Number(duration || 5),
+        aspectRatio: aspectRatio || '16:9',
+      },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, model, duration, aspectRatio } = req.body;
+    const result = await aiService.generateVideo(
+      req.user.id,
+      `${prompt || ''}\nSource image: ${imageUrl || ''}`.trim(),
+      model,
+      duration,
+      aspectRatio,
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  res.status(501).json({
+    error: 'Job durumu owner runtime üzerinden sağlanmalı',
+    code: 'JOB_STATUS_NOT_IMPLEMENTED',
+    jobId: req.params.id,
+  });
+});
+
 aiRouter.post('/music', async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};

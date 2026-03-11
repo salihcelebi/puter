@@ -449,6 +449,7 @@ export const aiService = {
       if (status === 'not_found') {
         fail('Owner runtime job bulunamadı', 'OWNER_RUNTIME_JOB_NOT_FOUND');
       }
+    }
 
       return {
         status,
@@ -521,7 +522,6 @@ export const aiService = {
       if (error.code === 'ASSET_WRITE_FAILED') throw error;
       fail(error.message || 'Job finalize başarısız', 'JOB_FINALIZE_FAILED');
     }
-  },
 
   async finalizeFailedJob(job: StoredJob, errorCode?: string | null, errorMessage?: string | null) {
     try {
