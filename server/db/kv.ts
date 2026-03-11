@@ -8,15 +8,6 @@ const DB_FILE = path.join(__dirname, 'kv.json');
 
 // Initialize store from file
 let store = new Map<string, any>();
-try {
-  if (fs.existsSync(DB_FILE)) {
-    const data = fs.readFileSync(DB_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
-    store = new Map(Object.entries(parsed));
-  }
-} catch (e) {
-  console.error('Error loading KV store:', e);
-}
 
 const saveStore = () => {
   try {
@@ -26,6 +17,21 @@ const saveStore = () => {
     console.error('Error saving KV store:', e);
   }
 };
+
+
+try {
+  if (fs.existsSync(DB_FILE)) {
+    const data = fs.readFileSync(DB_FILE, 'utf-8');
+    if (data.trim()) {
+      const parsed = JSON.parse(data);
+      store = new Map(Object.entries(parsed));
+    }
+  }
+} catch (e) {
+  console.error('Error loading KV store, resetting to empty store:', e);
+  store = new Map<string, any>();
+  saveStore();
+}
 
 export const kv = {
   get: async (key: string) => store.get(key) || null,

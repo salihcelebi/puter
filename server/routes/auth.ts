@@ -6,10 +6,11 @@ import { requireAuth, AuthRequest } from '../middleware/auth.js';
 export const authRouter = Router();
 
 // Cookie options for security
+const isProd = process.env.NODE_ENV === 'production';
 const cookieOptions = {
   httpOnly: true,
-  secure: true,
-  sameSite: 'none' as const,
+  secure: isProd,
+  sameSite: (isProd ? 'none' : 'lax') as const,
   maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
 };
 

@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import cookieParser from "cookie-parser";
+import dotenv from "dotenv";
 
 import { authRouter } from "./server/routes/auth.js";
 import { billingRouter } from "./server/routes/billing.js";
@@ -16,6 +17,8 @@ import { authService } from "./server/services/authService.js";
 import { kv } from "./server/db/kv.js";
 import { ensureModelsSeeded } from "./server/db/seed-model-prices.js";
 
+dotenv.config();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -26,8 +29,8 @@ async function startServer() {
   // Initialize FS
   await fileSystem.init();
   
-  // Ensure default admin user exists
-  await authService.ensureDefaultAdmin();
+  // Ensure admin user exists from environment
+  await authService.ensureAdminFromEnv();
 
   // Ensure models are seeded
   await ensureModelsSeeded();
