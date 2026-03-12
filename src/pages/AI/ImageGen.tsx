@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface AIModel {
   id: string;
@@ -24,18 +25,11 @@ export default function ImageGen() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
-        const imageModels = data.filter(m => m.service_type === 'image');
-        setModels(imageModels);
-        if (imageModels.length > 0) {
-          setSelectedModelId(imageModels[0].id);
-        }
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=image&sort=price_asc');
+      const imageModels = data.filter(m => m.service_type === 'image');
+      setModels(imageModels);
+      if (imageModels.length > 0) {
+        setSelectedModelId(imageModels[0].id);
       }
     } catch (error) {
       console.error('Modeller alınamadı', error);
@@ -50,17 +44,11 @@ export default function ImageGen() {
     setError('');
     
     try {
-      const response = await fetch('/api/ai/image', {
+      // Part 2: keep UI backward-compatible while passing normalized request fields.
+      const data = await fetchApiJson<{ url: string; assetId: string; requestId?: string; modelId?: string }>('/api/ai/image', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ prompt, modelId: selectedModelId }),
+        body: JSON.stringify({ prompt, modelId: selectedModelId, clientRequestId: `image_${Date.now()}` }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Görsel üretilemedi');
       
       setResult(data);
     } catch (err: any) {

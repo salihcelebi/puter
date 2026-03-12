@@ -19,6 +19,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     );
   }
 
+  // Bu bileşen sadece private route kontrolü yapar; public route kararını App.tsx verir.
   if (!user) {
     return <Navigate to="/giris" state={{ from: location }} replace />;
   }
