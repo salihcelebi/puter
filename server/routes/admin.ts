@@ -1,12 +1,88 @@
 import { Router } from 'express';
 import { kv } from '../db/kv.js';
-import { requireAdmin, AuthRequest } from '../middleware/auth.js';
+import { requireAdmin, requirePermission, AuthRequest } from '../middleware/auth.js';
 import { getPricingSettings, updatePricingSettings } from '../db/fiyatlandirma/fiyatlandirma.js';
 import { modelCatalogService } from '../services/modelCatalogService.js';
+import { authService } from '../services/authService.js';
 
 export const adminRouter = Router();
 
 adminRouter.use(requireAdmin);
+
+// DELILX: ADMIN USERS LIST bölümü admin/test_user dahil tüm kullanıcıları frontend contractı ile döndürür.
+adminRouter.get('/users', requirePermission('manage_users'), async (_req: AuthRequest, res) => {
+  try {
+    const users = (await kv.list('users:')).map((entry) => entry.value || {});
+    const normalized = users.map((user: any) => authService.toSafeUser({
+      ...user,
+      permissions: user.permissions || {},
+      permission_summary: user.permission_summary || null,
+      is_system_user: Boolean(user.is_system_user),
+      is_seeded: Boolean(user.is_seeded),
+      is_new_user: Boolean(user.is_new_user),
+      notes: user.notes || null,
+    }));
+    return res.json(normalized);
+  } catch (error) {
+    return res.status(500).json({ error: 'Kullanıcı listesi alınamadı', code: 'ADMIN_USERS_LIST_FAILED' });
+  }
+});
+
+adminRouter.put('/users/:id', requirePermission('manage_users'), async (req: AuthRequest, res) => {
+  try {
+    const { aktif_mi } = req.body || {};
+    if (typeof aktif_mi !== 'boolean') {
+      return res.status(400).json({ error: 'aktif_mi boolean olmalı', code: 'INVALID_INPUT' });
+    }
+    const user = await kv.get(`users:${req.params.id}`);
+    if (!user) {
+      return res.status(404).json({ error: 'Kullanıcı bulunamadı', code: 'USER_NOT_FOUND' });
+    }
+    user.aktif_mi = aktif_mi;
+    await kv.set(`users:${user.id}`, user);
+    return res.json({ success: true, user: authService.toSafeUser(user) });
+  } catch (error) {
+    return res.status(500).json({ error: 'Kullanıcı güncellenemedi', code: 'ADMIN_USER_UPDATE_FAILED' });
+  }
+});
+
+// DELILX: CREDIT ACTION bölümü add/remove işlemlerinde yeni bakiyeyi newBalance alanı ile döndürür.
+adminRouter.post('/users/:id/credits', requirePermission('manage_credits'), async (req: AuthRequest, res) => {
+  try {
+    const { amount, action, reason } = req.body || {};
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'amount pozitif sayı olmalı', code: 'INVALID_INPUT' });
+    }
+    if (action !== 'add' && action !== 'remove') {
+      return res.status(400).json({ error: 'action add/remove olmalı', code: 'INVALID_INPUT' });
+    }
+    const user = await kv.get(`users:${req.params.id}`);
+    if (!user) {
+      return res.status(404).json({ error: 'Kullanıcı bulunamadı', code: 'USER_NOT_FOUND' });
+    }
+
+    const delta = action === 'add' ? parsedAmount : -parsedAmount;
+    const nextBalance = Math.max(0, Number(user.toplam_kredi || 0) + delta);
+    user.toplam_kredi = nextBalance;
+    await kv.set(`users:${user.id}`, user);
+
+    const ledgerId = `creditLedger:${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    await kv.set(ledgerId, {
+      id: ledgerId,
+      userId: user.id,
+      amount: parsedAmount,
+      action,
+      reason: reason || 'Admin kredi işlemi',
+      createdAt: new Date().toISOString(),
+      actorId: req.user?.id || null,
+    });
+
+    return res.json({ success: true, newBalance: nextBalance });
+  } catch (error) {
+    return res.status(500).json({ error: 'Kredi işlemi başarısız', code: 'ADMIN_CREDIT_ACTION_FAILED' });
+  }
+});
 
 // Pricing Endpoints
 adminRouter.get('/pricing', async (req: AuthRequest, res) => {

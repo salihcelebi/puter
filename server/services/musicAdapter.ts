@@ -13,7 +13,7 @@ export const musicAdapter = {
     };
   },
 
-  async generateMusic() {
+  async generateMusic(_userId?: string, _prompt?: string, _tags?: string[]) {
     const capability = await this.getCapability();
     fail(capability.reason, capability.code);
   },

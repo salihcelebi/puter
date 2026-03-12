@@ -12,6 +12,12 @@ interface User {
   toplam_kredi: number;
   kullanilan_kredi: number;
   olusturma_tarihi: string;
+  permissions?: Record<string, boolean>;
+  permission_summary?: string | null;
+  is_system_user?: boolean;
+  is_seeded?: boolean;
+  is_new_user?: boolean;
+  notes?: string | null;
 }
 
 export default function AdminUsers() {
@@ -123,9 +129,13 @@ export default function AdminUsers() {
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">Yükleniyor...</td>
                 </tr>
-              ) : filteredUsers.length === 0 ? (
+              ) : users.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">Kullanıcı bulunamadı.</td>
+                </tr>
+              ) : filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">Arama kriterine uygun kullanıcı bulunamadı.</td>
                 </tr>
               ) : (
                 filteredUsers.map((user) => (
@@ -133,6 +143,12 @@ export default function AdminUsers() {
                     <td className="px-6 py-4">
                       <div className="font-medium text-zinc-900">{user.gorunen_ad}</div>
                       <div className="text-zinc-500">{user.email}</div>
+                      <div className="text-xs text-zinc-400 mt-1">
+                        {user.permission_summary || 'Yetki özeti yok'}
+                        {user.is_system_user ? ' • sistem kullanıcısı' : ''}
+                        {user.is_seeded ? ' • seeded' : ''}
+                        {user.is_new_user ? ' • yeni kullanıcı' : ''}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${

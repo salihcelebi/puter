@@ -704,10 +704,10 @@ export const aiService = {
           meta: runtime.meta || null,
         };
       } catch (error: any) {
-        await this.refundCredit(input.userId, billing.cost, requestId, 'image');
+        await this.refundCredit(input.userId, billing.cost, requestId, 'tts');
         await this.upsertUsage({
           userId: input.userId,
-          feature: 'image',
+          feature: 'tts',
           modelId: model.id,
           requestId,
           status: 'failed',
@@ -749,10 +749,10 @@ export const aiService = {
           meta: runtime.meta || null,
         };
       } catch (error: any) {
-        await this.refundCredit(input.userId, billing.cost, requestId, 'image');
+        await this.refundCredit(input.userId, billing.cost, requestId, 'tts');
         await this.upsertUsage({
           userId: input.userId,
-          feature: 'image',
+          feature: 'tts',
           modelId: model.id,
           requestId,
           status: 'failed',

@@ -21,7 +21,8 @@ async function ensureInitialized() {
   if (!initPromise) {
     initPromise = (async () => {
       await fileSystem.init();
-      await authService.ensureAdminFromEnv();
+      // DELILX: boot sırası ENV USERS -> model seed zincirini güvenli ve deterministik çalıştırır.
+      await authService.ensureSystemUsersFromEnv();
       await ensureModelsSeeded();
     })();
   }

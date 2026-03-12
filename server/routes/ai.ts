@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { requireAuth, requirePermission, AuthRequest } from '../middleware/auth.js';
 import { aiService } from '../services/aiService.js';
 import { musicAdapter } from '../services/musicAdapter.js';
 
@@ -72,7 +72,7 @@ aiRouter.get('/models', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/chat', async (req: AuthRequest, res) => {
+aiRouter.post('/chat', requirePermission('use_chat'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId, conversationId } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
@@ -91,7 +91,7 @@ aiRouter.post('/chat', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/image', async (req: AuthRequest, res) => {
+aiRouter.post('/image', requirePermission('use_image'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
@@ -110,7 +110,7 @@ aiRouter.post('/image', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/tts', async (req: AuthRequest, res) => {
+aiRouter.post('/tts', requirePermission('use_tts'), async (req: AuthRequest, res) => {
   try {
     const { text, modelId, voiceName, voice, clientRequestId } = req.body || {};
     if (!text || typeof text !== 'string') fail('text alanı zorunludur', 'INVALID_INPUT');
@@ -132,7 +132,7 @@ aiRouter.post('/tts', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/video', async (req: AuthRequest, res) => {
+aiRouter.post('/video', requirePermission('use_video'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
@@ -155,7 +155,7 @@ aiRouter.post('/video', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+aiRouter.post('/photo-to-video', requirePermission('use_photo_to_video'), async (req: AuthRequest, res) => {
   try {
     const { prompt, imageUrl, imageBase64, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
     let resolvedImageUrl = imageUrl;
@@ -210,70 +210,7 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
-  try {
-    const { prompt, imageUrl, imageBase64, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
-    let resolvedImageUrl = imageUrl;
-    if ((!resolvedImageUrl || typeof resolvedImageUrl !== 'string') && typeof imageBase64 === 'string' && imageBase64.length > 20) {
-      const sourceAsset = await aiService.createImageSourceAsset(req.user.id, imageBase64);
-      resolvedImageUrl = sourceAsset.url;
-    }
-    if (!resolvedImageUrl || typeof resolvedImageUrl !== 'string') fail('imageUrl veya imageBase64 alanı zorunludur', 'INVALID_INPUT');
-
-    const result = await aiService.runFeature({
-      feature: 'photoToVideo',
-      userId: req.user.id,
-      modelId: modelId || model,
-      clientRequestId,
-      payload: {
-        prompt: String(prompt || ''),
-        imageUrl: resolvedImageUrl,
-        duration: Number(duration || 5),
-        aspectRatio: aspectRatio || '16:9',
-      },
-    });
-
-    res.json(result);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
-  try {
-    // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
-    const result = await aiService.getJobStatus(req.user.id, req.params.id);
-    if (result.status === 'not_found') {
-      return res.status(404).json({
-        status: 'not_found',
-        jobId: req.params.id,
-        code: 'JOB_NOT_FOUND',
-      });
-    }
-    return res.json(result);
-  } catch (error: any) {
-    return sendError(res, error);
-  }
-});
-
-aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
-  try {
-    const capability = await musicAdapter.getCapability();
-    res.json(capability);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
-  res.status(501).json({
-    error: 'Job durumu owner runtime üzerinden sağlanmalı',
-    code: 'JOB_STATUS_NOT_IMPLEMENTED',
-    jobId: req.params.id,
-  });
-});
-
-aiRouter.post('/music', async (req: AuthRequest, res) => {
+aiRouter.post('/music', requirePermission('use_music'), async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
