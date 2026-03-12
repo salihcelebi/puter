@@ -101,7 +101,7 @@ function buildSeedRecord(seed: ModelPrice, rate: number, now: string): ModelReco
   const outputUsd = isTokens ? (seed.outputUsdPer1M ?? null) : null;
   const singleUsd = isTokens ? null : (seed.usdPerImage ?? null);
   const margin = 1;
-  const saleCredits = calcSaleCredits(inputUsd, outputUsd, singleUsd, margin);
+  const saleCredits = calculateSaleCredits(inputUsd, outputUsd, singleUsd, margin);
 
   return normalizeModel({
     id: seed.modelId.replace(/[^a-zA-Z0-9_-]/g, '_'),
@@ -142,7 +142,7 @@ function mergeSeed(existing: ModelRecord, seeded: ModelRecord, now: string): Mod
   const sourceUsdInput = existing.admin_override_pricing ? existing.raw_cost_input_usd : seeded.raw_cost_input_usd;
   const sourceUsdOutput = existing.admin_override_pricing ? existing.raw_cost_output_usd : seeded.raw_cost_output_usd;
   const sourceUsdSingle = existing.admin_override_pricing ? existing.raw_cost_single_usd : seeded.raw_cost_single_usd;
-  const saleCredits = calcSaleCredits(sourceUsdInput, sourceUsdOutput, sourceUsdSingle, margin);
+  const saleCredits = calculateSaleCredits(sourceUsdInput, sourceUsdOutput, sourceUsdSingle, margin);
 
   return normalizeModel({
     ...seeded,
@@ -258,7 +258,7 @@ export const modelCatalogService = {
       updated_at: now,
     });
 
-    const saleCredits = calcSaleCredits(merged.raw_cost_input_usd, merged.raw_cost_output_usd, merged.raw_cost_single_usd, margin);
+    const saleCredits = calculateSaleCredits(merged.raw_cost_input_usd, merged.raw_cost_output_usd, merged.raw_cost_single_usd, margin);
     const finalModel = normalizeModel({
       ...merged,
       ...saleCredits,

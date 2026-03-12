@@ -84,6 +84,30 @@ adminRouter.post('/users/:id/credits', requirePermission('manage_credits'), asyn
   }
 });
 
+
+// DELILX: payments listesi frontend contractı ile uyumlu alan adları kullanarak güvenli JSON dizi döndürür.
+adminRouter.get('/payments', requirePermission('manage_billing'), async (_req: AuthRequest, res) => {
+  try {
+    const paymentRows = await kv.list('payment:');
+    const normalized = paymentRows.map((entry) => {
+      const payment = entry.value || {};
+      return {
+        id: String(payment.id || entry.key.replace('payment:', '')),
+        kullanici_id: String(payment.kullanici_id || payment.userId || ''),
+        saglayici: String(payment.saglayici || payment.provider || 'manual'),
+        tutar_tl: Number((payment.tutar_tl ?? payment.amount_try ?? payment.amount) || 0),
+        kredi_miktari: Number(payment.kredi_miktari ?? payment.credits ?? 0),
+        durum: String(payment.durum || payment.status || 'pending'),
+        referans: payment.referans || payment.reference || null,
+        created_at: String(payment.created_at || payment.createdAt || new Date().toISOString()),
+      };
+    });
+    return res.json(normalized);
+  } catch (error) {
+    return res.status(500).json({ error: 'Ödemeler alınamadı', code: 'ADMIN_PAYMENTS_LIST_FAILED' });
+  }
+});
+
 // Pricing Endpoints
 adminRouter.get('/pricing', async (req: AuthRequest, res) => {
   try {
@@ -337,6 +361,7 @@ adminRouter.get('/models', async (req: AuthRequest, res) => {
     });
     res.json(models);
   } catch (error) {
+    console.error('Admin models list error:', error);
     res.status(500).json({ error: 'Modeller alınamadı' });
   }
 });

@@ -22,6 +22,7 @@ export function resolveUserPermissions(user: any): Record<string, boolean> {
     merged.access_admin = true;
     merged.manage_users = true;
     merged.manage_credits = true;
+    merged.manage_billing = true;
     merged.use_chat = true;
     merged.use_image = true;
     merged.use_video = true;
@@ -67,6 +68,26 @@ export const requirePermission = (permissionName: string) => {
   };
 };
 
+
+async function resolveUserFromTokenPayload(decoded: any) {
+  const userId = decoded?.id ? String(decoded.id) : '';
+  if (userId) {
+    const byId = await kv.get(`users:${userId}`);
+    if (byId) return byId;
+  }
+
+  const email = decoded?.email ? String(decoded.email) : '';
+  if (email) {
+    const fallbackUserId = await kv.get(`userByEmail:${email}`);
+    if (fallbackUserId) {
+      const byEmail = await kv.get(`users:${fallbackUserId}`);
+      if (byEmail) return byEmail;
+    }
+  }
+
+  return null;
+}
+
 export const requireAuth = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
 
@@ -79,7 +100,8 @@ export const requireAuth = async (req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ error: 'Invalid or expired token', code: 'INVALID_TOKEN' });
   }
 
-  const user = await kv.get(`users:${decoded.id}`);
+  // DELILX: stale token durumunda email index fallback ile gerçek kullanıcı kaydını güvenli şekilde bulur.
+  const user = await resolveUserFromTokenPayload(decoded);
   if (!user) {
     return res.status(401).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
   }
@@ -105,7 +127,8 @@ export const requireAdmin = async (req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ error: 'Invalid or expired token', code: 'INVALID_TOKEN' });
     }
 
-    const user = await kv.get(`users:${decoded.id}`);
+    // DELILX: admin doğrulamasında id uyuşmazlığında email tabanlı fallback ile user lookup sürekliliği korunur.
+    const user = await resolveUserFromTokenPayload(decoded);
     if (!user) {
       return res.status(401).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
     }
