@@ -559,6 +559,7 @@ export const aiService = {
       if (error.code === 'ASSET_WRITE_FAILED') throw error;
       fail(error.message || 'Job finalize başarısız', 'JOB_FINALIZE_FAILED');
     }
+  },
 
   async finalizeFailedJob(job: StoredJob, errorCode?: string | null, errorMessage?: string | null) {
     try {
