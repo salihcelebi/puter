@@ -9,6 +9,12 @@ interface User {
   rol: 'user' | 'admin';
   toplam_kredi: number;
   kullanilan_kredi: number;
+  permissions?: Record<string, boolean>;
+  permission_summary?: string | null;
+  is_system_user?: boolean;
+  is_seeded?: boolean;
+  is_new_user?: boolean;
+  notes?: string | null;
 }
 
 interface AuthContextType {

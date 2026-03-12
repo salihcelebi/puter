@@ -1,12 +1,32 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import AILayout from '../../components/AILayout';
+import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
+
+interface AIModel {
+  id: string;
+  provider_name: string;
+  model_name: string;
+  service_type: string;
+  metadata_json?: any;
+  sale_credit_single: number | null;
+}
 
 export default function PhotoToVideo() {
   const [prompt, setPrompt] = useState('');
   const [image, setImage] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string; sourceAssetId?: string | null; assetId?: string | null; errorCode?: string | null } | null>(null);
   const [error, setError] = useState('');
+  const [models, setModels] = useState<AIModel[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState('');
+
+  const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Dosya okunamadı'));
+    reader.readAsDataURL(file);
+  });
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -14,23 +34,66 @@ export default function PhotoToVideo() {
     }
   };
 
+
+  // Part 2.5: AI pages consume persisted active catalog only.
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=photoToVideo&sort=price_asc');
+        const photoVideoModels = data.filter((m) => m.service_type === 'image_to_video' || (m.service_type === 'video' && m.metadata_json?.supports_image_conditioning === true));
+        setModels(photoVideoModels);
+        if (photoVideoModels.length > 0) setSelectedModelId(photoVideoModels[0].id);
+      } catch (e) {
+        setError('Model listesi alınamadı');
+      }
+    };
+    fetchModels();
+  }, []);
+
+  // Part 4: keep polling tied to persisted backend job state and source asset linkage.
+  useEffect(() => {
+    if (!result?.jobId || !result.status || result.status === 'completed' || result.status === 'failed') return;
+
+    const timer = setInterval(async () => {
+      try {
+        const job = await fetchApiJson<{ status: string; outputUrl?: string; error?: string; errorCode?: string | null; sourceAssetId?: string | null; assetId?: string | null }>(`/api/ai/jobs/${result.jobId}`);
+        if (job.status === 'completed') {
+          setResult(prev => ({ ...(prev || {}), status: 'completed', url: job.outputUrl || prev?.url, outputUrl: job.outputUrl, sourceAssetId: job.sourceAssetId || prev?.sourceAssetId || null, assetId: job.assetId || null, errorCode: null }));
+          clearInterval(timer);
+          return;
+        }
+        if (job.status === 'failed') {
+          setError(`${job.errorCode || 'JOB_FAILED'}: ${job.error || 'Fotoğraftan video işi başarısız oldu'}`);
+          setResult(prev => ({ ...(prev || {}), status: 'failed', errorCode: job.errorCode || 'JOB_FAILED' }));
+          clearInterval(timer);
+          return;
+        }
+        setResult(prev => ({ ...(prev || {}), status: job.status }));
+      } catch (pollError: any) {
+        setError(pollError.message || 'İş durumu alınamadı');
+        clearInterval(timer);
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [result?.jobId, result?.status]);
+
   const handleGenerate = async () => {
-    if (!prompt || !image) return;
+    if (!prompt || !image || !selectedModelId) return;
     setLoading(true);
     setError('');
     
     try {
-      // Gerçek uygulamada FormData kullanılmalı
-      const response = await fetch('/api/ai/video', {
+      const imageBase64 = await toBase64(image);
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string; sourceAssetId?: string | null; billing?: { creditReserved?: number } }>('/api/ai/photo-to-video', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, image: 'mock_image_data' }),
+        body: JSON.stringify({ prompt, imageBase64, modelId: selectedModelId, clientRequestId: `p2v_${Date.now()}` }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Video üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Fotoğraftan video işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -60,9 +123,10 @@ export default function PhotoToVideo() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">Model</label>
-              <select className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                <option>Sora</option>
-                <option>Veo</option>
+              <select value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)} className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.provider_name} - {m.model_name}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -111,8 +175,13 @@ export default function PhotoToVideo() {
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-zinc-500">Video üretiliyor, bu işlem birkaç dakika sürebilir...</p>
             </div>
-          ) : result ? (
+          ) : result?.status === 'completed' && result?.url ? (
             <video src={result.url} controls className="max-w-full max-h-full object-contain" autoPlay loop />
+          ) : result?.jobId ? (
+            <div className="text-center text-zinc-500">
+              Üretim durumu: <span className="font-semibold">{result.status || 'queued'}</span><br />
+              Job ID: <span className="font-mono">{result.jobId}</span>{result.sourceAssetId ? <><br />Source Asset: <span className='font-mono'>{result.sourceAssetId}</span></> : null}
+            </div>
           ) : (
             <div className="text-center text-zinc-400 p-6">
               <svg className="mx-auto h-12 w-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
