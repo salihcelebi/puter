@@ -29,7 +29,7 @@ export default function VideoGen() {
 
   const fetchModels = async () => {
     try {
-      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=video&sort=price_asc');
       const videoModels = data.filter(m => m.service_type === 'video');
       setModels(videoModels);
       if (videoModels.length > 0) {

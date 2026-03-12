@@ -221,22 +221,60 @@ export const aiService = {
     return Boolean(baseUrl && token);
   },
 
-  // Part 2: keep provider resolution behind server-owned model allowlist.
-  async listVisibleModels() {
-    const models = await kv.list('model:');
-    return models
-      .map((m) => m.value)
-      .filter((m) => m.is_active)
-      .map((m) => ({
-        id: m.id,
-        provider_name: m.provider_name,
-        model_name: m.model_name,
-        service_type: m.service_type,
-        sale_credit_input: m.sale_credit_input,
-        sale_credit_output: m.sale_credit_output,
-        sale_credit_single: m.sale_credit_single,
-        metadata_json: m.metadata_json,
-      }));
+  // Part 4: backend owns model filtering/sorting so pages consume one consistent catalog projection.
+  async listVisibleModels(query?: { feature?: string; provider?: string; q?: string; sort?: string }) {
+    const models = (await kv.list('model:')).map((m) => m.value).filter((m) => m.is_active);
+    let filtered = models;
+
+    const featureMap: Record<string, string[]> = {
+      chat: ['chat', 'llm'],
+      image: ['image'],
+      video: ['video'],
+      photoToVideo: ['image_to_video', 'video'],
+      tts: ['tts', 'audio'],
+      music: ['music'],
+    };
+
+    if (query?.feature && featureMap[query.feature]) {
+      filtered = filtered.filter((m) => featureMap[query.feature].includes(m.service_type));
+      if (query.feature === 'photoToVideo') {
+        filtered = filtered.filter((m) => m.service_type === 'image_to_video' || (m.service_type === 'video' && m.metadata_json?.supports_image_conditioning === true));
+      }
+    }
+
+    if (query?.provider) {
+      const provider = query.provider.toLowerCase();
+      filtered = filtered.filter((m) => String(m.provider_name || '').toLowerCase().includes(provider));
+    }
+
+    if (query?.q) {
+      const q = query.q.toLowerCase();
+      filtered = filtered.filter((m) => String(m.model_name || '').toLowerCase().includes(q));
+    }
+
+    const sort = query?.sort || 'name_asc';
+    const priceOf = (m: any) => Number(m.sale_credit_single ?? m.sale_credit_input ?? 0);
+    filtered.sort((a, b) => {
+      if (sort === 'price_asc') return priceOf(a) - priceOf(b);
+      if (sort === 'price_desc') return priceOf(b) - priceOf(a);
+      if (sort === 'provider_asc') return String(a.provider_name).localeCompare(String(b.provider_name));
+      if (sort === 'provider_desc') return String(b.provider_name).localeCompare(String(a.provider_name));
+      if (sort === 'name_desc') return String(b.model_name).localeCompare(String(a.model_name));
+      return String(a.model_name).localeCompare(String(b.model_name));
+    });
+
+    return filtered.map((m) => ({
+      id: m.id,
+      provider_name: m.provider_name,
+      model_name: m.model_name,
+      service_type: m.service_type,
+      sale_credit_input: m.sale_credit_input,
+      sale_credit_output: m.sale_credit_output,
+      sale_credit_single: m.sale_credit_single,
+      billing_unit: m.billing_unit || null,
+      metadata_json: m.metadata_json,
+      display_credit: m.sale_credit_single ?? m.sale_credit_input ?? null,
+    }));
   },
 
   async createLedgerEntry(userId: string, action: LedgerAction, amount: number, description: string, requestId?: string, jobId?: string) {
@@ -449,7 +487,6 @@ export const aiService = {
       if (status === 'not_found') {
         fail('Owner runtime job bulunamadı', 'OWNER_RUNTIME_JOB_NOT_FOUND');
       }
-    }
 
       return {
         status,
@@ -523,6 +560,33 @@ export const aiService = {
       fail(error.message || 'Job finalize başarısız', 'JOB_FINALIZE_FAILED');
     }
 
+    const completedAt = new Date().toISOString();
+    const updated = await this.updateJobRecord(job.id, {
+      status: 'failed',
+      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
+      errorMessageRedacted: errorMessage || 'İş başarısız oldu',
+      completedAt,
+      creditCommitted: 0,
+    });
+
+    await this.upsertUsage({
+      usageId: updated?.usageId,
+      userId: job.userId,
+      feature: job.feature,
+      modelId: job.modelId,
+      requestId: job.requestId,
+      jobId: job.id,
+      status: 'failed',
+      creditReserved: job.creditReserved,
+      creditCommitted: 0,
+      internalCostTry: job.internalCostTry,
+      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
+      details: { error: errorMessage || 'failed' },
+    });
+
+    return updated || job;
+  },
+
   async finalizeFailedJob(job: StoredJob, errorCode?: string | null, errorMessage?: string | null) {
     try {
       if (job.creditCommitted === 0) {
@@ -559,6 +623,13 @@ export const aiService = {
     return updated || job;
   },
 
+
+  async createImageSourceAsset(userId: string, base64Image: string) {
+    const sanitized = base64Image.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
+    const saved = await writeAssetFromBuffer(userId, 'image', Buffer.from(sanitized, 'base64'), 'png');
+    return saved;
+  },
+
   async runFeature(input: {
     feature: AIFeature;
     userId: string;
@@ -581,37 +652,55 @@ export const aiService = {
     };
 
     if (input.feature === 'chat') {
-      const runtime = await callOwnerRuntime<{ response?: string; text?: string; meta?: Record<string, unknown> }>('chat', runtimeInput);
       await this.reserveCredit(input.userId, billing.cost, requestId, 'chat');
-      await this.commitCredit(input.userId, billing.cost, requestId, 'chat');
-      await this.upsertUsage({
-        userId: input.userId,
-        feature: 'chat',
-        modelId: model.id,
-        requestId,
-        status: 'completed',
-        creditReserved: billing.cost,
-        creditCommitted: billing.cost,
-        internalCostTry: billing.internalCost,
-        details: { clientRequestId },
-      });
-      return {
-        response: runtime.response || runtime.text || '',
-        requestId,
-        modelId: model.id,
-        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-        meta: runtime.meta || null,
-      };
+      try {
+        const runtime = await callOwnerRuntime<{ response?: string; text?: string; meta?: Record<string, unknown> }>('chat', runtimeInput);
+        await this.commitCredit(input.userId, billing.cost, requestId, 'chat');
+        await this.upsertUsage({
+          userId: input.userId,
+          feature: 'chat',
+          modelId: model.id,
+          requestId,
+          status: 'completed',
+          creditReserved: billing.cost,
+          creditCommitted: billing.cost,
+          internalCostTry: billing.internalCost,
+          details: { clientRequestId },
+        });
+        return {
+          response: runtime.response || runtime.text || '',
+          requestId,
+          modelId: model.id,
+          billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+          meta: runtime.meta || null,
+        };
+      } catch (error: any) {
+        await this.refundCredit(input.userId, billing.cost, requestId, 'chat');
+        await this.upsertUsage({
+          userId: input.userId,
+          feature: 'chat',
+          modelId: model.id,
+          requestId,
+          status: 'failed',
+          creditReserved: billing.cost,
+          creditCommitted: 0,
+          internalCostTry: billing.internalCost,
+          errorCode: error.code || 'OWNER_RUNTIME_CALL_FAILED',
+          details: { clientRequestId },
+        });
+        throw error;
+      }
     }
 
     if (input.feature === 'image') {
-      const runtime = await callOwnerRuntime<{ base64Image?: string; imageBase64?: string; meta?: Record<string, unknown> }>('image', runtimeInput);
-      const base64Image = runtime.base64Image || runtime.imageBase64;
-      if (!base64Image) fail('Görsel üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
       await this.reserveCredit(input.userId, billing.cost, requestId, 'image');
-      const asset = await writeAsset(input.userId, 'image', base64Image, 'png');
-      await this.commitCredit(input.userId, billing.cost, requestId, 'image');
-      await this.upsertUsage({
+      try {
+        const runtime = await callOwnerRuntime<{ base64Image?: string; imageBase64?: string; meta?: Record<string, unknown> }>('image', runtimeInput);
+        const base64Image = runtime.base64Image || runtime.imageBase64;
+        if (!base64Image) fail('Görsel üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
+        const asset = await writeAsset(input.userId, 'image', base64Image, 'png');
+        await this.commitCredit(input.userId, billing.cost, requestId, 'image');
+        await this.upsertUsage({
         userId: input.userId,
         feature: 'image',
         modelId: model.id,
@@ -623,23 +712,40 @@ export const aiService = {
         assetId: asset.assetId,
         details: { clientRequestId },
       });
-      return {
-        ...asset,
-        requestId,
-        modelId: model.id,
-        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-        meta: runtime.meta || null,
-      };
+        return {
+          ...asset,
+          requestId,
+          modelId: model.id,
+          billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+          meta: runtime.meta || null,
+        };
+      } catch (error: any) {
+        await this.refundCredit(input.userId, billing.cost, requestId, 'image');
+        await this.upsertUsage({
+          userId: input.userId,
+          feature: 'image',
+          modelId: model.id,
+          requestId,
+          status: 'failed',
+          creditReserved: billing.cost,
+          creditCommitted: 0,
+          internalCostTry: billing.internalCost,
+          errorCode: error.code || 'OWNER_RUNTIME_CALL_FAILED',
+          details: { clientRequestId },
+        });
+        throw error;
+      }
     }
 
     if (input.feature === 'tts') {
-      const runtime = await callOwnerRuntime<{ base64Audio?: string; audioBase64?: string; meta?: Record<string, unknown> }>('tts', runtimeInput);
-      const base64Audio = runtime.base64Audio || runtime.audioBase64;
-      if (!base64Audio) fail('Ses üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
       await this.reserveCredit(input.userId, billing.cost, requestId, 'tts');
-      const asset = await writeAsset(input.userId, 'audio', base64Audio, 'mp3');
-      await this.commitCredit(input.userId, billing.cost, requestId, 'tts');
-      await this.upsertUsage({
+      try {
+        const runtime = await callOwnerRuntime<{ base64Audio?: string; audioBase64?: string; meta?: Record<string, unknown> }>('tts', runtimeInput);
+        const base64Audio = runtime.base64Audio || runtime.audioBase64;
+        if (!base64Audio) fail('Ses üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
+        const asset = await writeAsset(input.userId, 'audio', base64Audio, 'mp3');
+        await this.commitCredit(input.userId, billing.cost, requestId, 'tts');
+        await this.upsertUsage({
         userId: input.userId,
         feature: 'tts',
         modelId: model.id,
@@ -651,13 +757,29 @@ export const aiService = {
         assetId: asset.assetId,
         details: { clientRequestId },
       });
-      return {
-        ...asset,
-        requestId,
-        modelId: model.id,
-        billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-        meta: runtime.meta || null,
-      };
+        return {
+          ...asset,
+          requestId,
+          modelId: model.id,
+          billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
+          meta: runtime.meta || null,
+        };
+      } catch (error: any) {
+        await this.refundCredit(input.userId, billing.cost, requestId, 'image');
+        await this.upsertUsage({
+          userId: input.userId,
+          feature: 'image',
+          modelId: model.id,
+          requestId,
+          status: 'failed',
+          creditReserved: billing.cost,
+          creditCommitted: 0,
+          internalCostTry: billing.internalCost,
+          errorCode: error.code || 'OWNER_RUNTIME_CALL_FAILED',
+          details: { clientRequestId },
+        });
+        throw error;
+      }
     }
 
     const feature = toJobFeature(input.feature);

@@ -19,6 +19,7 @@ export default function TTS() {
   
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [voiceName, setVoiceName] = useState<string>('Kore');
 
   useEffect(() => {
     fetchModels();
@@ -26,7 +27,7 @@ export default function TTS() {
 
   const fetchModels = async () => {
     try {
-      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=tts&sort=price_asc');
       const ttsModels = data.filter(m => m.service_type === 'tts');
       setModels(ttsModels);
       if (ttsModels.length > 0) {
@@ -48,7 +49,7 @@ export default function TTS() {
       // Part 2: switch to voiceName contract and keep response compatibility.
       const data = await fetchApiJson<{ url: string; assetId: string; requestId?: string; modelId?: string }>('/api/ai/tts', {
         method: 'POST',
-        body: JSON.stringify({ text, voiceName: 'Kore', modelId: selectedModelId, clientRequestId: `tts_${Date.now()}` }),
+        body: JSON.stringify({ text, voiceName, modelId: selectedModelId, clientRequestId: `tts_${Date.now()}` }),
       });
       
       setResult(data);

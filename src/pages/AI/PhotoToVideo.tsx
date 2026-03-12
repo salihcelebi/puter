@@ -21,6 +21,13 @@ export default function PhotoToVideo() {
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState('');
 
+  const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Dosya okunamadı'));
+    reader.readAsDataURL(file);
+  });
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setImage(e.target.files[0]);
@@ -32,9 +39,8 @@ export default function PhotoToVideo() {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const data = await fetchApiJson<AIModel[]>('/api/ai/models');
-        const photoVideoModels = data.filter((m) => m.service_type === 'video' || m.service_type === 'image_to_video')
-          .filter((m) => m.service_type !== 'video' || m.metadata_json?.supports_image_conditioning !== false);
+        const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=photoToVideo&sort=price_asc');
+        const photoVideoModels = data.filter((m) => m.service_type === 'image_to_video' || (m.service_type === 'video' && m.metadata_json?.supports_image_conditioning === true));
         setModels(photoVideoModels);
         if (photoVideoModels.length > 0) setSelectedModelId(photoVideoModels[0].id);
       } catch (e) {
@@ -44,7 +50,7 @@ export default function PhotoToVideo() {
     fetchModels();
   }, []);
 
-  // Part 2: poll backend job status instead of assuming immediate media readiness.
+  // Part 4: keep polling tied to persisted backend job state and source asset linkage.
   useEffect(() => {
     if (!result?.jobId || !result.status || result.status === 'completed' || result.status === 'failed') return;
 
@@ -78,9 +84,10 @@ export default function PhotoToVideo() {
     setError('');
     
     try {
+      const imageBase64 = await toBase64(image);
       const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string; requestId?: string; sourceAssetId?: string | null; billing?: { creditReserved?: number } }>('/api/ai/photo-to-video', {
         method: 'POST',
-        body: JSON.stringify({ prompt, imageUrl: image.name, modelId: selectedModelId, clientRequestId: `p2v_${Date.now()}` }),
+        body: JSON.stringify({ prompt, imageBase64, modelId: selectedModelId, clientRequestId: `p2v_${Date.now()}` }),
       });
 
       setResult(data);

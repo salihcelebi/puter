@@ -25,7 +25,7 @@ export default function ImageGen() {
 
   const fetchModels = async () => {
     try {
-      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=image&sort=price_asc');
       const imageModels = data.filter(m => m.service_type === 'image');
       setModels(imageModels);
       if (imageModels.length > 0) {

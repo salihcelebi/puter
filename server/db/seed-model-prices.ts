@@ -4,7 +4,7 @@
 // Bu dosyayı projene ayrı ekle ve fiyatları KV'ye seed et.
 
 import { kv } from "./kv";
-import { getPricingSettings } from "./fiyatlandirma/fiyatlandirma";
+import { calculateSaleCredits } from '../services/pricingService.js';
 
 export type BillingType = "tokens" | "image";
 
@@ -1040,9 +1040,7 @@ export async function ensureModelsSeeded() {
       sale_cost_output_try: rawOutputUsd !== null ? Number((rawOutputUsd * marginMultiplier * rate).toFixed(4)) : null,
       sale_cost_single_try: rawSingleUsd !== null ? Number((rawSingleUsd * marginMultiplier * rate).toFixed(4)) : null,
 
-      sale_credit_input: rawInputUsd !== null ? Math.ceil(rawInputUsd * marginMultiplier * getPricingSettings().creditPerUsd) : null,
-      sale_credit_output: rawOutputUsd !== null ? Math.ceil(rawOutputUsd * marginMultiplier * getPricingSettings().creditPerUsd) : null,
-      sale_credit_single: rawSingleUsd !== null ? Math.ceil(rawSingleUsd * marginMultiplier * getPricingSettings().creditPerUsd) : null,
+      ...calculateSaleCredits(rawInputUsd, rawOutputUsd, rawSingleUsd, marginMultiplier),
 
       metadata_json: {
         ...(p as any),

@@ -22,7 +22,8 @@ type AiErrorCode =
   | 'ASSET_WRITE_FAILED'
   | 'CREDIT_COMMIT_FAILED'
   | 'CREDIT_REFUND_FAILED'
-  | 'INSUFFICIENT_CREDIT';
+  | 'INSUFFICIENT_CREDIT'
+  | 'PRICING_CONFIG_INVALID';
 
 interface RouteError extends Error {
   code?: AiErrorCode | string;
@@ -35,7 +36,7 @@ function fail(message: string, code: AiErrorCode): never {
 function normalizeError(error: RouteError) {
   const code = (error.code || 'FEATURE_NOT_READY') as AiErrorCode;
   if (code === 'NO_TOKEN' || code === 'UNAUTHORIZED') return { status: 401, code };
-  if (code === 'INVALID_INPUT') return { status: 400, code };
+  if (code === 'INVALID_INPUT' || code === 'PRICING_CONFIG_INVALID') return { status: 400, code };
   if (code === 'MODEL_NOT_ALLOWED' || code === 'NO_ACTIVE_MODEL') return { status: 422, code };
   if (code === 'JOB_NOT_FOUND' || code === 'OWNER_RUNTIME_JOB_NOT_FOUND') return { status: 404, code };
   if (code === 'INSUFFICIENT_CREDIT') return { status: 402, code };
@@ -59,7 +60,12 @@ aiRouter.use(requireAuth);
 
 aiRouter.get('/models', async (_req: AuthRequest, res) => {
   try {
-    const models = await aiService.listVisibleModels();
+    const models = await aiService.listVisibleModels({
+      feature: req.query.feature as string | undefined,
+      provider: req.query.provider as string | undefined,
+      q: req.query.q as string | undefined,
+      sort: req.query.sort as string | undefined,
+    });
     res.json(models);
   } catch (error: any) {
     sendError(res, error);
@@ -116,7 +122,7 @@ aiRouter.post('/tts', async (req: AuthRequest, res) => {
       clientRequestId,
       payload: {
         text,
-        voiceName: voiceName || voice || 'Kore',
+        voiceName: voiceName || voice || 'default',
       },
     });
 
@@ -144,6 +150,61 @@ aiRouter.post('/video', async (req: AuthRequest, res) => {
     });
 
     res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, imageBase64, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
+    let resolvedImageUrl = imageUrl;
+    if ((!resolvedImageUrl || typeof resolvedImageUrl !== 'string') && typeof imageBase64 === 'string' && imageBase64.length > 20) {
+      const sourceAsset = await aiService.createImageSourceAsset(req.user.id, imageBase64);
+      resolvedImageUrl = sourceAsset.url;
+    }
+    if (!resolvedImageUrl || typeof resolvedImageUrl !== 'string') fail('imageUrl veya imageBase64 alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'photoToVideo',
+      userId: req.user.id,
+      modelId: modelId || model,
+      clientRequestId,
+      payload: {
+        prompt: String(prompt || ''),
+        imageUrl: resolvedImageUrl,
+        duration: Number(duration || 5),
+        aspectRatio: aspectRatio || '16:9',
+      },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    return res.json(result);
+  } catch (error: any) {
+    return sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
   } catch (error: any) {
     sendError(res, error);
   }

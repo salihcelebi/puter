@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { Activity, CheckCircle2, XCircle, Clock, Image as ImageIcon, Video, Music, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../lib/apiClient';
 
 interface UsageLog {
   id: string;
@@ -30,13 +31,8 @@ export default function UsageHistory() {
 
   const fetchUsage = async () => {
     try {
-      const response = await fetch('/api/user/usage');
-      if (response.ok) {
-        const data = await response.json();
-        setLogs(data);
-      } else {
-        toast.error('Kullanım geçmişi yüklenemedi');
-      }
+      const data = await fetchApiJson<any[]>('/api/user/usage');
+      setLogs(data);
     } catch (error) {
       toast.error('Bir hata oluştu');
     } finally {

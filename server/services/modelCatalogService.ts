@@ -1,6 +1,6 @@
 import { kv } from '../db/kv.js';
-import { getPricingSettings } from '../db/fiyatlandirma/fiyatlandirma.js';
 import { MODEL_PRICES, USD_TRY_RATE_KEY, type ModelPrice } from '../db/seed-model-prices.js';
+import { calculateSaleCredits } from './pricingService.js';
 
 type SortBy = 'name' | 'provider' | 'type' | 'inputCost' | 'outputCost' | 'usage' | 'profit';
 type SortDir = 'asc' | 'desc';
@@ -49,15 +49,6 @@ function mapServiceType(seedType: string, modelName: string) {
   if (rawType.includes('audio') || rawType.includes('tts') || name.includes('tts') || name.includes('speech')) return 'tts';
   if (rawType.includes('music') || name.includes('music')) return 'music';
   return 'chat';
-}
-
-function calcSaleCredits(inputUsd: number | null, outputUsd: number | null, singleUsd: number | null, margin: number) {
-  const creditPerUsd = getPricingSettings().creditPerUsd;
-  return {
-    sale_credit_input: inputUsd !== null ? Math.ceil(inputUsd * margin * creditPerUsd) : null,
-    sale_credit_output: outputUsd !== null ? Math.ceil(outputUsd * margin * creditPerUsd) : null,
-    sale_credit_single: singleUsd !== null ? Math.ceil(singleUsd * margin * creditPerUsd) : null,
-  };
 }
 
 function toNumberOrNull(value: any) {

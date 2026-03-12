@@ -41,7 +41,7 @@ export default function Chat() {
 
   const fetchModels = async () => {
     try {
-      const data = await fetchApiJson<AIModel[]>('/api/ai/models');
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=chat&sort=name_asc');
         const chatModels = data.filter(m => m.service_type === 'llm' || m.service_type === 'chat');
         setModels(chatModels);
         if (chatModels.length > 0) {

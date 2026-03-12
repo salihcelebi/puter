@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { ArrowUpRight, ArrowDownRight, CreditCard, Activity } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../lib/apiClient';
 
 interface LedgerEntry {
   id: string;
@@ -27,13 +28,8 @@ export default function CreditHistory() {
 
   const fetchCredits = async () => {
     try {
-      const response = await fetch('/api/user/credits');
-      if (response.ok) {
-        const data = await response.json();
-        setLedger(data);
-      } else {
-        toast.error('Kredi geçmişi yüklenemedi');
-      }
+      const data = await fetchApiJson<any[]>('/api/user/credits');
+      setLedger(data);
     } catch (error) {
       toast.error('Bir hata oluştu');
     } finally {

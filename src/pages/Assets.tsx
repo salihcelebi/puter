@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { Search, Filter, Download, Trash2, Edit2, Play, Image as ImageIcon, Video, Music, MessageSquare } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../lib/apiClient';
 
 interface Asset {
   id: string;
@@ -25,13 +26,8 @@ export default function Assets() {
 
   const fetchAssets = async () => {
     try {
-      const response = await fetch('/api/user/assets');
-      if (response.ok) {
-        const data = await response.json();
-        setAssets(data);
-      } else {
-        toast.error('Varlıklar yüklenemedi');
-      }
+      const data = await fetchApiJson<any[]>('/api/user/assets');
+      setAssets(data);
     } catch (error) {
       toast.error('Bir hata oluştu');
     } finally {
