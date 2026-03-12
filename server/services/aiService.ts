@@ -83,10 +83,20 @@ function acceptedServiceTypes(feature: AIFeature) {
   return new Set(['video', 'image_to_video']);
 }
 
+function readEnv(...keys: string[]) {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim().replace(/^['"]|['"]$/g, '');
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function getOwnerRuntimeConfig() {
   return {
-    baseUrl: process.env.PUTER_OWNER_AI_BASE_URL,
-    token: process.env.PUTER_OWNER_AI_TOKEN,
+    baseUrl: readEnv('PUTER_OWNER_AI_BASE_URL', 'OWNER_RUNTIME_BASE_URL', 'PUTER_OWNER_RUNTIME_BASE_URL'),
+    token: readEnv('PUTER_OWNER_AI_TOKEN', 'OWNER_RUNTIME_TOKEN', 'PUTER_OWNER_RUNTIME_TOKEN'),
   };
 }
 
