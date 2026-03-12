@@ -210,6 +210,69 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, imageBase64, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
+    let resolvedImageUrl = imageUrl;
+    if ((!resolvedImageUrl || typeof resolvedImageUrl !== 'string') && typeof imageBase64 === 'string' && imageBase64.length > 20) {
+      const sourceAsset = await aiService.createImageSourceAsset(req.user.id, imageBase64);
+      resolvedImageUrl = sourceAsset.url;
+    }
+    if (!resolvedImageUrl || typeof resolvedImageUrl !== 'string') fail('imageUrl veya imageBase64 alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'photoToVideo',
+      userId: req.user.id,
+      modelId: modelId || model,
+      clientRequestId,
+      payload: {
+        prompt: String(prompt || ''),
+        imageUrl: resolvedImageUrl,
+        duration: Number(duration || 5),
+        aspectRatio: aspectRatio || '16:9',
+      },
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  try {
+    // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
+    const result = await aiService.getJobStatus(req.user.id, req.params.id);
+    if (result.status === 'not_found') {
+      return res.status(404).json({
+        status: 'not_found',
+        jobId: req.params.id,
+        code: 'JOB_NOT_FOUND',
+      });
+    }
+    return res.json(result);
+  } catch (error: any) {
+    return sendError(res, error);
+  }
+});
+
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  res.status(501).json({
+    error: 'Job durumu owner runtime üzerinden sağlanmalı',
+    code: 'JOB_STATUS_NOT_IMPLEMENTED',
+    jobId: req.params.id,
+  });
+});
+
 aiRouter.post('/music', async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};
