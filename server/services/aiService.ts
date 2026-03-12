@@ -559,32 +559,6 @@ export const aiService = {
       if (error.code === 'ASSET_WRITE_FAILED') throw error;
       fail(error.message || 'Job finalize başarısız', 'JOB_FINALIZE_FAILED');
     }
-
-    const completedAt = new Date().toISOString();
-    const updated = await this.updateJobRecord(job.id, {
-      status: 'failed',
-      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
-      errorMessageRedacted: errorMessage || 'İş başarısız oldu',
-      completedAt,
-      creditCommitted: 0,
-    });
-
-    await this.upsertUsage({
-      usageId: updated?.usageId,
-      userId: job.userId,
-      feature: job.feature,
-      modelId: job.modelId,
-      requestId: job.requestId,
-      jobId: job.id,
-      status: 'failed',
-      creditReserved: job.creditReserved,
-      creditCommitted: 0,
-      internalCostTry: job.internalCostTry,
-      errorCode: errorCode || 'JOB_FINALIZE_FAILED',
-      details: { error: errorMessage || 'failed' },
-    });
-
-    return updated || job;
   },
 
   async finalizeFailedJob(job: StoredJob, errorCode?: string | null, errorMessage?: string | null) {

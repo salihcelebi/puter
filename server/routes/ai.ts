@@ -58,7 +58,7 @@ function sendError(res: any, error: RouteError) {
 
 aiRouter.use(requireAuth);
 
-aiRouter.get('/models', async (_req: AuthRequest, res) => {
+aiRouter.get('/models', async (req: AuthRequest, res) => {
   try {
     const models = await aiService.listVisibleModels({
       feature: req.query.feature as string | undefined,
@@ -205,123 +205,6 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   try {
     const capability = await musicAdapter.getCapability();
     res.json(capability);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
-  try {
-    const { prompt, imageUrl, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
-    if (!imageUrl || typeof imageUrl !== 'string') fail('imageUrl alanı zorunludur', 'INVALID_INPUT');
-
-    const result = await aiService.runFeature({
-      feature: 'photoToVideo',
-      userId: req.user.id,
-      modelId: modelId || model,
-      clientRequestId,
-      payload: {
-        prompt: String(prompt || ''),
-        imageUrl,
-        duration: Number(duration || 5),
-        aspectRatio: aspectRatio || '16:9',
-      },
-    });
-
-    res.json(result);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
-  try {
-    // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
-    const result = await aiService.getJobStatus(req.user.id, req.params.id);
-    if (result.status === 'not_found') {
-      return res.status(404).json({
-        status: 'not_found',
-        jobId: req.params.id,
-        code: 'JOB_NOT_FOUND',
-      });
-    }
-    return res.json(result);
-  } catch (error: any) {
-    return sendError(res, error);
-  }
-});
-
-aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
-  try {
-    const capability = await musicAdapter.getCapability();
-    res.json(capability);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
-  try {
-    const { prompt, imageUrl, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
-    if (!imageUrl || typeof imageUrl !== 'string') {
-      fail('imageUrl alanı zorunludur', 'INVALID_INPUT');
-    }
-
-    const result = await aiService.runFeature({
-      feature: 'photoToVideo',
-      userId: req.user.id,
-      modelId: modelId || model,
-      clientRequestId,
-      payload: {
-        prompt: String(prompt || ''),
-        imageUrl,
-        duration: Number(duration || 5),
-        aspectRatio: aspectRatio || '16:9',
-      },
-    });
-
-    res.json(result);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
-  try {
-    const result = await aiService.getJobStatus(req.user.id, req.params.id);
-    if (result.status === 'not_found') {
-      return res.status(404).json({
-        status: 'not_found',
-        jobId: req.params.id,
-        code: 'JOB_NOT_FOUND',
-      });
-    }
-    res.json(result);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
-  try {
-    const capability = await musicAdapter.getCapability();
-    res.json(capability);
-  } catch (error: any) {
-    sendError(res, error);
-  }
-});
-
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
-  try {
-    const result = await aiService.getJobStatus(req.user.id, req.params.id);
-    if (result.status === 'not_found') {
-      return res.status(404).json({
-        status: 'not_found',
-        jobId: req.params.id,
-        code: 'JOB_NOT_FOUND',
-      });
-    }
-    res.json(result);
   } catch (error: any) {
     sendError(res, error);
   }
