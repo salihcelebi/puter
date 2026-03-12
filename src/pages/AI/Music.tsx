@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface AIModel {
   id: string;
@@ -13,57 +14,59 @@ interface AIModel {
 export default function Music() {
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ url: string } | null>(null);
+  const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string } | null>(null);
   const [error, setError] = useState('');
   
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [musicCapability, setMusicCapability] = useState<{ supported: boolean; reason?: string; code?: string } | null>(null);
 
   useEffect(() => {
     fetchModels();
+    fetchCapability();
   }, []);
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
-        const musicModels = data.filter(m => m.service_type === 'music');
-        setModels(musicModels);
-        if (musicModels.length > 0) {
-          setSelectedModelId(musicModels[0].id);
-        }
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=music&sort=price_asc');
+      const musicModels = data.filter(m => m.service_type === 'music');
+      setModels(musicModels);
+      if (musicModels.length > 0) {
+        setSelectedModelId(musicModels[0].id);
       }
     } catch (error) {
       console.error('Modeller alınamadı', error);
     }
   };
 
+
+  // Part 4: capability-disabled mode must not fake production readiness.
+  const fetchCapability = async () => {
+    try {
+      const capability = await fetchApiJson<{ supported: boolean; reason?: string; code?: string }>('/api/ai/music/capability');
+      setMusicCapability(capability);
+    } catch (capError: any) {
+      setMusicCapability({ supported: false, reason: capError.message, code: capError.code });
+    }
+  };
+
   const selectedModel = models.find(m => m.id === selectedModelId);
 
   const handleGenerate = async () => {
-    if (!prompt || !selectedModelId) return;
+    if (!prompt || !selectedModelId || musicCapability?.supported === false) return;
     setLoading(true);
     setError('');
     
     try {
-      const response = await fetch('/api/ai/music', {
+      const data = await fetchApiJson<{ url?: string; jobId?: string; status?: string }>('/api/ai/music', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ prompt, tags: ['Pop', 'Kadın Vokal'], modelId: selectedModelId }),
+        body: JSON.stringify({ prompt, tags: ['Pop', 'Kadın Vokal'], modelId: selectedModelId, clientRequestId: `music_${Date.now()}` }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Müzik üretilemedi');
-      
+
       setResult(data);
+      if (!data.url && data.status === 'queued') {
+        toast('Müzik işi kuyruğa alındı. Job ID: ' + data.jobId, { icon: '⏳' });
+      }
     } catch (err: any) {
       setError(err.message);
       toast.error(err.message);
@@ -107,6 +110,11 @@ export default function Music() {
       recentItems={null}
     >
       <div className="flex flex-col h-full">
+        {musicCapability?.supported === false ? (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800">
+            {musicCapability.reason || 'Müzik özelliği henüz hazır değil'} ({musicCapability.code || 'FEATURE_NOT_READY'})
+          </div>
+        ) : (
         <div className="mb-6 space-y-4">
           <h2 className="text-lg font-semibold text-zinc-900">Müzik Oluşturma</h2>
           
@@ -198,10 +206,18 @@ export default function Music() {
           </div>
         </div>
 
-        {result && (
+        )}
+
+        {result?.url && (
           <div className="mb-6 p-4 bg-white border border-zinc-200 rounded-xl shadow-sm">
             <h3 className="text-sm font-medium text-zinc-700 mb-2">Üretilen Müzik:</h3>
             <audio src={result.url} controls className="w-full" />
+          </div>
+        )}
+
+        {result?.jobId && !result?.url && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl shadow-sm text-amber-800 text-sm">
+            Müzik işi kuyruğa alındı. Job ID: <span className="font-mono">{result.jobId}</span>
           </div>
         )}
 
@@ -226,15 +242,15 @@ export default function Music() {
             />
           </div>
           <div className="flex flex-col items-start sm:items-end w-full sm:w-auto">
-            <span className="text-xs text-zinc-500 mb-1 hidden sm:block">= 3 kredi</span>
+            <span className="text-xs text-zinc-500 mb-1 hidden sm:block">{selectedModel ? `= ${selectedModel.sale_credit_single || '-'} kredi` : 'Maliyet bilinmiyor'}</span>
             <button
               onClick={handleGenerate}
-              disabled={loading || !prompt}
+              disabled={loading || !prompt || musicCapability?.supported === false}
               className="w-full sm:w-auto px-6 py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors flex justify-center items-center gap-2"
             >
               {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>}
               <span>Oluştur</span>
-              <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full sm:hidden">3 kredi</span>
+              <span className="text-xs bg-indigo-500 px-2 py-0.5 rounded-full sm:hidden">{selectedModel ? `${selectedModel.sale_credit_single || '-'} kr` : '-'}</span>
             </button>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface AIModel {
   id: string;
@@ -18,6 +19,7 @@ export default function TTS() {
   
   const [models, setModels] = useState<AIModel[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [voiceName, setVoiceName] = useState<string>('Kore');
 
   useEffect(() => {
     fetchModels();
@@ -25,18 +27,11 @@ export default function TTS() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
-        const ttsModels = data.filter(m => m.service_type === 'tts');
-        setModels(ttsModels);
-        if (ttsModels.length > 0) {
-          setSelectedModelId(ttsModels[0].id);
-        }
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=tts&sort=price_asc');
+      const ttsModels = data.filter(m => m.service_type === 'tts');
+      setModels(ttsModels);
+      if (ttsModels.length > 0) {
+        setSelectedModelId(ttsModels[0].id);
       }
     } catch (error) {
       console.error('Modeller alınamadı', error);
@@ -51,17 +46,11 @@ export default function TTS() {
     setError('');
     
     try {
-      const response = await fetch('/api/ai/tts', {
+      // Part 2: switch to voiceName contract and keep response compatibility.
+      const data = await fetchApiJson<{ url: string; assetId: string; requestId?: string; modelId?: string }>('/api/ai/tts', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify({ text, voice: 'Kore', modelId: selectedModelId }),
+        body: JSON.stringify({ text, voiceName, modelId: selectedModelId, clientRequestId: `tts_${Date.now()}` }),
       });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Ses üretilemedi');
       
       setResult(data);
     } catch (err: any) {
