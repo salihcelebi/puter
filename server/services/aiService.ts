@@ -487,7 +487,6 @@ export const aiService = {
       if (status === 'not_found') {
         fail('Owner runtime job bulunamadı', 'OWNER_RUNTIME_JOB_NOT_FOUND');
       }
-    }
 
       return {
         status,
