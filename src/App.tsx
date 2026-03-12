@@ -30,6 +30,7 @@ import AdminModels from './pages/Admin/AdminModels';
 import AdminLogs from './pages/Admin/AdminLogs';
 import AdminPayments from './pages/Admin/AdminPayments';
 import AdminPricing from './pages/Admin/AdminPricing';
+import WorkerDiagnostics from './pages/WorkerDiagnostics';
 
 export default function App() {
   return (
@@ -58,6 +59,8 @@ export default function App() {
             <Route path="tts" element={<TTS />} />
             <Route path="muzik" element={<Music />} />
             
+            <Route path="worker-diagnostics" element={<WorkerDiagnostics />} />
+
             {/* Admin Routes */}
             <Route path="admin" element={<ProtectedRoute requireAdmin><Navigate to="/admin/ozet" replace /></ProtectedRoute>} />
             <Route path="admin/ozet" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
