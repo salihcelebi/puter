@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 
 interface Message {
   id: string;
@@ -40,15 +41,12 @@ export default function Chat() {
 
   const fetchModels = async () => {
     try {
-      const res = await fetch('/api/ai/models');
-      if (res.ok) {
-        const data: AIModel[] = await res.json();
+      const data = await fetchApiJson<AIModel[]>('/api/ai/models?feature=chat&sort=name_asc');
         const chatModels = data.filter(m => m.service_type === 'llm' || m.service_type === 'chat');
         setModels(chatModels);
         if (chatModels.length > 0) {
           setSelectedModelId(chatModels[0].id);
         }
-      }
     } catch (error) {
       console.error('Modeller alınamadı', error);
     }
@@ -65,22 +63,15 @@ export default function Chat() {
     setLoading(true);
 
     try {
-      const response = await fetch('/api/ai/chat', {
+      // Part 2: include request ids and tolerate normalized backend response envelope.
+      const data = await fetchApiJson<{ response: string; requestId?: string; modelId?: string }>('/api/ai/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({
           prompt: input,
-          modelId: selectedModelId
+          modelId: selectedModelId,
+          clientRequestId: `chat_${Date.now()}`
         })
       });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Bir hata oluştu');
-      }
 
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', content: data.response }]);
     } catch (error: any) {

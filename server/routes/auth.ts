@@ -10,7 +10,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const cookieOptions = {
   httpOnly: true,
   secure: isProd,
-  sameSite: (isProd ? 'none' : 'lax') as const,
+  sameSite: isProd ? ('none' as 'none') : ('lax' as 'lax'),
   maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
 };
 
@@ -49,7 +49,7 @@ authRouter.post('/register', async (req, res) => {
     const token = authService.generateToken(user);
     res.cookie('token', token, cookieOptions);
 
-    const { sifre_hash: _, ...safeUser } = user;
+    const safeUser = authService.toSafeUser(user);
     return res.status(201).json({ success: true, user: safeUser });
   } catch (error) {
     console.error('Register error:', error);
@@ -88,7 +88,7 @@ authRouter.post('/login', async (req, res) => {
     const token = authService.generateToken(user);
     res.cookie('token', token, cookieOptions);
 
-    const { sifre_hash: _, ...safeUser } = user;
+    const safeUser = authService.toSafeUser(user);
     return res.json({ success: true, user: safeUser });
   } catch (error) {
     console.error('Login error:', error);
@@ -108,7 +108,7 @@ authRouter.post('/logout', (req, res) => {
 
 authRouter.get('/me', requireAuth, (req: AuthRequest, res) => {
   try {
-    const { sifre_hash: _, ...safeUser } = req.user;
+    const safeUser = authService.toSafeUser(req.user);
     return res.json({ success: true, user: safeUser });
   } catch (error) {
     console.error('Me error:', error);

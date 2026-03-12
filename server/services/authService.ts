@@ -25,6 +25,68 @@ export interface User {
   kullanilan_kredi: number;
   olusturma_tarihi: string;
   son_giris_tarihi: string;
+  permissions?: Record<string, boolean>;
+  permission_summary?: string;
+  is_system_user?: boolean;
+  is_seeded?: boolean;
+  is_new_user?: boolean;
+  notes?: string;
+}
+
+function parseBool(value: string | undefined, fallback: boolean) {
+  if (value === undefined) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function pickEnv(...keys: string[]) {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function collectPermissions(prefix: string) {
+  const permissions: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith(`${prefix}_CAN_`)) continue;
+    const permissionName = key.replace(`${prefix}_CAN_`, '').toLowerCase();
+    permissions[permissionName] = parseBool(value, false);
+  }
+  return permissions;
+}
+
+function getPasswordHashConfig() {
+  return {
+    mustHashOnBoot: parseBool(process.env.ENV_PASSWORDS_MUST_BE_HASHED_ON_BOOT, true),
+    strategy: (process.env.ENV_PASSWORD_HASH_STRATEGY || 'bcrypt').trim().toLowerCase(),
+    rounds: parseNumber(process.env.ENV_PASSWORD_HASH_ROUNDS, 12),
+  };
+}
+
+async function hashPasswordOnBoot(plainTextPassword: string) {
+  const cfg = getPasswordHashConfig();
+  if (!cfg.mustHashOnBoot) return plainTextPassword;
+  if (cfg.strategy !== 'bcrypt') {
+    throw new Error(`ENV_PASSWORD_HASH_STRATEGY desteklenmiyor: ${cfg.strategy}`);
+  }
+  // DELILX: PASSWORD HASH ON BOOT adımı plaintext parolayı kalıcı kayda yazmadan hashlemeyi zorunlu uygular.
+  return bcrypt.hash(plainTextPassword, Math.max(4, Math.floor(cfg.rounds)));
+}
+
+function toSafeUser(user: User) {
+  const { sifre_hash: _passwordHash, ...safeUser } = user;
+  return safeUser;
 }
 
 export const authService = {
@@ -90,48 +152,121 @@ export const authService = {
   },
 
   async ensureAdminFromEnv() {
-    const adminUsername = process.env.ADMIN_USERNAME;
-    const adminPassword = process.env.ADMIN_PASSWORD;
+    return this.ensureSystemUsersFromEnv();
+  },
 
-    if (!adminUsername || !adminPassword) {
-      throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD are required.');
-    }
-
-    const existingAdminByUsername = await this.findUserByUsername(adminUsername);
-    if (existingAdminByUsername) {
-      if (existingAdminByUsername.rol !== 'admin') {
-        existingAdminByUsername.rol = 'admin';
-        await kv.set(`users:${existingAdminByUsername.id}`, existingAdminByUsername);
-      }
+  // DELILX: ENV USERS bloğu boot sırasında admin ve test_user kayıtlarını idempotent upsert eder.
+  async ensureSystemUsersFromEnv() {
+    const usersEnabled = parseBool(process.env.ENV_USERS_ENABLED, true);
+    const syncOnBoot = parseBool(process.env.ENV_USERS_SYNC_ON_BOOT, true);
+    if (!usersEnabled || !syncOnBoot) {
+      console.log('[ENV USERS] sync skipped (ENV_USERS_ENABLED/ENV_USERS_SYNC_ON_BOOT false)');
       return;
     }
 
-    const adminEmail = process.env.ADMIN_EMAIL || `${adminUsername}@local.admin`;
-    const existingAdminByEmail = await this.findUserByEmail(adminEmail);
-    if (existingAdminByEmail) {
-      if (existingAdminByEmail.rol !== 'admin') {
-        existingAdminByEmail.rol = 'admin';
-        await kv.set(`users:${existingAdminByEmail.id}`, existingAdminByEmail);
+    const adminUsername = pickEnv('ADMIN_USERNAME');
+    const adminPassword = pickEnv('ADMIN_PASSWORD');
+    const adminEmail = pickEnv('ADMIN_EMAIL') || `${adminUsername || 'admin'}@local.admin`;
+
+    const testUsername = pickEnv('TEST_USER_USERNAME', 'ENV_TEST_USER_USERNAME');
+    const testPassword = pickEnv('TEST_USER_PASSWORD', 'ENV_TEST_USER_PASSWORD');
+    const testEmail = pickEnv('TEST_USER_EMAIL', 'ENV_TEST_USER_EMAIL') || `${testUsername || 'test_user'}@local.user`;
+
+    const specs: Array<{ key: 'admin' | 'test_user'; username?: string; password?: string; email?: string; role: 'admin' | 'user'; displayName: string; credit: number; envPrefix: string; }> = [
+      {
+        key: 'admin',
+        username: adminUsername,
+        password: adminPassword,
+        email: adminEmail,
+        role: 'admin',
+        displayName: 'Sistem Yöneticisi',
+        credit: 999999,
+        envPrefix: 'ENV_ADMIN',
+      },
+      {
+        key: 'test_user',
+        username: testUsername,
+        password: testPassword,
+        email: testEmail,
+        role: 'user',
+        displayName: 'Test Kullanıcısı',
+        credit: parseNumber(process.env.ENV_TEST_USER_DEFAULT_CREDITS, 0),
+        envPrefix: 'ENV_TEST_USER',
+      },
+    ];
+
+    for (const spec of specs) {
+      if (!spec.username || !spec.password) {
+        if (spec.key === 'admin') {
+          throw new Error('ADMIN_USERNAME and ADMIN_PASSWORD are required.');
+        }
+        continue;
       }
-      if (existingAdminByEmail.kullanici_adi !== adminUsername) {
-        await kv.set(`userByUsername:${adminUsername}`, existingAdminByEmail.id);
+      try {
+        await this.upsertSystemUserFromEnv(spec);
+        console.log(`[ENV USERS] ${spec.key} upsert ok (${spec.username})`);
+      } catch (error) {
+        console.error(`[ENV USERS] ${spec.key} upsert fail (${spec.username})`, error);
+        throw error;
       }
-      return;
     }
+  },
 
-    const salt = await bcrypt.genSalt(10);
-    const sifre_hash = await bcrypt.hash(adminPassword, salt);
+  // DELILX: USER UPSERT adımı username/email indexlerini koruyarak tekrar çalıştırılabilir güvenli güncelleme yapar.
+  async upsertSystemUserFromEnv(spec: {
+    key: 'admin' | 'test_user';
+    username: string;
+    password: string;
+    email: string;
+    role: 'admin' | 'user';
+    displayName: string;
+    credit: number;
+    envPrefix: string;
+  }) {
+    const now = new Date().toISOString();
+    const existingByUsername = await this.findUserByUsername(spec.username);
+    const existingByEmail = await this.findUserByEmail(spec.email);
+    const existing = existingByUsername || existingByEmail;
 
-    await this.createUser({
-      email: adminEmail,
-      kullanici_adi: adminUsername,
-      gorunen_ad: 'Sistem Yöneticisi',
-      sifre_hash,
+    const permissions = collectPermissions(spec.envPrefix);
+    const passwordHash = await hashPasswordOnBoot(spec.password);
+    console.log(`[PASSWORD HASH ON BOOT] ${spec.key} hash on boot ok`);
+
+    const userPayload: User = {
+      ...(existing || {} as User),
+      id: existing?.id || `usr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      email: spec.email,
+      kullanici_adi: spec.username,
+      gorunen_ad: existing?.gorunen_ad || spec.displayName,
+      sifre_hash: passwordHash,
       auth_provider: 'local',
-      rol: 'admin',
-      toplam_kredi: 999999,
-    });
+      aktif_mi: parseBool(process.env[`${spec.envPrefix}_STATUS`] ? process.env[`${spec.envPrefix}_STATUS`] === 'active' ? 'true' : 'false' : undefined, true),
+      rol: spec.role,
+      toplam_kredi: existing?.toplam_kredi ?? spec.credit,
+      kullanilan_kredi: existing?.kullanilan_kredi ?? 0,
+      olusturma_tarihi: existing?.olusturma_tarihi || now,
+      son_giris_tarihi: existing?.son_giris_tarihi || now,
+      permissions,
+      permission_summary: pickEnv(`${spec.envPrefix}_PERMISSION_SUMMARY`) || existing?.permission_summary,
+      is_system_user: parseBool(process.env[`${spec.envPrefix}_IS_SYSTEM_USER`], true),
+      is_seeded: parseBool(process.env[`${spec.envPrefix}_IS_SEEDED`], true),
+      is_new_user: parseBool(process.env[`${spec.envPrefix}_IS_NEW_USER`], false),
+      notes: pickEnv(`${spec.envPrefix}_NOTES`) || existing?.notes,
+    };
 
-    console.log(`Admin user created from env (${adminUsername})`);
-  }
+    await kv.set(`users:${userPayload.id}`, userPayload);
+    await kv.set(`userByEmail:${userPayload.email}`, userPayload.id);
+    await kv.set(`userByUsername:${userPayload.kullanici_adi}`, userPayload.id);
+
+    if (existing && existing.email !== userPayload.email) {
+      await kv.delete(`userByEmail:${existing.email}`);
+    }
+    if (existing && existing.kullanici_adi !== userPayload.kullanici_adi) {
+      await kv.delete(`userByUsername:${existing.kullanici_adi}`);
+    }
+
+    return userPayload;
+  },
+
+  toSafeUser,
 };
