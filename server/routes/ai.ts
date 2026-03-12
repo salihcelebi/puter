@@ -210,6 +210,39 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
+aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
+  try {
+    const capability = await musicAdapter.getCapability();
+    res.json(capability);
+  } catch (error: any) {
+    sendError(res, error);
+  }
+});
+
+aiRouter.post('/photo-to-video', async (req: AuthRequest, res) => {
+  try {
+    const { prompt, imageUrl, model, duration, aspectRatio } = req.body;
+    const result = await aiService.generateVideo(
+      req.user.id,
+      `${prompt || ''}\nSource image: ${imageUrl || ''}`.trim(),
+      model,
+      duration,
+      aspectRatio,
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  }
+});
+
+aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+  res.status(501).json({
+    error: 'Job durumu owner runtime üzerinden sağlanmalı',
+    code: 'JOB_STATUS_NOT_IMPLEMENTED',
+    jobId: req.params.id,
+  });
+});
+
 aiRouter.post('/music', async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};
