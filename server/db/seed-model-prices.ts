@@ -4,7 +4,7 @@
 // Bu dosyayı projene ayrı ekle ve fiyatları KV'ye seed et.
 
 import { kv } from "./kv";
-import { getPricingSettings } from "./fiyatlandirma/fiyatlandirma";
+import { calculateSaleCredits } from '../services/pricingService.js';
 
 export type BillingType = "tokens" | "image";
 
@@ -971,85 +971,97 @@ export async function getModelPrice(modelId: string) {
 }
 
 export async function ensureModelsSeeded() {
+  // Part 2.5: preserve admin overrides while merging seed catalog.
   const models = await kv.list('model:');
   const existingMap = new Map(models.map(m => [m.value.id, m.value]));
 
-  let rate = await kv.get(USD_TRY_RATE_KEY) || 50.0;
+  const rate = (await kv.get(USD_TRY_RATE_KEY)) || 50.0;
   const now = new Date().toISOString();
-  let count = 0;
+  let mergedCount = 0;
 
   for (const p of MODEL_PRICES) {
     const id = p.modelId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    
-    if (!existingMap.has(id)) {
-      const isLlm = p.billingType === 'tokens';
-      const singlePrice = isLlm ? null : (p.usdPerImage ?? null);
-      const inputPrice = isLlm ? (p.inputUsdPer1M ?? null) : null;
-      const outputPrice = isLlm ? (p.outputUsdPer1M ?? null) : null;
-      
-      const profitMultiplier = 1;
-      const isActive = false;
-      
-      // Map service_type to standardized values
-      let standardizedServiceType = 'chat';
-      const rawType = (p.serviceType || '').toLowerCase();
-      const modelName = (p.modelName || '').toLowerCase();
-      
-      if (rawType.includes('image')) {
-        standardizedServiceType = 'image';
-      } else if (rawType.includes('video')) {
-        standardizedServiceType = modelName.includes('image') || modelName.includes('photo') ? 'image_to_video' : 'video';
-      } else if (rawType.includes('audio') || rawType.includes('tts') || modelName.includes('tts') || modelName.includes('speech')) {
-        standardizedServiceType = 'tts';
-      } else if (rawType.includes('music') || modelName.includes('music')) {
-        standardizedServiceType = 'music';
-      }
-      
-      const modelRecord = {
-        id,
-        provider_name: p.provider,
-        model_name: p.modelName,
-        service_type: standardizedServiceType,
-        billing_unit: isLlm ? '1M tokens' : '1 image',
-        is_active: isActive,
-        
-        raw_cost_input_usd: inputPrice,
-        raw_cost_output_usd: outputPrice,
-        raw_cost_single_usd: singlePrice,
-        
-        usd_try_rate: rate,
-        
-        raw_cost_input_try: inputPrice !== null ? Number((inputPrice * rate).toFixed(4)) : null,
-        raw_cost_output_try: outputPrice !== null ? Number((outputPrice * rate).toFixed(4)) : null,
-        raw_cost_single_try: singlePrice !== null ? Number((singlePrice * rate).toFixed(4)) : null,
-        
-        profit_multiplier: profitMultiplier,
-        
-        sale_cost_input_usd: inputPrice !== null ? Number((inputPrice * profitMultiplier).toFixed(4)) : null,
-        sale_cost_output_usd: outputPrice !== null ? Number((outputPrice * profitMultiplier).toFixed(4)) : null,
-        sale_cost_single_usd: singlePrice !== null ? Number((singlePrice * profitMultiplier).toFixed(4)) : null,
-        
-        sale_cost_input_try: inputPrice !== null ? Number((inputPrice * profitMultiplier * rate).toFixed(4)) : null,
-        sale_cost_output_try: outputPrice !== null ? Number((outputPrice * profitMultiplier * rate).toFixed(4)) : null,
-        sale_cost_single_try: singlePrice !== null ? Number((singlePrice * profitMultiplier * rate).toFixed(4)) : null,
-        
-        sale_credit_input: inputPrice !== null ? Math.ceil(inputPrice * profitMultiplier * getPricingSettings().creditPerUsd) : null,
-        sale_credit_output: outputPrice !== null ? Math.ceil(outputPrice * profitMultiplier * getPricingSettings().creditPerUsd) : null,
-        sale_credit_single: singlePrice !== null ? Math.ceil(singlePrice * profitMultiplier * getPricingSettings().creditPerUsd) : null,
-        
-        metadata_json: p,
-        last_rate_sync_at: now,
-        last_price_sync_at: now,
-        created_at: now,
-        updated_at: now
-      };
-      
-      await kv.set(`model:${id}`, modelRecord);
-      count++;
+    const existing = existingMap.get(id);
+
+    const isLlm = p.billingType === 'tokens';
+    const seedSingle = isLlm ? null : (p.usdPerImage ?? null);
+    const seedInput = isLlm ? (p.inputUsdPer1M ?? null) : null;
+    const seedOutput = isLlm ? (p.outputUsdPer1M ?? null) : null;
+
+    const marginMultiplier = Number(existing?.margin_multiplier ?? existing?.profit_multiplier ?? 1) || 1;
+    const isActive = existing?.is_active ?? true;
+    const isFavorite = existing?.is_favorite ?? false;
+    const adminOverridePricing = Boolean(existing?.admin_override_pricing);
+
+    const rawInputUsd = adminOverridePricing ? (existing?.raw_cost_input_usd ?? seedInput) : seedInput;
+    const rawOutputUsd = adminOverridePricing ? (existing?.raw_cost_output_usd ?? seedOutput) : seedOutput;
+    const rawSingleUsd = adminOverridePricing ? (existing?.raw_cost_single_usd ?? seedSingle) : seedSingle;
+
+    let standardizedServiceType = 'chat';
+    const rawType = (p.serviceType || '').toLowerCase();
+    const modelName = (p.modelName || '').toLowerCase();
+
+    if (rawType.includes('image')) {
+      standardizedServiceType = 'image';
+    } else if (rawType.includes('video')) {
+      standardizedServiceType = modelName.includes('image') || modelName.includes('photo') ? 'image_to_video' : 'video';
+    } else if (rawType.includes('audio') || rawType.includes('tts') || modelName.includes('tts') || modelName.includes('speech')) {
+      standardizedServiceType = 'tts';
+    } else if (rawType.includes('music') || modelName.includes('music')) {
+      standardizedServiceType = 'music';
     }
+
+    const modelRecord = {
+      id,
+      provider_name: p.provider,
+      model_name: p.modelName,
+      service_type: standardizedServiceType,
+      billing_unit: isLlm ? '1M tokens' : '1 image',
+      is_active: isActive,
+      is_favorite: isFavorite,
+
+      raw_cost_input_usd: rawInputUsd,
+      raw_cost_output_usd: rawOutputUsd,
+      raw_cost_single_usd: rawSingleUsd,
+
+      usd_try_rate: rate,
+      raw_cost_input_try: rawInputUsd !== null ? Number((rawInputUsd * rate).toFixed(4)) : null,
+      raw_cost_output_try: rawOutputUsd !== null ? Number((rawOutputUsd * rate).toFixed(4)) : null,
+      raw_cost_single_try: rawSingleUsd !== null ? Number((rawSingleUsd * rate).toFixed(4)) : null,
+
+      margin_multiplier: marginMultiplier,
+      profit_multiplier: marginMultiplier,
+
+      sale_cost_input_usd: rawInputUsd !== null ? Number((rawInputUsd * marginMultiplier).toFixed(4)) : null,
+      sale_cost_output_usd: rawOutputUsd !== null ? Number((rawOutputUsd * marginMultiplier).toFixed(4)) : null,
+      sale_cost_single_usd: rawSingleUsd !== null ? Number((rawSingleUsd * marginMultiplier).toFixed(4)) : null,
+
+      sale_cost_input_try: rawInputUsd !== null ? Number((rawInputUsd * marginMultiplier * rate).toFixed(4)) : null,
+      sale_cost_output_try: rawOutputUsd !== null ? Number((rawOutputUsd * marginMultiplier * rate).toFixed(4)) : null,
+      sale_cost_single_try: rawSingleUsd !== null ? Number((rawSingleUsd * marginMultiplier * rate).toFixed(4)) : null,
+
+      ...calculateSaleCredits(rawInputUsd, rawOutputUsd, rawSingleUsd, marginMultiplier),
+
+      metadata_json: {
+        ...(p as any),
+        ...(existing?.metadata_json || {}),
+      },
+      usage_count: existing?.usage_count ?? 0,
+      revenue_try: existing?.revenue_try ?? 0,
+      cost_try: existing?.cost_try ?? 0,
+      profit_try: existing?.profit_try ?? 0,
+      admin_override_pricing: adminOverridePricing,
+      last_rate_sync_at: now,
+      last_price_sync_at: now,
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await kv.set(`model:${id}`, modelRecord);
+    mergedCount++;
   }
 
-  return { ok: true, message: `Seeded ${count} models` };
+  return { ok: true, message: `Merged ${mergedCount} models` };
 }
 
 // ISTERSEN BOYLE BIR KULLAN:
