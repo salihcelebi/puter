@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 
@@ -408,23 +410,7 @@ async function requestImageGeneration(args: {
 
 export default function ImageGen() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-
-  const locationState = location.state as ImageLocationState | null;
-  const queryModelId = searchParams.get('model') || '';
-  const stateModelId = locationState?.selectedModel?.modelId || '';
-
-  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState('');
-  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
-
-  const [activeStyle, setActiveStyle] = useState<StyleKey>('Anime');
-  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
-  const [activeRatio, setActiveRatio] = useState<RatioKey>('1:1');
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -576,27 +562,15 @@ export default function ImageGen() {
   };
 
   const handleGenerate = async () => {
-    const rawPrompt = prompt.trim();
-
-    if (!rawPrompt) {
-      promptRef.current?.focus();
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/gorsel' } } });
       return;
     }
 
-    if (!ensureAuth()) return;
-    if (!selectedModel) {
-      toast.error('Aktif model bulunamadı.');
-      return;
-    }
-    if (isGenerating) return;
-
-    setIsGenerating(true);
-    setGeneratedPages((prev) => ({
-      ...prev,
-      1: buildEmptyCards(1, 'Üretiliyor'),
-    }));
-    setCurrentPage(1);
-
+    if (!prompt || !selectedModelId) return;
+    setLoading(true);
+    setError('');
+    
     try {
       const payload = await requestImageGeneration({
         prompt: rawPrompt,
