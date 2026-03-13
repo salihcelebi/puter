@@ -46,6 +46,11 @@ export default function Checkout() {
   }, [packageId]);
 
   const handlePayment = async (provider: string) => {
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: `/odeme-yap/${packageId}` } } });
+      return;
+    }
+
     setProcessing(true);
     setError('');
 

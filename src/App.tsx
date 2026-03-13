@@ -46,30 +46,23 @@ export default function App() {
           <Route path="/kayit" element={<Register />} />
           <Route path="/sifremi-unuttum" element={<ForgotPassword />} />
 
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Layout />
-              </ProtectedRoute>
-            }
-          >
+          <Route path="/" element={<Layout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
-            <Route path="varliklar" element={<Assets />} />
-            <Route path="odeme-paketleri" element={<Billing />} />
-            <Route path="odeme-yap/:packageId" element={<Checkout />} />
-            <Route path="hesap" element={<Account />} />
-            <Route path="kullanim-gecmisi" element={<UsageHistory />} />
-            <Route path="kredi-gecmisi" element={<CreditHistory />} />
+            <Route path="varliklar" element={<ProtectedRoute><Assets /></ProtectedRoute>} />
+            <Route path="odeme-paketleri" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
+            <Route path="odeme-yap/:packageId" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
+            <Route path="hesap" element={<ProtectedRoute><Account /></ProtectedRoute>} />
+            <Route path="kullanim-gecmisi" element={<ProtectedRoute><UsageHistory /></ProtectedRoute>} />
+            <Route path="kredi-gecmisi" element={<ProtectedRoute><CreditHistory /></ProtectedRoute>} />
 
-            <Route path="sohbet" element={<Chat1 />} />
-            <Route path="sohbet/konus" element={<Chat />} />
-            <Route path="gorsel" element={<ImageGen />} />
-            <Route path="video" element={<VideoGen />} />
-            <Route path="fotograftan-video" element={<PhotoToVideo />} />
-            <Route path="tts" element={<TTS />} />
-            <Route path="muzik" element={<Music />} />
+            <Route path="sohbet" element={<ProtectedRoute><Chat1 /></ProtectedRoute>} />
+            <Route path="sohbet/konus" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
+            <Route path="gorsel" element={<ProtectedRoute><ImageGen /></ProtectedRoute>} />
+            <Route path="video" element={<ProtectedRoute><VideoGen /></ProtectedRoute>} />
+            <Route path="fotograftan-video" element={<ProtectedRoute><PhotoToVideo /></ProtectedRoute>} />
+            <Route path="tts" element={<ProtectedRoute><TTS /></ProtectedRoute>} />
+            <Route path="muzik" element={<ProtectedRoute><Music /></ProtectedRoute>} />
 
             <Route
               path="admin"
