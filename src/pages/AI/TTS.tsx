@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
 import { fetchApiJson } from '../../lib/apiClient';
@@ -12,6 +14,8 @@ interface AIModel {
 }
 
 export default function TTS() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ url: string } | null>(null);
@@ -41,6 +45,11 @@ export default function TTS() {
   const selectedModel = models.find(m => m.id === selectedModelId);
 
   const handleGenerate = async () => {
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/tts' } } });
+      return;
+    }
+
     if (!text || !selectedModelId) return;
     setLoading(true);
     setError('');

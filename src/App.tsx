@@ -26,7 +26,6 @@ import Chat from './pages/AI/Chat';
 import Chat1 from './pages/AI/Chat1';
 import ImageGen from './pages/AI/ImageGen';
 import VideoGen from './pages/AI/VideoGen';
-import PhotoToVideo from './pages/AI/PhotoToVideo';
 import TTS from './pages/AI/TTS';
 import Music from './pages/AI/Music';
 import AdminDashboard from './pages/Admin/AdminDashboard';
@@ -56,12 +55,11 @@ export default function App() {
             <Route path="kullanim-gecmisi" element={<ProtectedRoute><UsageHistory /></ProtectedRoute>} />
             <Route path="kredi-gecmisi" element={<ProtectedRoute><CreditHistory /></ProtectedRoute>} />
 
-            <Route path="sohbet" element={<ProtectedRoute><Chat1 /></ProtectedRoute>} />
-            <Route path="sohbet/konus" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
-            <Route path="gorsel" element={<ProtectedRoute><ImageGen /></ProtectedRoute>} />
-            <Route path="video" element={<ProtectedRoute><VideoGen /></ProtectedRoute>} />
-            <Route path="fotograftan-video" element={<ProtectedRoute><PhotoToVideo /></ProtectedRoute>} />
-            <Route path="tts" element={<ProtectedRoute><TTS /></ProtectedRoute>} />
+            <Route path="sohbet" element={<Chat1 />} />
+            <Route path="sohbet/konus" element={<Chat />} />
+            <Route path="gorsel" element={<ImageGen />} />
+            <Route path="video" element={<VideoGen />} />
+            <Route path="tts" element={<TTS />} />
             <Route path="muzik" element={<ProtectedRoute><Music /></ProtectedRoute>} />
 
             <Route

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Image as ImageIcon, Video, Music as MusicIcon, MessageSquare, Settings, CreditCard, Folder, Users, Shield, Activity, LogOut, Menu, X, DollarSign } from 'lucide-react';
+import { LayoutDashboard, Image as ImageIcon, Video, MessageSquare, Settings, CreditCard, Folder, Users, Shield, Activity, LogOut, Menu, X, DollarSign } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function Layout() {
@@ -52,17 +52,9 @@ export default function Layout() {
             <Video size={18} />
             <span>Video Üretim</span>
           </Link>
-          <Link to="/fotograftan-video" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
-            <Video size={18} />
-            <span>Fotoğraftan Video</span>
-          </Link>
           <Link to="/tts" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
             <MessageSquare size={18} />
             <span>Seslendirme (TTS)</span>
-          </Link>
-          <Link to="/muzik" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
-            <MusicIcon size={18} />
-            <span>Müzik Üretim</span>
           </Link>
 
           <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 mt-6">Hesap & Varlıklar</div>
