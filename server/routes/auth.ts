@@ -285,6 +285,27 @@ authRouter.get('/google/callback', async (req, res) => {
       }
     }
 
+    const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
+    });
+
+    if (!profileResponse.ok) {
+      console.error('Google profile fetch failed', profileResponse.status, await profileResponse.text());
+      return res.redirect('/giris?error=oauth_profile_failed');
+    }
+
+    const profile = await profileResponse.json() as {
+      sub?: string;
+      email?: string;
+      name?: string;
+      email_verified?: boolean;
+    };
+
+    if (!profile.sub || !profile.email || profile.email_verified === false) {
+      return res.redirect('/giris?error=oauth_profile_invalid');
+    }
+
+    let user = await authService.findUserByGoogleId(profile.sub);
     if (!user) {
       const usernameBase = profile.email.split('@')[0] || profile.name || 'google_user';
       const uniqueUsername = await buildUniqueUsername(usernameBase);
