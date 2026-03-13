@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
 import { fetchApiJson } from '../../lib/apiClient';
@@ -12,6 +14,8 @@ interface AIModel {
 }
 
 export default function VideoGen() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ url?: string; jobId?: string; status?: string; outputUrl?: string; assetId?: string | null; errorCode?: string | null } | null>(null);
@@ -81,6 +85,11 @@ export default function VideoGen() {
   }, [selectedModel, duration]);
 
   const handleGenerate = async () => {
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/video' } } });
+      return;
+    }
+
     if (!prompt || !selectedModelId) return;
     setLoading(true);
     setError('');
