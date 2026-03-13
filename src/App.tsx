@@ -1,3 +1,7 @@
+// ===============================
+// src/App.tsx
+// Bu route güncellemesi, katalog başlangıcını ve sohbet alt yolunu ayırır.
+// ===============================
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -19,6 +23,7 @@ import Account from './pages/Account';
 import UsageHistory from './pages/UsageHistory';
 import CreditHistory from './pages/CreditHistory';
 import Chat from './pages/AI/Chat';
+import Chat1 from './pages/AI/Chat1';
 import ImageGen from './pages/AI/ImageGen';
 import VideoGen from './pages/AI/VideoGen';
 import PhotoToVideo from './pages/AI/PhotoToVideo';
@@ -40,8 +45,15 @@ export default function App() {
           <Route path="/giris" element={<Login />} />
           <Route path="/kayit" element={<Register />} />
           <Route path="/sifremi-unuttum" element={<ForgotPassword />} />
-          
-          <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="varliklar" element={<Assets />} />
@@ -50,22 +62,71 @@ export default function App() {
             <Route path="hesap" element={<Account />} />
             <Route path="kullanim-gecmisi" element={<UsageHistory />} />
             <Route path="kredi-gecmisi" element={<CreditHistory />} />
-            
-            <Route path="sohbet" element={<Chat />} />
+
+            <Route path="sohbet" element={<Chat1 />} />
+            <Route path="sohbet/konus" element={<Chat />} />
             <Route path="gorsel" element={<ImageGen />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="fotograftan-video" element={<PhotoToVideo />} />
             <Route path="tts" element={<TTS />} />
             <Route path="muzik" element={<Music />} />
-            
-            {/* Admin Routes */}
-            <Route path="admin" element={<ProtectedRoute requireAdmin><Navigate to="/admin/ozet" replace /></ProtectedRoute>} />
-            <Route path="admin/ozet" element={<ProtectedRoute requireAdmin><AdminDashboard /></ProtectedRoute>} />
-            <Route path="admin/kullanicilar" element={<ProtectedRoute requireAdmin><AdminUsers /></ProtectedRoute>} />
-            <Route path="admin/modeller" element={<ProtectedRoute requireAdmin><AdminModels /></ProtectedRoute>} />
-            <Route path="admin/fiyatlandirma" element={<ProtectedRoute requireAdmin><AdminPricing /></ProtectedRoute>} />
-            <Route path="admin/loglar" element={<ProtectedRoute requireAdmin><AdminLogs /></ProtectedRoute>} />
-            <Route path="admin/odeme-yonetimi" element={<ProtectedRoute requireAdmin><AdminPayments /></ProtectedRoute>} />
+
+            <Route
+              path="admin"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <Navigate to="/admin/ozet" replace />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/ozet"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/kullanicilar"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminUsers />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/modeller"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminModels />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/fiyatlandirma"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminPricing />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/loglar"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminLogs />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/odeme-yonetimi"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminPayments />
+                </ProtectedRoute>
+              }
+            />
           </Route>
         </Routes>
       </Router>
