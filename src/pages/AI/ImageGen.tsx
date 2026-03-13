@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 import { fetchApiJson } from '../../lib/apiClient';
@@ -238,22 +240,7 @@ function extractImageUrls(result: ImageResultPayload | null | undefined) {
 
 export default function ImageGen() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-
-  const locationState = location.state as ImageLocationState | null;
-  const initialModelId = searchParams.get('model') || locationState?.selectedModel?.modelId || '';
-
-  const [allModels, setAllModels] = useState<ModelCatalogItem[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState('');
-  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
-
-  const [activeStyle, setActiveStyle] = useState<StyleKey>('Anime');
-  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
-  const [activeRatio, setActiveRatio] = useState<RatioKey>('1:1');
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -404,17 +391,15 @@ export default function ImageGen() {
   };
 
   const handleGenerate = async () => {
-    const rawPrompt = prompt.trim();
-    if (!rawPrompt) {
-      promptRef.current?.focus();
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/gorsel' } } });
       return;
     }
 
-    if (!ensureAuth()) return;
-    if (!selectedModel || isGenerating) return;
-
-    setIsGenerating(true);
-
+    if (!prompt || !selectedModelId) return;
+    setLoading(true);
+    setError('');
+    
     try {
       const payload = await fetchApiJson<ImageResultPayload>('/api/ai/image', {
         method: 'POST',

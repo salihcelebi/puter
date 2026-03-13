@@ -626,15 +626,13 @@ export default function Chat() {
   };
 
   const handleSend = async () => {
-    const value = draft.trim();
-    if (!value || sending || imageGenerating || !selectedModel) return;
-
-    if (/^\/görsel\s+/i.test(value)) {
-      await handleImageCommand(value);
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/sohbet/konus' } } });
       return;
     }
 
-    if (!ensureAuth()) return;
+    const trimmed = draft.trim();
+    if (!trimmed || sending || !selectedModel) return;
 
     const userMessage: UIMessage = {
       id: createMessageId('user'),
