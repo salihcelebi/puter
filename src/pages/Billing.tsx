@@ -36,6 +36,11 @@ export default function Billing() {
   }, []);
 
   const handleBuy = (pkg: Package) => {
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/odeme-paketleri' } } });
+      return;
+    }
+
     navigate(`/odeme-yap/${pkg.id}`);
   };
 

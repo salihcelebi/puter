@@ -117,11 +117,11 @@ export default function Layout() {
         <div className="p-4 border-t border-zinc-200">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold uppercase shrink-0">
-              {user?.gorunen_ad?.charAt(0) || 'U'}
+              {user?.gorunen_ad?.charAt(0) || 'G'}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium truncate">{user?.gorunen_ad || 'Kullanıcı'}</div>
-              <div className="text-xs text-zinc-500">{user?.toplam_kredi - (user?.kullanilan_kredi || 0)} Kredi</div>
+              <div className="text-sm font-medium truncate">{user?.gorunen_ad || 'Misafir'}</div>
+              <div className="text-xs text-zinc-500">{user ? `${user.toplam_kredi - (user.kullanilan_kredi || 0)} Kredi` : 'Giriş yaparak kredi kullanın'}</div>
             </div>
           </div>
         </div>
@@ -140,13 +140,21 @@ export default function Layout() {
             <h2 className="text-lg font-medium hidden sm:block">NISAI Platform</h2>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
-            <span className="text-xs sm:text-sm font-medium bg-zinc-100 px-2 sm:px-3 py-1 rounded-full whitespace-nowrap">
-              <span className="hidden sm:inline">Bakiye: </span>{user?.toplam_kredi - (user?.kullanilan_kredi || 0)} <span className="hidden sm:inline">Kredi</span>
-            </span>
-            <button onClick={handleLogout} className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-zinc-500 hover:text-zinc-900 p-2 sm:p-0">
-              <LogOut size={16} />
-              <span className="hidden sm:inline">Çıkış Yap</span>
-            </button>
+            {user ? (
+              <>
+                <span className="text-xs sm:text-sm font-medium bg-zinc-100 px-2 sm:px-3 py-1 rounded-full whitespace-nowrap">
+                  <span className="hidden sm:inline">Bakiye: </span>{user.toplam_kredi - (user.kullanilan_kredi || 0)} <span className="hidden sm:inline">Kredi</span>
+                </span>
+                <button onClick={handleLogout} className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm text-zinc-500 hover:text-zinc-900 p-2 sm:p-0">
+                  <LogOut size={16} />
+                  <span className="hidden sm:inline">Çıkış Yap</span>
+                </button>
+              </>
+            ) : (
+              <button onClick={() => navigate('/giris')} className="text-xs sm:text-sm font-medium text-indigo-600 hover:text-indigo-700 px-2 sm:px-3 py-1 rounded-full bg-indigo-50">
+                Giriş Yap
+              </button>
+            )}
           </div>
         </header>
         <div className="p-4 md:p-8 flex-1">
