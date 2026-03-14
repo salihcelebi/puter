@@ -24,7 +24,7 @@ import UsageHistory from './pages/UsageHistory';
 import CreditHistory from './pages/CreditHistory';
 import Chat from './pages/AI/Chat';
 import Chat1 from './pages/AI/Chat1';
-import ImageGen from './pages/AI/ImageGen';
+import Image from './pages/AI/image';
 import VideoGen from './pages/AI/VideoGen';
 import TTS from './pages/AI/TTS';
 import Music from './pages/AI/Music';
@@ -57,7 +57,7 @@ export default function App() {
 
             <Route path="sohbet" element={<Chat1 />} />
             <Route path="sohbet/konus" element={<Chat />} />
-            <Route path="gorsel" element={<ImageGen />} />
+            <Route path="gorsel" element={<Image />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="tts" element={<TTS />} />
             <Route path="muzik" element={<ProtectedRoute><Music /></ProtectedRoute>} />
