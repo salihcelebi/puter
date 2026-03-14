@@ -1,15 +1,25 @@
 // src/pages/AI/image1.tsx
-// Bu dosya generate, polling, cancel, retry, timeout ve geçmiş mantığını tek hookta toplar.
+// Bu hook önce aynı origin API uçlarını dener, gerekirse Puter.js txt2img fallback'ine iner.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const IMAGE_WORKER_ENDPOINT = 'https://image.puter.work/generate';
-const JOB_STATUS_BASE_URL = 'https://is-durumu.puter.work';
-const HISTORY_STORAGE_KEY = 'nisai:image-job-history:v1';
+const GENERATE_ENDPOINT_CANDIDATES = ['/api/ai/image/generate', '/api/ai/image', 'https://image.puter.work/generate'];
+const STATUS_BASE_CANDIDATES = ['/api/ai/image', 'https://is-durumu.puter.work'];
+const HISTORY_STORAGE_KEY = 'nisai:image-job-history:v2';
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 const DEFAULT_CREATE_TIMEOUT_MS = 30000;
 const DEFAULT_HARD_TIMEOUT_MS = 120000;
 const MAX_HISTORY_ITEMS = 20;
+
+declare global {
+  interface Window {
+    puter?: {
+      ai?: {
+        txt2img?: (promptOrOptions: any, options?: any) => Promise<HTMLImageElement | HTMLImageElement[] | string | string[]>;
+      };
+    };
+  }
+}
 
 export type ImageJobStatus =
   | 'idle'
@@ -88,6 +98,7 @@ type ImageJobRecord = {
   updatedAt?: string;
   finishedAt?: string | null;
   job?: Record<string, unknown>;
+  data?: unknown;
 };
 
 type WorkerEnvelope<T> = {
@@ -166,7 +177,7 @@ function normalizeUrls(payload: unknown): string[] {
 
     if (typeof value === 'string' && value.trim()) {
       const trimmed = value.trim();
-      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
         out.add(trimmed);
       }
       return;
@@ -179,6 +190,7 @@ function normalizeUrls(payload: unknown): string[] {
 
     if (typeof value === 'object') {
       const item = value as Record<string, unknown>;
+      visit(item.src);
       visit(item.url);
       visit(item.urls);
       visit(item.outputUrl);
@@ -305,6 +317,42 @@ async function fetchJson<T>(
   }
 }
 
+async function fetchJsonFromCandidates<T>(
+  candidates: string[],
+  initFactory: (candidate: string) => RequestInit,
+  timeoutMs: number,
+): Promise<{ data: T; endpoint: string }> {
+  const errors: string[] = [];
+
+  for (const candidate of candidates) {
+    try {
+      const data = await fetchJson<T>(candidate, initFactory(candidate), timeoutMs);
+      return { data, endpoint: candidate };
+    } catch (error) {
+      errors.push(`${candidate}: ${getErrorMessage(error, 'İstek başarısız oldu.')}`);
+    }
+  }
+
+  throw new Error(errors[0] || 'Hiçbir üretim ucu yanıt vermedi.');
+}
+
+
+function resolveEndpoint(base: string, suffix = '') {
+  const normalizedBase = String(base || '').trim();
+  const normalizedSuffix = String(suffix || '').trim();
+
+  if (!normalizedBase) return normalizedSuffix || '';
+  if (!normalizedSuffix) return normalizedBase;
+
+  if (/^https?:\/\//i.test(normalizedBase)) {
+    return new URL(normalizedSuffix, normalizedBase).toString();
+  }
+
+  const baseClean = normalizedBase.endsWith('/') ? normalizedBase.slice(0, -1) : normalizedBase;
+  const suffixClean = normalizedSuffix.startsWith('/') ? normalizedSuffix : `/${normalizedSuffix}`;
+  return `${baseClean}${suffixClean}`;
+}
+
 function buildFormData(input: ImageJobInput) {
   const formData = new FormData();
 
@@ -346,12 +394,75 @@ function buildFormData(input: ImageJobInput) {
   return formData;
 }
 
+function mapRatio(input?: string) {
+  switch (input) {
+    case '16:9':
+      return { w: 1536, h: 864 };
+    case '9:16':
+      return { w: 864, h: 1536 };
+    case '4:3':
+      return { w: 1365, h: 1024 };
+    case '1:1':
+    default:
+      return { w: 1024, h: 1024 };
+  }
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error(`${file.name} dosyası okunamadı.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function requestViaPuter(input: ImageJobInput): Promise<string[]> {
+  const txt2img = window.puter?.ai?.txt2img;
+  if (!txt2img) {
+    throw new Error('Puter.js txt2img erişimi bulunamadı.');
+  }
+
+  const options: Record<string, unknown> = {
+    model: input.modelId || input.model,
+    quality: input.quality || 'high',
+    ratio: mapRatio(input.ratio),
+    test_mode: Boolean(input.testMode),
+  };
+
+  const firstAttachment = input.attachments?.[0];
+  if (firstAttachment?.file) {
+    const dataUrl = await fileToDataUrl(firstAttachment.file);
+    const commaIndex = dataUrl.indexOf(',');
+    const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+    const mimeType = firstAttachment.file.type || 'image/png';
+
+    options.input_image = base64;
+    options.input_image_mime_type = mimeType;
+    options.image_base64 = base64;
+  }
+
+  const result = await txt2img(input.prompt, options);
+  const urls = normalizeUrls(result);
+  if (urls.length > 0) return urls;
+
+  throw new Error('Puter.js görsel üretti fakat kullanılabilir src bilgisi alınamadı.');
+}
+
 export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImageJobReturn {
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const hardTimeoutMs = options.hardTimeoutMs ?? DEFAULT_HARD_TIMEOUT_MS;
   const createTimeoutMs = options.createTimeoutMs ?? DEFAULT_CREATE_TIMEOUT_MS;
-  const statusBaseUrl = options.statusBaseUrl ?? JOB_STATUS_BASE_URL;
-  const generateEndpoint = options.generateEndpoint ?? IMAGE_WORKER_ENDPOINT;
+
+  const generateCandidates = useMemo(() => {
+    const list = [options.generateEndpoint, ...GENERATE_ENDPOINT_CANDIDATES].filter(Boolean) as string[];
+    return [...new Set(list)];
+  }, [options.generateEndpoint]);
+
+  const statusBaseCandidates = useMemo(() => {
+    const list = [options.statusBaseUrl, ...STATUS_BASE_CANDIDATES].filter(Boolean) as string[];
+    return [...new Set(list)];
+  }, [options.statusBaseUrl]);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -409,36 +520,40 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
   }, []);
 
   const loadHistory = useCallback(async () => {
-    try {
-      const url = new URL('/jobs/history', statusBaseUrl);
-      url.searchParams.set('feature', 'image');
-      url.searchParams.set('limit', String(MAX_HISTORY_ITEMS));
+    setHistory(readLocalHistory());
 
-      const response = await fetch(url.toString(), { method: 'GET' });
-      if (!response.ok) {
-        setHistory(readLocalHistory());
-        return;
+    for (const base of statusBaseCandidates) {
+      try {
+        const historyUrl = new URL(resolveEndpoint(base, '/jobs/history'), window.location.origin);
+        historyUrl.searchParams.set('feature', 'image');
+        historyUrl.searchParams.set('limit', String(MAX_HISTORY_ITEMS));
+
+        const response = await fetch(historyUrl.toString(), { method: 'GET' });
+        if (!response.ok) continue;
+
+        const json = await response.json();
+        const items = Array.isArray(json?.items)
+          ? json.items.map((item: any) => ({
+              jobId: item.jobId || null,
+              status: (item.status || 'idle') as ImageJobStatus,
+              createdAt: item.createdAt || new Date().toISOString(),
+              model: item.requestSummary?.model || '',
+              promptPreview: item.requestSummary?.promptPreview || item.requestSummary?.prompt || '',
+              firstImageUrl: item.outputUrls?.[0] || item.outputUrl || null,
+              resultUrls: Array.isArray(item.outputUrls) ? item.outputUrls : item.outputUrl ? [item.outputUrl] : [],
+              errorMessage: item.error?.message || null,
+            }))
+          : null;
+
+        if (items) {
+          setHistory(items);
+          return;
+        }
+      } catch {
+        // local history already applied
       }
-
-      const json = await response.json();
-      const items = Array.isArray(json?.items)
-        ? json.items.map((item: any) => ({
-            jobId: item.jobId || null,
-            status: (item.status || 'idle') as ImageJobStatus,
-            createdAt: item.createdAt || new Date().toISOString(),
-            model: item.requestSummary?.model || '',
-            promptPreview: item.requestSummary?.promptPreview || item.requestSummary?.prompt || '',
-            firstImageUrl: item.outputUrls?.[0] || item.outputUrl || null,
-            resultUrls: Array.isArray(item.outputUrls) ? item.outputUrls : item.outputUrl ? [item.outputUrl] : [],
-            errorMessage: item.error?.message || null,
-          }))
-        : readLocalHistory();
-
-      setHistory(items);
-    } catch {
-      setHistory(readLocalHistory());
     }
-  }, [statusBaseUrl]);
+  }, [statusBaseCandidates]);
 
   const applyJobPayload = useCallback((payload: ImageJobRecord) => {
     const resolvedStatus = (payload.status || 'idle') as ImageJobStatus;
@@ -455,12 +570,12 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
     setQueuePosition(
       payload.queuePosition === null || payload.queuePosition === undefined
         ? null
-        : safeNumber(payload.queuePosition, null as unknown as number),
+        : safeNumber(payload.queuePosition, 0),
     );
     setEtaMs(
       payload.etaMs === null || payload.etaMs === undefined
         ? null
-        : safeNumber(payload.etaMs, null as unknown as number),
+        : safeNumber(payload.etaMs, 0),
     );
     setResultUrls(urls);
     setRetryable(Boolean(payload.retryable || payload.error?.retryable));
@@ -504,23 +619,40 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
         setJobStatus('failed');
         setRetryable(true);
         setErrorMessage('İş zaman aşımına uğradı.');
-        finalizeTerminalState('failed', { jobId, status: 'failed', error: { message: 'İş zaman aşımına uğradı.', retryable: true } }, 'İş zaman aşımına uğradı.');
+        finalizeTerminalState(
+          'failed',
+          { jobId, status: 'failed', error: { message: 'İş zaman aşımına uğradı.', retryable: true } },
+          'İş zaman aşımına uğradı.',
+        );
       }, hardTimeoutMs);
 
       hardTimeoutRef.current = hardStop;
 
       const tick = async () => {
         try {
-          const url = new URL(`/jobs/status/${encodeURIComponent(jobId)}`, statusBaseUrl);
-          const json = await fetchJson<WorkerEnvelope<ImageJobRecord> | ImageJobRecord>(
-            url.toString(),
-            { method: 'GET', headers: { Accept: 'application/json' } },
-            Math.min(pollIntervalMs + 5000, 10000),
-          );
+          let payload: ImageJobRecord | null = null;
+          const errors: string[] = [];
 
-          const payload = extractJobPayload(json);
+          for (const base of statusBaseCandidates) {
+            try {
+              const statusUrl = resolveEndpoint(base, `/jobs/status/${encodeURIComponent(jobId)}`);
+              const json = await fetchJson<WorkerEnvelope<ImageJobRecord> | ImageJobRecord>(
+                statusUrl,
+                { method: 'GET', headers: { Accept: 'application/json' } },
+                Math.min(pollIntervalMs + 5000, 10000),
+              );
+              payload = extractJobPayload(json);
+              break;
+            } catch (error) {
+              errors.push(`${base}: ${getErrorMessage(error, 'Durum alınamadı.')}`);
+            }
+          }
+
+          if (!payload) {
+            throw new Error(errors[0] || 'Job durumu alınamadı.');
+          }
+
           const status = (payload.status || 'idle') as ImageJobStatus;
-
           applyJobPayload({ ...payload, jobId });
 
           if (status === 'completed') {
@@ -561,7 +693,7 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
 
       await tick();
     },
-    [applyJobPayload, clearTimers, finalizeTerminalState, hardTimeoutMs, pollIntervalMs, statusBaseUrl],
+    [applyJobPayload, clearTimers, finalizeTerminalState, hardTimeoutMs, pollIntervalMs, statusBaseCandidates],
   );
 
   const startJob = useCallback(
@@ -583,28 +715,37 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
       setEtaMs(null);
       setRetryable(false);
       setCancelRequested(false);
+      setCancelSupported(true);
       setIsGenerating(true);
 
       try {
         const formData = buildFormData(input);
-        const json = await fetchJson<WorkerEnvelope<ImageJobRecord> | ImageJobRecord>(
-          generateEndpoint,
-          {
-            method: 'POST',
-            body: formData,
-          },
-          Math.min(input.timeoutMs || createTimeoutMs, createTimeoutMs),
-        );
+        let payload: ImageJobRecord | null = null;
+        let networkError: Error | null = null;
 
-        const payload = extractJobPayload(json);
-        const maybeJobId = safeString(payload.jobId);
-        const immediateUrls = normalizeUrls(payload);
+        try {
+          const response = await fetchJsonFromCandidates<WorkerEnvelope<ImageJobRecord> | ImageJobRecord>(
+            generateCandidates,
+            () => ({
+              method: 'POST',
+              body: formData,
+            }),
+            Math.min(input.timeoutMs || createTimeoutMs, createTimeoutMs),
+          );
+
+          payload = extractJobPayload(response.data);
+        } catch (error) {
+          networkError = error instanceof Error ? error : new Error(getErrorMessage(error, 'Üretim isteği başarısız oldu.'));
+        }
+
+        const maybeJobId = safeString(payload?.jobId);
+        const immediateUrls = normalizeUrls(payload || {});
 
         if (maybeJobId) {
           applyJobPayload({
             ...payload,
             jobId: maybeJobId,
-            status: (payload.status || 'queued') as ImageJobStatus,
+            status: (payload?.status || 'queued') as ImageJobStatus,
           });
           await pollJob(maybeJobId);
           return;
@@ -629,6 +770,31 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
           return;
         }
 
+        if (networkError) {
+          setJobStatus('processing');
+          setProgress(35);
+          setStep('puter_fallback');
+
+          const urls = await requestViaPuter(input);
+          setCurrentJobId(null);
+          setJobStatus('completed');
+          setProgress(100);
+          setStep('completed');
+          setResultUrls(urls);
+          setCancelSupported(false);
+          setIsGenerating(false);
+          appendHistory(
+            buildHistoryItem({
+              jobId: null,
+              status: 'completed',
+              input,
+              resultUrls: urls,
+              errorMessage: null,
+            }),
+          );
+          return;
+        }
+
         throw new Error('Servis ne jobId ne de kullanılabilir görsel URL döndürdü.');
       } catch (error) {
         setIsGenerating(false);
@@ -647,7 +813,7 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
         throw error;
       }
     },
-    [appendHistory, applyJobPayload, clearError, clearTimers, createTimeoutMs, generateEndpoint, pollJob],
+    [appendHistory, applyJobPayload, clearError, clearTimers, createTimeoutMs, generateCandidates, pollJob],
   );
 
   const cancelJob = useCallback(
@@ -657,40 +823,40 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
         throw new Error('İptal edilecek jobId bulunamadı.');
       }
 
-      try {
-        const json = await fetchJson<WorkerEnvelope<Record<string, unknown>> | Record<string, unknown>>(
-          `${statusBaseUrl}/jobs/cancel`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ jobId: targetJobId }),
-          },
-          10000,
-        );
+      const errors: string[] = [];
 
-        const maybeEnvelope = json as WorkerEnvelope<Record<string, unknown>>;
-        const error = maybeEnvelope?.error?.message;
+      for (const base of statusBaseCandidates) {
+        try {
+          const response = await fetchJson<WorkerEnvelope<Record<string, unknown>> | Record<string, unknown>>(
+            resolveEndpoint(base, '/jobs/cancel'),
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ jobId: targetJobId }),
+            },
+            10000,
+          );
 
-        if (error && /kurulmadı|desteklenmiyor|not supported|501/i.test(error)) {
-          setCancelSupported(false);
-          setErrorMessage('Backend tarafında gerçek cancel henüz aktif değil.');
+          const maybeEnvelope = response as WorkerEnvelope<Record<string, unknown>>;
+          const error = maybeEnvelope?.error?.message;
+          if (error && /kurulmadı|desteklenmiyor|not supported|501/i.test(error)) {
+            setCancelSupported(false);
+            setErrorMessage('Backend tarafında gerçek cancel henüz aktif değil.');
+            return;
+          }
+
+          setCancelRequested(true);
+          setStep('cancel_requested');
           return;
+        } catch (error) {
+          errors.push(`${base}: ${getErrorMessage(error, 'İptal isteği gönderilemedi.')}`);
         }
-
-        setCancelRequested(true);
-        setStep('cancel_requested');
-      } catch (error) {
-        const message = getErrorMessage(error, 'İptal isteği gönderilemedi.');
-        if (/501|desteklenmiyor|kurulmadı/i.test(message)) {
-          setCancelSupported(false);
-          setErrorMessage('Backend tarafında gerçek cancel henüz aktif değil.');
-          return;
-        }
-        setErrorMessage(message);
-        throw error;
       }
+
+      setCancelSupported(false);
+      setErrorMessage(errors[0] || 'Backend tarafında gerçek cancel henüz aktif değil.');
     },
-    [currentJobId, statusBaseUrl],
+    [currentJobId, statusBaseCandidates],
   );
 
   const retryLastJob = useCallback(async () => {
@@ -757,79 +923,3 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
 }
 
 export default useImageGenerationJob;
-
-/*
-IMAGEGEN.TSX İÇİNE EKLENECEK KULLANIM ÖZETİ
-
-1) import:
-import useImageGenerationJob from './image1';
-
-2) component içinde:
-const {
-  isGenerating,
-  currentJobId,
-  jobStatus,
-  progress,
-  step,
-  queuePosition,
-  etaMs,
-  resultUrls,
-  errorMessage,
-  retryable,
-  history,
-  startJob,
-  cancelJob,
-  retryLastJob,
-  loadHistory,
-  clearError,
-} = useImageGenerationJob();
-
-3) mevcut handleGenerate yerine:
-await startJob({
-  prompt,
-  model: selectedModel.modelId,
-  modelId: selectedModel.modelId,
-  ratio: activeRatio,
-  quality: 'high',
-  n: 4,
-  style: activeStyle,
-  timeoutMs: 120000,
-  metadata: {
-    page: 'imagegen',
-    source: 'frontend',
-    selectedProvider: selectedModel.provider,
-  },
-  attachments: attachments.map((item, index) => ({
-    name: item.name,
-    file: item.file,
-    fieldName: index === 0 ? 'reference' : `attachment_${index}`,
-  })),
-});
-
-4) resultUrls değişince mevcut generatedPages yapına bas:
-useEffect(() => {
-  if (resultUrls.length === 0) return;
-  const nextCards = buildBaseCards(1);
-  resultUrls.slice(0, 4).forEach((url, index) => {
-    nextCards[index] = {
-      id: createId('generated'),
-      src: url,
-      alt: `Uretilen gorsel ${index + 1}`,
-      overlay: index === 0 ? 'Yeni sonuç' : 'Daha fazla',
-    };
-  });
-  setGeneratedPages((prev) => ({ ...prev, 1: nextCards }));
-  setCurrentPage(1);
-}, [resultUrls]);
-
-5) UI'de göster:
-- jobStatus
-- progress
-- step
-- queuePosition
-- currentJobId
-- errorMessage
-- retry button
-- cancel button
-- history list
-*/
