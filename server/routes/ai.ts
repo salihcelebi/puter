@@ -56,9 +56,51 @@ function sendError(res: any, error: RouteError) {
   });
 }
 
-aiRouter.use(requireAuth);
 
-aiRouter.get('/models', async (req: AuthRequest, res) => {
+async function runImageGeneration(req: AuthRequest, res: any, envelope = false) {
+  try {
+    const { prompt, modelId, model, clientRequestId } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'image',
+      userId: req.user.id,
+      modelId: modelId || model,
+      clientRequestId,
+      payload: { prompt },
+    });
+
+    if (!envelope) {
+      return res.json(result);
+    }
+
+    const data = {
+      ...result,
+      images: Array.isArray((result as any).images)
+        ? (result as any).images
+        : (result as any).url
+        ? [{ url: (result as any).url }]
+        : [],
+      url: (result as any).url || (Array.isArray((result as any).images) && (result as any).images[0]?.url) || null,
+    };
+
+    return res.json({ ok: true, code: 'IMAGE_GENERATED', data, error: null });
+  } catch (error: any) {
+    if (!envelope) {
+      return sendError(res, error);
+    }
+
+    const mapped = normalizeError(error);
+    return res.status(mapped.status).json({
+      ok: false,
+      code: mapped.code,
+      data: null,
+      error: { message: error?.message || 'AI isteği başarısız' },
+    });
+  }
+}
+
+aiRouter.get('/models', async (req, res) => {
   try {
     const models = await aiService.listVisibleModels({
       feature: req.query.feature as string | undefined,
@@ -72,7 +114,7 @@ aiRouter.get('/models', async (req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/chat', requirePermission('use_chat'), async (req: AuthRequest, res) => {
+aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId, conversationId } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
@@ -91,26 +133,15 @@ aiRouter.post('/chat', requirePermission('use_chat'), async (req: AuthRequest, r
   }
 });
 
-aiRouter.post('/image', requirePermission('use_image'), async (req: AuthRequest, res) => {
-  try {
-    const { prompt, modelId, clientRequestId } = req.body || {};
-    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
-
-    const result = await aiService.runFeature({
-      feature: 'image',
-      userId: req.user.id,
-      modelId,
-      clientRequestId,
-      payload: { prompt },
-    });
-
-    res.json(result);
-  } catch (error: any) {
-    sendError(res, error);
-  }
+aiRouter.post('/image', requireAuth, requirePermission('use_image'), async (req: AuthRequest, res) => {
+  return runImageGeneration(req, res, false);
 });
 
-aiRouter.post('/tts', requirePermission('use_tts'), async (req: AuthRequest, res) => {
+aiRouter.post('/image/generate', requireAuth, requirePermission('use_image'), async (req: AuthRequest, res) => {
+  return runImageGeneration(req, res, true);
+});
+
+aiRouter.post('/tts', requireAuth, requirePermission('use_tts'), async (req: AuthRequest, res) => {
   try {
     const { text, modelId, voiceName, voice, clientRequestId } = req.body || {};
     if (!text || typeof text !== 'string') fail('text alanı zorunludur', 'INVALID_INPUT');
@@ -132,7 +163,7 @@ aiRouter.post('/tts', requirePermission('use_tts'), async (req: AuthRequest, res
   }
 });
 
-aiRouter.post('/video', requirePermission('use_video'), async (req: AuthRequest, res) => {
+aiRouter.post('/video', requireAuth, requirePermission('use_video'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
@@ -155,7 +186,7 @@ aiRouter.post('/video', requirePermission('use_video'), async (req: AuthRequest,
   }
 });
 
-aiRouter.post('/photo-to-video', requirePermission('use_photo_to_video'), async (req: AuthRequest, res) => {
+aiRouter.post('/photo-to-video', requireAuth, requirePermission('use_photo_to_video'), async (req: AuthRequest, res) => {
   try {
     const { prompt, imageUrl, imageBase64, modelId, model, duration, aspectRatio, clientRequestId } = req.body || {};
     let resolvedImageUrl = imageUrl;
@@ -184,7 +215,7 @@ aiRouter.post('/photo-to-video', requirePermission('use_photo_to_video'), async 
   }
 });
 
-aiRouter.get('/jobs/:id', async (req: AuthRequest, res) => {
+aiRouter.get('/jobs/:id', requireAuth, async (req: AuthRequest, res) => {
   try {
     // Part 3: auth + ownership + runtime sync are enforced by aiService.getJobStatus.
     const result = await aiService.getJobStatus(req.user.id, req.params.id);
@@ -210,7 +241,7 @@ aiRouter.get('/music/capability', async (_req: AuthRequest, res) => {
   }
 });
 
-aiRouter.post('/music', requirePermission('use_music'), async (req: AuthRequest, res) => {
+aiRouter.post('/music', requireAuth, requirePermission('use_music'), async (req: AuthRequest, res) => {
   try {
     const { prompt, tags } = req.body || {};
     if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');

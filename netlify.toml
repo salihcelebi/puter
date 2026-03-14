@@ -9,6 +9,12 @@ NODE_VERSION = "20"
 directory = "netlify/functions"
 
 [[redirects]]
+from = "/api/ai/image/generate"
+to = "/.netlify/functions/image/generate"
+status = 200
+force = true
+
+[[redirects]]
 from = "/api/*"
 to = "/.netlify/functions/api/api/:splat"
 status = 200
