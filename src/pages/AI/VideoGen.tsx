@@ -3,6 +3,7 @@ import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
+import { useAuth } from '../../context/AuthContext';
 import { fetchApiJson } from '../../lib/apiClient';
 import { formatCredits, formatUsd, ModelCatalogItem } from '../../lib/aiWorkers';
 
