@@ -482,7 +482,7 @@ export function useImageGenerationJob(options: UseImageJobOptions = {}): UseImag
         status,
         input: lastInputRef.current,
         resultUrls: urls.length > 0 ? urls : resultUrls,
-        errorMessage: customError ?? payload?.error?.message ?? errorMessage || null,
+        errorMessage: customError ?? payload?.error?.message ?? (errorMessage || null),
       });
 
       appendHistory(historyItem);
