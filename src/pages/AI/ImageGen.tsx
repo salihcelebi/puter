@@ -4,7 +4,9 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
-const IMAGE_WORKER_ENDPOINT = 'https://image.puter.work/generate';
+const IMAGE_WORKER_BASE_URL = 'https://image.puter.work';
+const IMAGE_WORKER_ENDPOINT = `${IMAGE_WORKER_BASE_URL}/generate`;
+const IMAGE_REQUEST_TIMEOUT_MS = 45000;
 
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
 
@@ -376,11 +378,117 @@ async function fetchCatalog(): Promise<ModelCatalogPayload> {
   return json.data;
 }
 
-async function requestImageGeneration(formData: FormData): Promise<ImageResultPayload> {
-  const response = await fetch(IMAGE_WORKER_ENDPOINT, {
-    method: 'POST',
-    body: formData,
+type WorkerRequestMode = 'json' | 'form-data';
+
+type WorkerRequestPayload = {
+  mode: WorkerRequestMode;
+  body: string | FormData;
+};
+
+function createImageWorkerPayload(payload: ImageGenerateRequestPayload, attachments: AttachmentItem[]): WorkerRequestPayload {
+  if (attachments.length === 0) {
+    return {
+      mode: 'json',
+      body: JSON.stringify(payload),
+    };
+  }
+
+  const formData = new FormData();
+  formData.set('prompt', payload.prompt);
+  formData.set('model', payload.model);
+  formData.set('modelId', payload.modelId);
+  formData.set('ratio', payload.ratio);
+  formData.set('style', payload.style);
+  formData.set('quality', payload.quality);
+  formData.set('n', payload.n);
+  formData.set('responseFormat', payload.responseFormat);
+  formData.set('clientRequestId', payload.clientRequestId);
+  formData.set('metadata', payload.metadata);
+
+  attachments.forEach((attachment, index) => {
+    const fieldName = index === 0 ? 'reference' : `attachment_${index}`;
+    formData.append(fieldName, attachment.file, attachment.name);
   });
+
+  return {
+    mode: 'form-data',
+    body: formData,
+  };
+}
+
+function buildWorkerRequestInit(payload: WorkerRequestPayload, signal: AbortSignal): RequestInit {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
+  if (payload.mode === 'json') {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  return {
+    method: 'POST',
+    mode: 'cors',
+    cache: 'no-store',
+    redirect: 'follow',
+    headers,
+    body: payload.body,
+    signal,
+  };
+}
+
+function formatWorkerHttpError(status: number, rawBody: string) {
+  const trimmedBody = rawBody.trim();
+
+  if (status === 404) {
+    return `görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde bulunamadı`;
+  }
+
+  if (status === 400 && trimmedBody) {
+    return trimmedBody;
+  }
+
+  if (status === 401 || status === 403) {
+    return 'görsel üretim servisine erişim izni verilmedi';
+  }
+
+  if (status === 413) {
+    return 'görsel üretim isteği çok büyük olduğu için reddedildi';
+  }
+
+  if (status === 429) {
+    return 'görsel üretim servisi şu anda çok yoğun';
+  }
+
+  if (status >= 500) {
+    return 'görsel üretim servisi geçici olarak kullanılamıyor';
+  }
+
+  if (trimmedBody) {
+    return trimmedBody;
+  }
+
+  return `görsel üretim servisi ${status} durum kodu ile yanıt verdi`;
+}
+
+async function requestImageGeneration(payload: WorkerRequestPayload): Promise<ImageResultPayload> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), IMAGE_REQUEST_TIMEOUT_MS);
+
+  let response: Response;
+
+  try {
+    response = await fetch(IMAGE_WORKER_ENDPOINT, buildWorkerRequestInit(payload, controller.signal));
+  } catch (error) {
+    window.clearTimeout(timeoutId);
+
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('görsel üretim servisi zaman aşımına uğradı');
+    }
+
+    throw new Error('görsel üretim servisine ulaşılamadı; ağ, CORS veya endpoint sorunu olabilir');
+  }
+
+  window.clearTimeout(timeoutId);
 
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
   const rawBody = await response.text();
@@ -391,17 +499,17 @@ async function requestImageGeneration(formData: FormData): Promise<ImageResultPa
       throw new Error('görsel üretim servisi JSON yerine HTML döndürdü');
     }
 
-    if (!response.ok && trimmedBody) {
-      throw new Error(trimmedBody);
+    if (!response.ok) {
+      throw new Error(formatWorkerHttpError(response.status, rawBody));
     }
 
     throw new Error('görsel üretim servisi JSON olmayan bir yanıt döndürdü');
   }
 
-  let json: WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
+  let json: WorkerEnvelope<ImageResultPayload> | ImageResultPayload | Record<string, unknown>;
 
   try {
-    json = JSON.parse(rawBody) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
+    json = JSON.parse(rawBody) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload | Record<string, unknown>;
   } catch {
     throw new Error('görsel üretim servisi bozuk JSON döndürdü');
   }
@@ -409,17 +517,21 @@ async function requestImageGeneration(formData: FormData): Promise<ImageResultPa
   if ('ok' in (json as Record<string, unknown>)) {
     const envelope = json as WorkerEnvelope<ImageResultPayload>;
     if (!response.ok || !envelope.ok) {
-      throw new Error(envelope?.error?.message || 'görsel üretim servisi yanıt veremedi');
+      throw new Error(envelope?.error?.message || formatWorkerHttpError(response.status, rawBody));
     }
     return envelope.data;
   }
 
   if (!response.ok) {
-    if (trimmedBody) {
-      throw new Error(trimmedBody);
+    const directMessage = typeof (json as Record<string, unknown>).error === 'string'
+      ? String((json as Record<string, unknown>).error)
+      : '';
+
+    if (directMessage) {
+      throw new Error(directMessage);
     }
 
-    throw new Error('görsel üretim servisi geçersiz yanıt döndürdü');
+    throw new Error(formatWorkerHttpError(response.status, rawBody));
   }
 
   return json as ImageResultPayload;
@@ -688,38 +800,37 @@ export default function ImageGen() {
     clearVisibleError();
 
     try {
-      let formData: FormData;
+      let workerPayload: WorkerRequestPayload;
 
       try {
-        formData = new FormData();
-        formData.set('prompt', rawPrompt);
-        formData.set('model', selectedModel.modelId);
-        formData.set('modelId', selectedModel.modelId);
-        formData.set('ratio', activeRatio);
-        formData.set('style', activeStyle);
-        formData.set('quality', 'high');
-        formData.set('n', '4');
-        formData.set('responseFormat', 'url');
-        formData.set('clientRequestId', createId('image'));
-        formData.set(
-          'metadata',
-          JSON.stringify({
+        const requestPayload: ImageGenerateRequestPayload = {
+          prompt: rawPrompt,
+          model: selectedModel.modelId || selectedModel.id,
+          modelId: selectedModel.modelId || selectedModel.id,
+          ratio: activeRatio,
+          style: activeStyle,
+          quality: 'high',
+          n: '4',
+          responseFormat: 'url',
+          clientRequestId: createId('image'),
+          metadata: JSON.stringify({
             page: 'imagegen',
             source: 'frontend',
             selectedProvider: selectedModel.provider,
+            selectedModelName: selectedModel.modelName,
+            selectedModelId: selectedModel.modelId || selectedModel.id,
+            attachmentCount: attachments.length,
           }),
-        );
+        };
 
-        attachments.forEach((attachment, index) => {
-          formData.append(index === 0 ? 'reference' : `attachment_${index}`, attachment.file, attachment.name);
-        });
+        workerPayload = createImageWorkerPayload(requestPayload, attachments);
       } catch (error) {
         throw new Error(getContextualErrorMessage('generate-prepare', error));
       }
 
       let payload: ImageResultPayload;
       try {
-        payload = await requestImageGeneration(formData);
+        payload = await requestImageGeneration(workerPayload);
       } catch (error) {
         throw new Error(getContextualErrorMessage('generate-request', error));
       }
