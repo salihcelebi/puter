@@ -9,7 +9,7 @@ const pages = [
   { path: 'src/pages/Billing.tsx', name: 'Billing' },
   { path: 'src/pages/Account.tsx', name: 'Account' },
   { path: 'src/pages/AI/Chat.tsx', name: 'Chat' },
-  { path: 'src/pages/AI/ImageGen.tsx', name: 'ImageGen' },
+  { path: 'src/pages/AI/image.tsx', name: 'Image' },
   { path: 'src/pages/AI/VideoGen.tsx', name: 'VideoGen' },
   { path: 'src/pages/AI/PhotoToVideo.tsx', name: 'PhotoToVideo' },
   { path: 'src/pages/AI/TTS.tsx', name: 'TTS' },
