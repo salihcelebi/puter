@@ -4,6 +4,7 @@
 // ===============================
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
 import AIStudioHeader from '../../components/AIStudioHeader';
 import {
@@ -53,6 +54,7 @@ function normalizeConversation(messages: UIMessage[]): ChatWorkerMessage[] {
 
 export default function Chat() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const locationState = location.state as ChatLocationState | null;
@@ -165,6 +167,11 @@ export default function Chat() {
   };
 
   const handleSend = async () => {
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/sohbet/konus' } } });
+      return;
+    }
+
     const trimmed = draft.trim();
     if (!trimmed || sending || !selectedModel) return;
 
