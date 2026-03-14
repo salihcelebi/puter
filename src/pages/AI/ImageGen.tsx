@@ -2,12 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
+import useImageGenerationJob from './image1';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
-const IMAGE_WORKER_BASE_URL = 'https://image.puter.work';
-const IMAGE_WORKER_ENDPOINT = `${IMAGE_WORKER_BASE_URL}/generate`;
-const IMAGE_REQUEST_TIMEOUT_MS = 45000;
-
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
 
 type ImageLocationState = {
@@ -265,30 +262,6 @@ function buildBaseCards(page: number): GridCard[] {
   }));
 }
 
-function extractImageUrls(result: ImageResultPayload | null | undefined) {
-  if (!result) return [] as string[];
-
-  const urls = new Set<string>();
-
-  if (typeof result.url === 'string' && result.url.trim()) {
-    urls.add(result.url.trim());
-  }
-
-  if (Array.isArray(result.urls)) {
-    for (const item of result.urls) {
-      if (typeof item === 'string' && item.trim()) urls.add(item.trim());
-    }
-  }
-
-  if (Array.isArray(result.images)) {
-    for (const item of result.images) {
-      if (item && typeof item.url === 'string' && item.url.trim()) urls.add(item.url.trim());
-    }
-  }
-
-  return [...urls];
-}
-
 
 function getSafeErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) {
@@ -342,6 +315,48 @@ function getContextualErrorMessage(context: string, error: unknown) {
   }
 }
 
+function formatJobStatusLabel(status: string) {
+  switch (status) {
+    case 'queued':
+      return 'Sırada';
+    case 'processing':
+      return 'İşleniyor';
+    case 'completed':
+      return 'Tamamlandı';
+    case 'failed':
+      return 'Başarısız';
+    case 'cancelled':
+      return 'İptal edildi';
+    case 'not_found':
+      return 'Bulunamadı';
+    default:
+      return 'Hazır';
+  }
+}
+
+function formatEtaMs(value: number | null) {
+  if (value === null || !Number.isFinite(value) || value <= 0) return '—';
+  const totalSeconds = Math.max(1, Math.round(value / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds} sn`;
+  return `${minutes} dk ${seconds} sn`;
+}
+
+function formatHistoryDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat('tr-TR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
 function cleanStoredModel(items: ModelCatalogItem[]) {
   try {
     const raw = sessionStorage.getItem(IMAGE_MODEL_SESSION_KEY);
@@ -378,165 +393,6 @@ async function fetchCatalog(): Promise<ModelCatalogPayload> {
   return json.data;
 }
 
-type WorkerRequestMode = 'json' | 'form-data';
-
-type WorkerRequestPayload = {
-  mode: WorkerRequestMode;
-  body: string | FormData;
-};
-
-function createImageWorkerPayload(payload: ImageGenerateRequestPayload, attachments: AttachmentItem[]): WorkerRequestPayload {
-  if (attachments.length === 0) {
-    return {
-      mode: 'json',
-      body: JSON.stringify(payload),
-    };
-  }
-
-  const formData = new FormData();
-  formData.set('prompt', payload.prompt);
-  formData.set('model', payload.model);
-  formData.set('modelId', payload.modelId);
-  formData.set('ratio', payload.ratio);
-  formData.set('style', payload.style);
-  formData.set('quality', payload.quality);
-  formData.set('n', payload.n);
-  formData.set('responseFormat', payload.responseFormat);
-  formData.set('clientRequestId', payload.clientRequestId);
-  formData.set('metadata', payload.metadata);
-
-  attachments.forEach((attachment, index) => {
-    const fieldName = index === 0 ? 'reference' : `attachment_${index}`;
-    formData.append(fieldName, attachment.file, attachment.name);
-  });
-
-  return {
-    mode: 'form-data',
-    body: formData,
-  };
-}
-
-function buildWorkerRequestInit(payload: WorkerRequestPayload, signal: AbortSignal): RequestInit {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-  };
-
-  if (payload.mode === 'json') {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  return {
-    method: 'POST',
-    mode: 'cors',
-    cache: 'no-store',
-    redirect: 'follow',
-    headers,
-    body: payload.body,
-    signal,
-  };
-}
-
-function formatWorkerHttpError(status: number, rawBody: string) {
-  const trimmedBody = rawBody.trim();
-
-  if (status === 404) {
-    return `görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde bulunamadı`;
-  }
-
-  if (status === 400 && trimmedBody) {
-    return trimmedBody;
-  }
-
-  if (status === 401 || status === 403) {
-    return 'görsel üretim servisine erişim izni verilmedi';
-  }
-
-  if (status === 413) {
-    return 'görsel üretim isteği çok büyük olduğu için reddedildi';
-  }
-
-  if (status === 429) {
-    return 'görsel üretim servisi şu anda çok yoğun';
-  }
-
-  if (status >= 500) {
-    return 'görsel üretim servisi geçici olarak kullanılamıyor';
-  }
-
-  if (trimmedBody) {
-    return trimmedBody;
-  }
-
-  return `görsel üretim servisi ${status} durum kodu ile yanıt verdi`;
-}
-
-async function requestImageGeneration(payload: WorkerRequestPayload): Promise<ImageResultPayload> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), IMAGE_REQUEST_TIMEOUT_MS);
-
-  let response: Response;
-
-  try {
-    response = await fetch(IMAGE_WORKER_ENDPOINT, buildWorkerRequestInit(payload, controller.signal));
-  } catch (error) {
-    window.clearTimeout(timeoutId);
-
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('görsel üretim servisi zaman aşımına uğradı');
-    }
-
-    throw new Error('görsel üretim servisine ulaşılamadı; ağ, CORS veya endpoint sorunu olabilir');
-  }
-
-  window.clearTimeout(timeoutId);
-
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  const rawBody = await response.text();
-  const trimmedBody = rawBody.trim();
-
-  if (!contentType.includes('application/json')) {
-    if (trimmedBody.startsWith('<')) {
-      throw new Error('görsel üretim servisi JSON yerine HTML döndürdü');
-    }
-
-    if (!response.ok) {
-      throw new Error(formatWorkerHttpError(response.status, rawBody));
-    }
-
-    throw new Error('görsel üretim servisi JSON olmayan bir yanıt döndürdü');
-  }
-
-  let json: WorkerEnvelope<ImageResultPayload> | ImageResultPayload | Record<string, unknown>;
-
-  try {
-    json = JSON.parse(rawBody) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload | Record<string, unknown>;
-  } catch {
-    throw new Error('görsel üretim servisi bozuk JSON döndürdü');
-  }
-
-  if ('ok' in (json as Record<string, unknown>)) {
-    const envelope = json as WorkerEnvelope<ImageResultPayload>;
-    if (!response.ok || !envelope.ok) {
-      throw new Error(envelope?.error?.message || formatWorkerHttpError(response.status, rawBody));
-    }
-    return envelope.data;
-  }
-
-  if (!response.ok) {
-    const directMessage = typeof (json as Record<string, unknown>).error === 'string'
-      ? String((json as Record<string, unknown>).error)
-      : '';
-
-    if (directMessage) {
-      throw new Error(directMessage);
-    }
-
-    throw new Error(formatWorkerHttpError(response.status, rawBody));
-  }
-
-  return json as ImageResultPayload;
-}
-
 export default function ImageGen() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -558,16 +414,38 @@ export default function ImageGen() {
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [generatedPages, setGeneratedPages] = useState<Record<number, GridCard[]>>({});
   const [visibleError, setVisibleError] = useState('');
+
+  const {
+    isGenerating,
+    currentJobId,
+    jobStatus,
+    progress,
+    step,
+    queuePosition,
+    etaMs,
+    resultUrls,
+    errorMessage: jobErrorMessage,
+    retryable,
+    cancelRequested,
+    history,
+    cancelSupported,
+    startJob,
+    cancelJob,
+    retryLastJob,
+    loadHistory,
+    clearError: clearJobError,
+  } = useImageGenerationJob();
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const modelWrapRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<any>(null);
+  const lastJobErrorRef = useRef('');
+  const lastSuccessSignatureRef = useRef('');
 
   const showVisibleError = (message: string) => {
     setVisibleError(message);
@@ -576,6 +454,7 @@ export default function ImageGen() {
 
   const clearVisibleError = () => {
     setVisibleError('');
+    clearJobError();
   };
 
   useEffect(() => {
@@ -629,6 +508,52 @@ export default function ImageGen() {
       mounted = false;
     };
   }, [initialModelId, locationState?.selectedModel]);
+
+
+  useEffect(() => {
+    loadHistory().catch(() => {
+      /* history fallback handled by hook */
+    });
+  }, [loadHistory]);
+
+  useEffect(() => {
+    if (resultUrls.length === 0) return;
+
+    const nextCards = buildBaseCards(1);
+    resultUrls.slice(0, 4).forEach((url, index) => {
+      nextCards[index] = {
+        id: createId('generated'),
+        src: url,
+        alt: `Uretilen gorsel ${index + 1}`,
+        overlay: index === 0 ? 'Yeni sonuç' : 'Daha fazla',
+      };
+    });
+
+    setGeneratedPages((prev) => ({
+      ...prev,
+      1: nextCards,
+    }));
+    setCurrentPage(1);
+
+    const signature = resultUrls.join('|');
+    if (signature && lastSuccessSignatureRef.current !== signature) {
+      toast.success('Görsel hazır.');
+      lastSuccessSignatureRef.current = signature;
+    }
+  }, [resultUrls]);
+
+  useEffect(() => {
+    if (!jobErrorMessage) {
+      lastJobErrorRef.current = '';
+      return;
+    }
+
+    setVisibleError(jobErrorMessage);
+    if (lastJobErrorRef.current !== jobErrorMessage) {
+      toast.error(jobErrorMessage);
+      lastJobErrorRef.current = jobErrorMessage;
+    }
+  }, [jobErrorMessage]);
 
   useEffect(() => {
     try {
@@ -796,75 +721,36 @@ export default function ImageGen() {
       return;
     }
 
-    setIsGenerating(true);
     clearVisibleError();
 
     try {
-      let workerPayload: WorkerRequestPayload;
-
-      try {
-        const requestPayload: ImageGenerateRequestPayload = {
-          prompt: rawPrompt,
-          model: selectedModel.modelId || selectedModel.id,
-          modelId: selectedModel.modelId || selectedModel.id,
-          ratio: activeRatio,
-          style: activeStyle,
-          quality: 'high',
-          n: '4',
-          responseFormat: 'url',
-          clientRequestId: createId('image'),
-          metadata: JSON.stringify({
-            page: 'imagegen',
-            source: 'frontend',
-            selectedProvider: selectedModel.provider,
-            selectedModelName: selectedModel.modelName,
-            selectedModelId: selectedModel.modelId || selectedModel.id,
-            attachmentCount: attachments.length,
-          }),
-        };
-
-        workerPayload = createImageWorkerPayload(requestPayload, attachments);
-      } catch (error) {
-        throw new Error(getContextualErrorMessage('generate-prepare', error));
-      }
-
-      let payload: ImageResultPayload;
-      try {
-        payload = await requestImageGeneration(workerPayload);
-      } catch (error) {
-        throw new Error(getContextualErrorMessage('generate-request', error));
-      }
-
-      try {
-        const urls = extractImageUrls(payload);
-
-        if (urls.length === 0) {
-          throw new Error('görsel servisinden kullanılabilir çıktı dönmedi');
-        }
-
-        const nextCards = buildBaseCards(1);
-        urls.slice(0, 4).forEach((url, index) => {
-          nextCards[index] = {
-            id: createId('generated'),
-            src: url,
-            alt: `Uretilen gorsel ${index + 1}`,
-            overlay: index === 0 ? 'Yeni sonuç' : 'Daha fazla',
-          };
-        });
-
-        setGeneratedPages((prev) => ({
-          ...prev,
-          1: nextCards,
-        }));
-        setCurrentPage(1);
-        toast.success('Görsel hazır.');
-      } catch (error) {
-        throw new Error(getContextualErrorMessage('generate-result', error));
-      }
+      await startJob({
+        prompt: rawPrompt,
+        model: selectedModel.modelId || selectedModel.id,
+        modelId: selectedModel.modelId || selectedModel.id,
+        ratio: activeRatio,
+        quality: 'high',
+        n: 4,
+        style: activeStyle,
+        timeoutMs: 120000,
+        metadata: {
+          page: 'imagegen',
+          source: 'frontend',
+          selectedProvider: selectedModel.provider,
+          selectedModelName: selectedModel.modelName,
+          selectedModelId: selectedModel.modelId || selectedModel.id,
+          attachmentCount: attachments.length,
+        },
+        attachments: attachments.map((item, index) => ({
+          name: item.name,
+          file: item.file,
+          fieldName: index === 0 ? 'reference' : `attachment_${index}`,
+        })),
+      });
     } catch (error) {
-      showVisibleError(getSafeErrorMessage(error, 'Görsel üretme işlemi tamamlanamadı çünkü beklenmeyen bir hata oluştu.'));
-    } finally {
-      setIsGenerating(false);
+      showVisibleError(
+        getSafeErrorMessage(error, 'Görsel üretme işlemi tamamlanamadı çünkü beklenmeyen bir hata oluştu.'),
+      );
     }
   };
 
@@ -1143,6 +1029,118 @@ export default function ImageGen() {
                   {selectedModel ? ` Seçili model: ${selectedModel.provider} • ${selectedModel.modelName} • ${formatCredits(selectedModel.prices.image)} • ${formatUsd(selectedModel.prices.image)}.` : ''}
                 </div>
               </div>
+
+              {(jobStatus !== 'idle' || currentJobId || history.length > 0) && (
+                <div className="job-panel">
+                  <div className="job-panel-head">
+                    <div>
+                      <div className="job-panel-title">Üretim Durumu</div>
+                      <div className="job-panel-subtitle">image1.tsx hook akışı aktif: oluştur, takip et, iptal et, tekrar dene, geçmişi gör.</div>
+                    </div>
+                    <div className={`job-status-pill ${jobStatus}`}>{formatJobStatusLabel(jobStatus)}</div>
+                  </div>
+
+                  <div className="job-stats">
+                    <div className="job-stat-card">
+                      <span>Job ID</span>
+                      <strong>{currentJobId || '—'}</strong>
+                    </div>
+                    <div className="job-stat-card">
+                      <span>Adım</span>
+                      <strong>{step || '—'}</strong>
+                    </div>
+                    <div className="job-stat-card">
+                      <span>Sıra</span>
+                      <strong>{queuePosition ?? '—'}</strong>
+                    </div>
+                    <div className="job-stat-card">
+                      <span>Tahmini süre</span>
+                      <strong>{formatEtaMs(etaMs)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="job-progress-block">
+                    <div className="job-progress-top">
+                      <span>İlerleme</span>
+                      <strong>%{progress}</strong>
+                    </div>
+                    <div className="job-progress-track" aria-label="Üretim ilerleme çubuğu">
+                      <div className="job-progress-bar" style={{ width: `${Math.max(progress, jobStatus === 'completed' ? 100 : 6)}%` }}></div>
+                    </div>
+                    <div className="job-progress-note">
+                      {cancelRequested
+                        ? 'İptal isteği gönderildi. Backend onayı bekleniyor.'
+                        : jobStatus === 'completed'
+                        ? 'Sonuç URLleri alındı ve galeriye işlendi.'
+                        : jobStatus === 'failed'
+                        ? 'Üretim akışı hata ile sonlandı.'
+                        : jobStatus === 'cancelled'
+                        ? 'İş kullanıcı isteğiyle iptal edildi.'
+                        : 'Async üretim devam ediyor.'}
+                    </div>
+                  </div>
+
+                  <div className="job-action-row">
+                    {retryable && (
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            clearVisibleError();
+                            await retryLastJob();
+                          } catch (error) {
+                            showVisibleError(getSafeErrorMessage(error, 'Tekrar deneme işlemi tamamlanamadı.'));
+                          }
+                        }}
+                      >
+                        Tekrar dene
+                      </button>
+                    )}
+
+                    {isGenerating && (
+                      <button
+                        className={`secondary-action ${cancelSupported ? '' : 'disabled-like'}`}
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await cancelJob();
+                            toast.success(cancelSupported ? 'İptal isteği gönderildi.' : 'İptal özelliği backend tarafında henüz aktif değil.');
+                          } catch (error) {
+                            showVisibleError(getSafeErrorMessage(error, 'İptal isteği gönderilemedi.'));
+                          }
+                        }}
+                      >
+                        {cancelSupported ? 'İptal et' : 'İptal desteklenmiyor'}
+                      </button>
+                    )}
+                  </div>
+
+                  {history.length > 0 && (
+                    <div className="history-wrap">
+                      <div className="history-head">
+                        <div className="job-panel-title">Son İşler</div>
+                        <div className="job-panel-subtitle">En yeni 5 kayıt gösteriliyor.</div>
+                      </div>
+
+                      <div className="history-grid">
+                        {history.slice(0, 5).map((item, index) => (
+                          <div key={`${item.jobId || 'history'}_${index}`} className="history-card">
+                            <div className="history-card-top">
+                              <div className={`job-status-pill ${item.status}`}>{formatJobStatusLabel(item.status)}</div>
+                              <span>{formatHistoryDate(item.createdAt)}</span>
+                            </div>
+                            <div className="history-model">{item.model || 'Model bilgisi yok'}</div>
+                            <div className="history-prompt">{item.promptPreview || 'Prompt kaydı yok.'}</div>
+                            {item.firstImageUrl ? <img className="history-thumb" src={item.firstImageUrl} alt="Gecmis gorsel onizleme" /> : null}
+                            {item.errorMessage ? <div className="history-error">{item.errorMessage}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="suggestions">
@@ -1821,6 +1819,225 @@ export default function ImageGen() {
           white-space: nowrap;
         }
 
+        .job-panel {
+          margin-top: 16px;
+          border: 1px solid #dbe5e3;
+          border-radius: 24px;
+          background: linear-gradient(180deg, #f9fcfb 0%, #f4f8f7 100%);
+          padding: 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .job-panel-head,
+        .history-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+
+        .job-panel-title {
+          font-size: 16px;
+          font-weight: 800;
+          color: #1f2937;
+        }
+
+        .job-panel-subtitle {
+          font-size: 13px;
+          font-weight: 600;
+          color: #6b7280;
+          line-height: 1.5;
+        }
+
+        .job-status-pill {
+          min-height: 34px;
+          padding: 0 14px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          font-weight: 800;
+          background: #eef2f7;
+          color: #334155;
+          border: 1px solid #d9e2ec;
+        }
+
+        .job-status-pill.completed {
+          background: #e8f7ef;
+          border-color: #bde5ca;
+          color: #166534;
+        }
+
+        .job-status-pill.failed,
+        .job-status-pill.cancelled,
+        .job-status-pill.not_found {
+          background: #fff1f2;
+          border-color: #fecdd3;
+          color: #be123c;
+        }
+
+        .job-status-pill.processing,
+        .job-status-pill.queued {
+          background: #eff6ff;
+          border-color: #bfdbfe;
+          color: #1d4ed8;
+        }
+
+        .job-stats {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .job-stat-card {
+          border: 1px solid #dfe7e5;
+          border-radius: 18px;
+          background: #ffffff;
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .job-stat-card span {
+          font-size: 12px;
+          font-weight: 700;
+          color: #6b7280;
+        }
+
+        .job-stat-card strong {
+          font-size: 14px;
+          font-weight: 800;
+          color: #1f2937;
+          word-break: break-word;
+        }
+
+        .job-progress-block {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .job-progress-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          font-size: 13px;
+          font-weight: 700;
+          color: #4b5563;
+        }
+
+        .job-progress-track {
+          width: 100%;
+          height: 12px;
+          border-radius: 999px;
+          background: #e5ecea;
+          overflow: hidden;
+        }
+
+        .job-progress-bar {
+          height: 100%;
+          border-radius: inherit;
+          background: linear-gradient(90deg, #7ea9a3 0%, #5c8f88 100%);
+          transition: width 0.25s ease;
+        }
+
+        .job-progress-note {
+          font-size: 13px;
+          font-weight: 600;
+          color: #5a6776;
+          line-height: 1.5;
+        }
+
+        .job-action-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .secondary-action {
+          min-height: 42px;
+          padding: 0 16px;
+          border-radius: 14px;
+          border: 1px solid #d7e1df;
+          background: #ffffff;
+          color: #29423e;
+          font-size: 14px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        .secondary-action.disabled-like {
+          opacity: 0.72;
+        }
+
+        .history-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .history-grid {
+          display: grid;
+          grid-template-columns: repeat(5, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .history-card {
+          border: 1px solid #dde6e4;
+          border-radius: 18px;
+          background: #ffffff;
+          padding: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          min-height: 100%;
+        }
+
+        .history-card-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          font-size: 11px;
+          font-weight: 700;
+          color: #6b7280;
+        }
+
+        .history-model {
+          font-size: 13px;
+          font-weight: 800;
+          color: #1f2937;
+        }
+
+        .history-prompt {
+          font-size: 13px;
+          line-height: 1.5;
+          color: #4b5563;
+          flex: 1;
+        }
+
+        .history-thumb {
+          width: 100%;
+          aspect-ratio: 1 / 1;
+          object-fit: cover;
+          border-radius: 14px;
+          border: 1px solid #e5e7eb;
+        }
+
+        .history-error {
+          font-size: 12px;
+          line-height: 1.45;
+          color: #be123c;
+          font-weight: 700;
+        }
+
         .suggestions {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1952,6 +2169,8 @@ export default function ImageGen() {
           .images { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .suggestions { grid-template-columns: 1fr; }
           .model-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .job-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .history-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 980px) {
@@ -1983,6 +2202,8 @@ export default function ImageGen() {
         @media (max-width: 760px) {
           .images { grid-template-columns: 1fr; }
           .model-card-grid { grid-template-columns: 1fr; }
+          .job-stats,
+          .history-grid { grid-template-columns: 1fr; }
           .toolbar-row { justify-content: flex-start; }
           .pagination-block { flex-direction: column; align-items: flex-start; }
           .model-select-wrap,
@@ -1993,7 +2214,8 @@ export default function ImageGen() {
             align-items: stretch;
           }
           .upload-stack,
-          .composer-tools {
+          .composer-tools,
+          .job-action-row {
             justify-content: flex-start;
           }
         }
