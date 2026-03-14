@@ -102,6 +102,13 @@ export const authService = {
     return await kv.get(`users:${userId}`);
   },
 
+
+  async findUserByGoogleId(googleId: string): Promise<User | null> {
+    const userId = await kv.get(`userByGoogleId:${googleId}`);
+    if (!userId) return null;
+    return await kv.get(`users:${userId}`);
+  },
+
   async createUser(data: Partial<User>): Promise<User> {
     const id = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const now = new Date().toISOString();
@@ -127,7 +134,26 @@ export const authService = {
     if (user.kullanici_adi) {
       await kv.set(`userByUsername:${user.kullanici_adi}`, id);
     }
+    if (user.google_id) {
+      await kv.set(`userByGoogleId:${user.google_id}`, id);
+    }
 
+    return user;
+  },
+
+
+  async linkGoogleIdentity(userId: string, googleId: string, displayName?: string): Promise<User | null> {
+    const user = await kv.get(`users:${userId}`);
+    if (!user) return null;
+
+    user.google_id = googleId;
+    user.auth_provider = 'google';
+    if (displayName && !user.gorunen_ad) {
+      user.gorunen_ad = displayName;
+    }
+
+    await kv.set(`users:${userId}`, user);
+    await kv.set(`userByGoogleId:${googleId}`, userId);
     return user;
   },
 

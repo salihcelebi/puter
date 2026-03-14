@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { authService } from '../services/authService.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
@@ -12,6 +13,80 @@ const cookieOptions = {
   secure: isProd,
   sameSite: isProd ? ('none' as 'none') : ('lax' as 'lax'),
   maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+};
+
+
+
+const pickFirstEnv = (...keys: string[]) => {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const googleOauthStateCookie = 'google_oauth_state';
+const googleStateCookieOptions = {
+  httpOnly: true,
+  secure: isProd,
+  sameSite: isProd ? ('none' as 'none') : ('lax' as 'lax'),
+  maxAge: 10 * 60 * 1000,
+};
+
+const getGoogleConfig = (req: any) => {
+  const clientId = pickFirstEnv(
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_OAUTH_CLIENT_ID',
+    'GOOGLE_AUTH_CLIENT_ID',
+    'GOOGLE_CLIENTID',
+    'VITE_GOOGLE_CLIENT_ID'
+  );
+  const clientSecret = pickFirstEnv(
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_AUTH_CLIENT_SECRET',
+    'GOOGLE_CLIENTSECRET'
+  );
+  const configuredRedirectUri = pickFirstEnv(
+    'GOOGLE_REDIRECT_URI',
+    'GOOGLE_OAUTH_REDIRECT_URI',
+    'GOOGLE_AUTH_REDIRECT_URI'
+  );
+
+  const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+  const proto = forwardedProto || req.protocol || (isProd ? 'https' : 'http');
+  const host = req.get('host');
+  const fallbackRedirectUri = `${proto}://${host}/api/auth/google/callback`;
+
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: configuredRedirectUri || fallbackRedirectUri,
+  };
+};
+
+const normalizeUsername = (value: string) =>
+  value
+    .toLocaleLowerCase('tr')
+    .replace(/[^a-z0-9]+/gi, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24) || `google_user_${Date.now()}`;
+
+const buildUniqueUsername = async (base: string) => {
+  const normalizedBase = normalizeUsername(base);
+
+  const firstHit = await authService.findUserByUsername(normalizedBase);
+  if (!firstHit) return normalizedBase;
+
+  for (let i = 0; i < 10; i += 1) {
+    const candidate = `${normalizedBase}_${Math.random().toString(36).slice(2, 6)}`;
+    const existing = await authService.findUserByUsername(candidate);
+    if (!existing) return candidate;
+  }
+
+  return `${normalizedBase}_${Date.now()}`;
 };
 
 const sendAuthError = (res: any, status: number, message: string, code?: string) => {
@@ -116,29 +191,112 @@ authRouter.get('/me', requireAuth, (req: AuthRequest, res) => {
   }
 });
 
-// Mock Google OAuth endpoints
+// Google OAuth endpoints
 authRouter.get('/google/url', (req, res) => {
-  // In a real app, this would return the Google OAuth URL
-  return res.json({ success: true, url: '/api/auth/google/callback?code=mock_code' });
+  const { clientId, redirectUri } = getGoogleConfig(req);
+
+  if (!clientId) {
+    return sendAuthError(res, 500, 'Google OAuth yapılandırması eksik', 'GOOGLE_OAUTH_CONFIG_ERROR');
+  }
+
+  const state = crypto.randomBytes(24).toString('hex');
+  res.cookie(googleOauthStateCookie, state, googleStateCookieOptions);
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    include_granted_scopes: 'true',
+    prompt: 'consent',
+    state,
+  });
+
+  return res.json({
+    success: true,
+    url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+  });
 });
 
 authRouter.get('/google/callback', async (req, res) => {
   try {
-    // Mock Google OAuth callback
-    const mockEmail = 'google_user@example.com';
-    let user = await authService.findUserByEmail(mockEmail);
+    const { code, state } = req.query as { code?: string; state?: string };
+    const stateCookie = req.cookies?.[googleOauthStateCookie];
 
+    if (!code || !state || !stateCookie || stateCookie !== state) {
+      return res.redirect('/giris?error=oauth_state_invalid');
+    }
+
+    res.clearCookie(googleOauthStateCookie);
+
+    const { clientId, clientSecret, redirectUri } = getGoogleConfig(req);
+    if (!clientId || !clientSecret) {
+      return res.redirect('/giris?error=oauth_config');
+    }
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+
+    if (!tokenResponse.ok) {
+      console.error('Google token exchange failed', tokenResponse.status, await tokenResponse.text());
+      return res.redirect('/giris?error=oauth_token_failed');
+    }
+
+    const tokenPayload = await tokenResponse.json() as { access_token?: string };
+    if (!tokenPayload.access_token) {
+      return res.redirect('/giris?error=oauth_token_missing');
+    }
+
+    const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
+    });
+
+    if (!profileResponse.ok) {
+      console.error('Google profile fetch failed', profileResponse.status, await profileResponse.text());
+      return res.redirect('/giris?error=oauth_profile_failed');
+    }
+
+    const profile = await profileResponse.json() as {
+      sub?: string;
+      email?: string;
+      name?: string;
+      email_verified?: boolean;
+    };
+
+    if (!profile.sub || !profile.email || profile.email_verified === false) {
+      return res.redirect('/giris?error=oauth_profile_invalid');
+    }
+
+    let user = await authService.findUserByGoogleId(profile.sub);
     if (!user) {
+      user = await authService.findUserByEmail(profile.email);
+      if (user) {
+        user = await authService.linkGoogleIdentity(user.id, profile.sub, profile.name || undefined);
+      }
+    }
+    if (!user) {
+      const usernameBase = profile.email.split('@')[0] || profile.name || 'google_user';
+      const uniqueUsername = await buildUniqueUsername(usernameBase);
       user = await authService.createUser({
-        email: mockEmail,
-        kullanici_adi: 'google_user',
-        gorunen_ad: 'Google User',
+        email: profile.email,
+        kullanici_adi: uniqueUsername,
+        gorunen_ad: profile.name || uniqueUsername,
         auth_provider: 'google',
-        google_id: 'mock_google_id_123'
+        google_id: profile.sub,
       });
     }
 
-    if (!user.aktif_mi) {
+    if (!user?.aktif_mi) {
       return sendAuthError(res, 403, 'Account is deactivated', 'ACCOUNT_DISABLED');
     }
 
