@@ -16,6 +16,17 @@ const cookieOptions = {
 };
 
 
+
+const pickFirstEnv = (...keys: string[]) => {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (typeof raw !== 'string') continue;
+    const value = raw.trim();
+    if (value) return value;
+  }
+  return '';
+};
+
 const googleOauthStateCookie = 'google_oauth_state';
 const googleStateCookieOptions = {
   httpOnly: true,
@@ -25,9 +36,24 @@ const googleStateCookieOptions = {
 };
 
 const getGoogleConfig = (req: any) => {
-  const clientId = (process.env.GOOGLE_CLIENT_ID || '').trim();
-  const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || '').trim();
-  const configuredRedirectUri = (process.env.GOOGLE_REDIRECT_URI || '').trim();
+  const clientId = pickFirstEnv(
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_OAUTH_CLIENT_ID',
+    'GOOGLE_AUTH_CLIENT_ID',
+    'GOOGLE_CLIENTID',
+    'VITE_GOOGLE_CLIENT_ID'
+  );
+  const clientSecret = pickFirstEnv(
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    'GOOGLE_AUTH_CLIENT_SECRET',
+    'GOOGLE_CLIENTSECRET'
+  );
+  const configuredRedirectUri = pickFirstEnv(
+    'GOOGLE_REDIRECT_URI',
+    'GOOGLE_OAUTH_REDIRECT_URI',
+    'GOOGLE_AUTH_REDIRECT_URI'
+  );
 
   const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
   const proto = forwardedProto || req.protocol || (isProd ? 'https' : 'http');
@@ -259,6 +285,27 @@ authRouter.get('/google/callback', async (req, res) => {
       }
     }
 
+    const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenPayload.access_token}` },
+    });
+
+    if (!profileResponse.ok) {
+      console.error('Google profile fetch failed', profileResponse.status, await profileResponse.text());
+      return res.redirect('/giris?error=oauth_profile_failed');
+    }
+
+    const profile = await profileResponse.json() as {
+      sub?: string;
+      email?: string;
+      name?: string;
+      email_verified?: boolean;
+    };
+
+    if (!profile.sub || !profile.email || profile.email_verified === false) {
+      return res.redirect('/giris?error=oauth_profile_invalid');
+    }
+
+    let user = await authService.findUserByGoogleId(profile.sub);
     if (!user) {
       const usernameBase = profile.email.split('@')[0] || profile.name || 'google_user';
       const uniqueUsername = await buildUniqueUsername(usernameBase);
