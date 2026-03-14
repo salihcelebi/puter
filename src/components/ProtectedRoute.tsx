@@ -24,7 +24,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
   }
 
   if (requireAdmin && user.rol !== 'admin') {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/giris" replace />;
   }
 
   return <>{children}</>;
