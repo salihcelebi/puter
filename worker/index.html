@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Puter Fiyat Takip</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <h1>Puter Fiyat Takip</h1>
+        <p class="muted">Puter model sayfalarından çekilen güncel fiyatlar</p>
+      </div>
+
+      <div class="actions">
+        <input id="secretInput" type="password" placeholder="Yönetici gizli anahtarı" />
+        <button id="refreshBtn">Fiyatları Tazele</button>
+        <button id="exportExcelBtn">Excel İndir</button>
+      </div>
+    </header>
+
+    <section class="meta">
+      <div><strong>Son Güncelleme:</strong> <span id="lastUpdated">-</span></div>
+      <div><strong>Kayıt:</strong> <span id="rowCount">0</span></div>
+    </section>
+
+    <section class="filters">
+      <input id="searchInput" type="text" placeholder="Model, sağlayıcı veya servis ara..." />
+      <select id="providerFilter">
+        <option value="">Tüm Sağlayıcılar</option>
+      </select>
+      <select id="serviceFilter">
+        <option value="">Tüm Servisler</option>
+      </select>
+      <button id="reloadBtn">Yeniden Yükle</button>
+    </section>
+
+    <section class="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sağlayıcı</th>
+            <th>Model</th>
+            <th>Servis</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Image</th>
+            <th>Video</th>
+            <th>Para Birimi</th>
+            <th>Not</th>
+            <th>Kaynak</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </section>
+
+    <pre id="logBox" class="logBox"></pre>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
