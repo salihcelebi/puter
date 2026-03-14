@@ -1,208 +1,403 @@
-// ===============================
-// src/pages/AI/Chat1.tsx
-// Bu ekran, açılışta yalnızca chat modellerini worker üzerinden gösterir.
-// ===============================
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import AIStudioHeader from '../../components/AIStudioHeader';
-import {
-  fetchModelCatalog,
-  formatCredits,
-  formatUsd,
-  ModelCatalogItem,
-  ModelCatalogPayload,
-  priceToCredits,
-} from '../../lib/aiWorkers';
 
+const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
 const CHAT_MODEL_SESSION_KEY = 'nisai:selected-chat-model';
 
-type SectionTab = 'ozet' | 'filtreleme' | 'kredi' | 'kullanim' | 'fark';
-type AudienceFilter = 'all' | 'agency' | 'student' | 'enterprise';
-type FeatureFilter = 'all' | 'multimodal' | 'reasoning' | 'search' | 'speed';
+type SortKey =
+  | 'company_asc'
+  | 'name_asc'
+  | 'input_price_asc'
+  | 'speed_desc'
+  | 'speed_asc'
+  | 'params_desc';
 
-const SECTION_TABS: Array<{ key: SectionTab; label: string }> = [
-  { key: 'ozet', label: 'Model Özeti' },
-  { key: 'filtreleme', label: 'Filtreleme' },
-  { key: 'kredi', label: 'Kredi Mantığı' },
-  { key: 'kullanim', label: 'Kullanım Alanları' },
-  { key: 'fark', label: 'Farklar' },
-];
+type WorkerEnvelope<T> = {
+  ok: boolean;
+  code: string;
+  data: T;
+  error?: {
+    message?: string;
+  } | null;
+};
 
-function containsAny(haystack: string, needles: string[]) {
-  const normalized = haystack.toLocaleLowerCase('tr');
-  return needles.some((needle) => normalized.includes(needle));
+type ModelCatalogItem = {
+  id: string;
+  company: string;
+  provider: string;
+  modelName: string;
+  modelId: string;
+  categoryRaw: string;
+  badges: string[];
+  parameters: string;
+  speedLabel: string;
+  speedScore: number;
+  prices: {
+    input: number | null;
+    output: number | null;
+    image: number | null;
+  };
+  traits: string[];
+  standoutFeature: string;
+  useCase: string;
+  rivalAdvantage: string;
+  sourceUrl: string;
+  style: {
+    brandKey: string;
+    accent: string;
+  };
+};
+
+type ModelCatalogPayload = {
+  items: ModelCatalogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  facets: {
+    companies: string[];
+    badges: string[];
+    categories: string[];
+  };
+  source: {
+    type: string;
+    totalModels: number;
+    sourceUrl: string;
+  };
+  filters: {
+    search: string;
+    company: string;
+    badge: string;
+    category: string;
+    sort: SortKey;
+    modelId: string;
+  };
+};
+
+function SearchIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <circle cx="11" cy="11" r="6.5" stroke="#97A2BA" strokeWidth="2"></circle>
+      <path d="M16 16l4.2 4.2" stroke="#97A2BA" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
 }
 
-function filterByAudience(item: ModelCatalogItem, audience: AudienceFilter) {
-  if (audience === 'all') return true;
+function FilterCheckIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" fill="rgba(255,255,255,0.22)"></circle>
+      <path d="M8.8 12.1l2.1 2.2 4.3-4.8" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path>
+    </svg>
+  );
+}
 
-  const source = `${item.useCase} ${item.rivalAdvantage} ${item.standoutFeature}`.toLocaleLowerCase('tr');
+function ArrowRightIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path>
+    </svg>
+  );
+}
 
-  if (audience === 'agency') {
-    return containsAny(source, ['ajans', 'medya', 'içerik', 'reklam', 'kampanya', 'müşteri']);
+function GridLightIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="4" y="4" width="7" height="7" rx="1.5" fill="#cdd5e6"></rect>
+      <rect x="13" y="4" width="7" height="7" rx="1.5" fill="#dfe5f1"></rect>
+      <rect x="4" y="13" width="7" height="7" rx="1.5" fill="#dfe5f1"></rect>
+      <rect x="13" y="13" width="7" height="7" rx="1.5" fill="#cdd5e6"></rect>
+    </svg>
+  );
+}
+
+function GridDarkIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="7" rx="1.5" fill="#aeb8ce"></rect>
+      <rect x="14" y="3" width="7" height="7" rx="1.5" fill="#d5dced"></rect>
+      <rect x="3" y="14" width="7" height="7" rx="1.5" fill="#d5dced"></rect>
+      <rect x="14" y="14" width="7" height="7" rx="1.5" fill="#aeb8ce"></rect>
+    </svg>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="5" cy="12" r="2.2" fill="white"></circle>
+      <circle cx="12" cy="12" r="2.2" fill="white"></circle>
+      <circle cx="19" cy="12" r="2.2" fill="white"></circle>
+    </svg>
+  );
+}
+
+function ChevronDownWhite() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path>
+    </svg>
+  );
+}
+
+function ReasoningIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="#c1c9db" strokeWidth="2"></circle>
+      <path d="M12 7.4v5.1l3.1 1.8" stroke="#9eabc4" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function WebIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" stroke="#c1c9db" strokeWidth="2"></circle>
+      <path d="M3.5 12h17" stroke="#c1c9db" strokeWidth="2"></path>
+      <path d="M12 3.7c2.3 2.3 3.5 5.2 3.5 8.3s-1.2 6-3.5 8.3c-2.3-2.3-3.5-5.2-3.5-8.3s1.2-6 3.5-8.3z" stroke="#9eabc4" strokeWidth="2"></path>
+    </svg>
+  );
+}
+
+function FastSlowIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="#c1c9db" strokeWidth="2"></circle>
+      <path d="M12 8v4l3 2" stroke="#9eabc4" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function SlowFastIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="#c1c9db" strokeWidth="2"></circle>
+      <path d="M12 16v-4L9 10" stroke="#9eabc4" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function PriceIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 4v16M8 8c0-2.2 1.8-4 4-4s4 1.8 4 4-1.8 4-4 4-4 1.8-4 4 1.8 4 4 4 4-1.8 4-4" stroke="#a4afc6" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function ProviderIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="7" r="3.5" stroke="#c1c9db" strokeWidth="2"></circle>
+      <path d="M5 19c1.6-2.8 4-4.2 7-4.2s5.4 1.4 7 4.2" stroke="#9eabc4" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function NameIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 17L10.5 5h1.3L17 17M7.2 12.2h7.5" stroke="#a4afc6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path>
+    </svg>
+  );
+}
+
+function ParamsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 7h16M4 12h16M4 17h16" stroke="#a4afc6" strokeWidth="2" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+function parseParameterScore(parameters: string) {
+  if (!parameters) return 0;
+  const normalized = parameters.replace(/,/g, '.').toUpperCase();
+  const match = normalized.match(/(\d+(\.\d+)?)/);
+  if (!match) return 0;
+
+  const numeric = Number(match[1]);
+  if (!Number.isFinite(numeric)) return 0;
+
+  if (normalized.includes('T')) return numeric * 1_000_000;
+  if (normalized.includes('B')) return numeric * 1_000;
+  if (normalized.includes('M')) return numeric;
+  return numeric;
+}
+
+function containsAny(value: string, list: string[]) {
+  const lower = value.toLocaleLowerCase('tr');
+  return list.some((item) => lower.includes(item));
+}
+
+function isReasoningModel(model: ModelCatalogItem) {
+  const bag = [
+    model.categoryRaw,
+    model.standoutFeature,
+    model.useCase,
+    model.rivalAdvantage,
+    ...model.badges,
+    ...model.traits,
+  ].join(' ');
+  return containsAny(bag, ['reasoning', 'muhakeme', 'analiz', 'strateji', 'deep', 'derin']);
+}
+
+function isWebModel(model: ModelCatalogItem) {
+  const bag = [
+    model.categoryRaw,
+    model.standoutFeature,
+    model.useCase,
+    model.rivalAdvantage,
+    ...model.badges,
+    ...model.traits,
+  ].join(' ');
+  return containsAny(bag, ['arama', 'search', 'web', 'araştırma', 'güncel', 'internet']);
+}
+
+function extractTags(model: ModelCatalogItem) {
+  const tags: string[] = [];
+
+  for (const item of model.traits) {
+    const clean = String(item || '').trim();
+    if (clean && !tags.includes(clean)) tags.push(clean);
+    if (tags.length === 3) break;
   }
 
-  if (audience === 'student') {
-    return containsAny(source, ['öğrenci', 'eğitim', 'akademik', 'özet', 'öğren', 'araştırma']);
+  if (tags.length < 3) {
+    for (const item of model.badges) {
+      const clean = String(item || '').trim();
+      if (clean && !tags.includes(clean)) tags.push(clean);
+      if (tags.length === 3) break;
+    }
   }
 
-  return containsAny(source, ['kurumsal', 'enterprise', 'şirket', 'aws', 'compliance', 'ekip']);
+  return tags.slice(0, 3);
 }
 
-function filterByFeature(item: ModelCatalogItem, feature: FeatureFilter) {
-  if (feature === 'all') return true;
-
-  const source = `${item.categoryRaw} ${item.badges.join(' ')} ${item.traits.join(' ')} ${item.useCase}`.toLocaleLowerCase('tr');
-
-  if (feature === 'multimodal') return containsAny(source, ['multimodal', 'görsel', 'vision']);
-  if (feature === 'reasoning') return containsAny(source, ['reasoning', 'muhakeme', 'analiz', 'düşünce']);
-  if (feature === 'search') return containsAny(source, ['search', 'arama', 'araştırma', 'deep research']);
-  return item.speedScore >= 78;
-}
-
-function sortCatalog(items: ModelCatalogItem[], sort: string) {
+function sortItems(items: ModelCatalogItem[], sort: SortKey) {
   const cloned = [...items];
 
   switch (sort) {
     case 'input_price_asc':
       return cloned.sort((a, b) => (a.prices.input ?? Number.MAX_SAFE_INTEGER) - (b.prices.input ?? Number.MAX_SAFE_INTEGER));
-    case 'input_price_desc':
-      return cloned.sort((a, b) => (b.prices.input ?? -1) - (a.prices.input ?? -1));
     case 'speed_desc':
       return cloned.sort((a, b) => b.speedScore - a.speedScore);
+    case 'speed_asc':
+      return cloned.sort((a, b) => a.speedScore - b.speedScore);
     case 'name_asc':
       return cloned.sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr'));
+    case 'params_desc':
+      return cloned.sort((a, b) => parseParameterScore(b.parameters) - parseParameterScore(a.parameters));
+    case 'company_asc':
     default:
-      return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
+      return cloned.sort((a, b) => a.provider.localeCompare(b.provider, 'tr'));
   }
 }
 
-function findCheapestModel(items: ModelCatalogItem[]) {
-  return [...items]
-    .filter((item) => item.prices.input !== null)
-    .sort((a, b) => (a.prices.input ?? Number.MAX_SAFE_INTEGER) - (b.prices.input ?? Number.MAX_SAFE_INTEGER))[0] ?? null;
-}
+async function fetchModels(): Promise<ModelCatalogPayload> {
+  const url = new URL(MODEL_WORKER_URL);
+  url.searchParams.set('badge', 'CHAT');
+  url.searchParams.set('limit', '250');
+  url.searchParams.set('sort', 'company_asc');
 
-function findFastestModel(items: ModelCatalogItem[]) {
-  return [...items].sort((a, b) => b.speedScore - a.speedScore)[0] ?? null;
-}
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
 
-function buildInsightCopy(activeTab: SectionTab, activeModel: ModelCatalogItem | null, total: number) {
-  if (!activeModel) {
-    return {
-      title: 'Chat katalogu hazırlanıyor',
-      body: 'Sadece sohbet odaklı worker modelleri yüklenir; boş, hata ve filtre durumları görünür tutulur.',
-    };
+  const json = (await response.json()) as WorkerEnvelope<ModelCatalogPayload>;
+
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.error?.message || 'Model kataloğu yüklenemedi.');
   }
 
-  if (activeTab === 'filtreleme') {
-    return {
-      title: 'Tekli filtre mantığı',
-      body: `Bu ekran worker’dan yalnızca CHAT rozetli kayıtları alır. Ardından arama, sektör ve hız katmanı katalog üstünde uygulanır. Toplam görünür sonuç: ${total}.`,
-    };
-  }
-
-  if (activeTab === 'kredi') {
-    return {
-      title: 'Kredi mantığı',
-      body: `${activeModel.modelName} için girdi maliyeti ${formatCredits(activeModel.prices.input)} ve ${formatUsd(activeModel.prices.input)} seviyesinde gösterilir. Çıktı maliyeti de aynı kartta ayrı görünür.`,
-    };
-  }
-
-  if (activeTab === 'kullanim') {
-    return {
-      title: 'Kullanım alanı',
-      body: activeModel.useCase || 'Bu model için kullanım özeti worker verisinden gelir.',
-    };
-  }
-
-  return {
-    title: `${activeModel.company} • ${activeModel.modelName}`,
-    body: activeModel.rivalAdvantage || activeModel.standoutFeature || 'Karşılaştırma özeti hazır.',
-  };
+  return json.data;
 }
 
 export default function Chat1() {
   const navigate = useNavigate();
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
   const [catalog, setCatalog] = useState<ModelCatalogPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
+  const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [company, setCompany] = useState('ALL');
-  const [feature, setFeature] = useState<FeatureFilter>('all');
-  const [audience, setAudience] = useState<AudienceFilter>('all');
-  const [sort, setSort] = useState('speed_desc');
-  const [sectionTab, setSectionTab] = useState<SectionTab>('ozet');
-  const [previewModelId, setPreviewModelId] = useState<string>('');
+  const [menuOpen, setMenuOpen] = useState(true);
+  const [sort, setSort] = useState<SortKey>('company_asc');
+  const [filterMode, setFilterMode] = useState<'all' | 'reasoning' | 'web'>('all');
 
   useEffect(() => {
     let mounted = true;
 
-    const loadCatalog = async () => {
+    const run = async () => {
       try {
         setLoading(true);
         setError('');
-
-        const data = await fetchModelCatalog({
-          badge: 'CHAT',
-          limit: 250,
-          sort: 'company_asc',
-        });
-
+        const data = await fetchModels();
         if (!mounted) return;
-
         setCatalog(data);
-        setPreviewModelId(data.items[0]?.modelId ?? '');
-      } catch (loadError) {
+      } catch (err) {
         if (!mounted) return;
-        setError(loadError instanceof Error ? loadError.message : 'Model kataloğu yüklenemedi.');
+        setError(err instanceof Error ? err.message : 'Model kataloğu yüklenemedi.');
       } finally {
         if (mounted) setLoading(false);
       }
     };
 
-    loadCatalog();
+    run();
+
     return () => {
       mounted = false;
     };
   }, []);
 
-  const filteredModels = useMemo(() => {
-    if (!catalog) return [];
-
-    const base = catalog.items.filter((item) => {
-      const matchesSearch =
-        !search ||
-        [item.company, item.provider, item.modelName, item.modelId, item.useCase, item.rivalAdvantage, item.standoutFeature, ...item.traits]
-          .join(' ')
-          .toLocaleLowerCase('tr')
-          .includes(search.toLocaleLowerCase('tr'));
-
-      const matchesCompany = company === 'ALL' ? true : item.company === company;
-
-      return matchesSearch && matchesCompany && filterByAudience(item, audience) && filterByFeature(item, feature);
-    });
-
-    return sortCatalog(base, sort);
-  }, [catalog, search, company, audience, feature, sort]);
-
-  const previewModel =
-    filteredModels.find((item) => item.modelId === previewModelId) ??
-    filteredModels[0] ??
-    null;
-
-  const stats = useMemo(() => {
-    const cheapest = findCheapestModel(filteredModels);
-    const fastest = findFastestModel(filteredModels);
-
-    return {
-      total: filteredModels.length,
-      cheapest,
-      fastest,
+  useEffect(() => {
+    const onOutside = (event: MouseEvent) => {
+      if (!dropdownRef.current) return;
+      if (!dropdownRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
     };
-  }, [filteredModels]);
 
-  const insight = buildInsightCopy(sectionTab, previewModel, filteredModels.length);
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, []);
+
+  const visibleModels = useMemo(() => {
+    const base = catalog?.items ?? [];
+    let next = [...base];
+
+    if (filterMode === 'reasoning') {
+      next = next.sort((a, b) => Number(isReasoningModel(b)) - Number(isReasoningModel(a))).filter(isReasoningModel);
+    }
+
+    if (filterMode === 'web') {
+      next = next.filter(isWebModel);
+    }
+
+    next = sortItems(next, sort);
+
+    const q = search.trim().toLocaleLowerCase('tr');
+    if (!q) return next;
+
+    return next.filter((model) => {
+      const bag = [
+        model.provider,
+        model.company,
+        model.modelName,
+        model.modelId,
+        ...extractTags(model),
+      ]
+        .join(' ')
+        .toLocaleLowerCase('tr');
+
+      return bag.includes(q);
+    });
+  }, [catalog, filterMode, search, sort]);
+
+  const totalCount = catalog?.total ?? 0;
 
   const openChat = (model: ModelCatalogItem) => {
     sessionStorage.setItem(CHAT_MODEL_SESSION_KEY, JSON.stringify(model));
@@ -211,340 +406,641 @@ export default function Chat1() {
     });
   };
 
+  const setPriceFilter = () => {
+    setFilterMode('all');
+    setSort('input_price_asc');
+  };
+
+  const setSpeedFilter = () => {
+    setFilterMode('all');
+    setSort('speed_desc');
+  };
+
   return (
-    <div className="mx-auto flex max-w-[1440px] flex-col gap-6">
-      <AIStudioHeader searchValue={search} onSearchChange={setSearch} />
+    <>
+      <style>{`
+        :root {
+          --bg: #eef0f5;
+          --shell: #f6f7fb;
+          --card: #ffffff;
+          --line: #e4e8f0;
+          --line-2: #dfe4ee;
+          --text: #2a3553;
+          --muted: #8e98af;
+          --blue: #5a97ea;
+          --blue-2: #7fb1f2;
+          --blue-soft: #edf4ff;
+          --pill: #eef2f8;
+          --green-bg: #e8f4ee;
+          --green: #3f8e72;
+          --shadow: 0 6px 18px rgba(33, 52, 88, 0.04);
+          --radius-xl: 22px;
+          --radius-lg: 18px;
+          --radius-md: 14px;
+          --radius-sm: 12px;
+        }
 
-      <div className="overflow-hidden rounded-[30px] border border-white/10 bg-[#05070f] text-white">
-        <div className="flex flex-wrap gap-2 border-b border-white/5 px-5 py-4 md:px-7">
-          {SECTION_TABS.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setSectionTab(tab.key)}
-              className={[
-                'rounded-2xl border px-4 py-2 text-sm font-semibold transition',
-                sectionTab === tab.key
-                  ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
-                  : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20 hover:text-white',
-              ].join(' ')}
-            >
-              {tab.label}
+        * { box-sizing: border-box; }
+
+        .chat1-page {
+          margin: 0;
+          min-height: 100vh;
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          background: linear-gradient(180deg, #f0f1f5 0%, #eceef3 100%);
+          color: var(--text);
+          padding: 52px 28px;
+        }
+
+        .app {
+          max-width: 1190px;
+          margin: 0 auto;
+          background: var(--shell);
+          border: 1px solid #e5e9f1;
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow: var(--shadow);
+        }
+
+        .topbar {
+          height: 100px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0 22px;
+          background: rgba(255,255,255,0.5);
+          border-bottom: 1px solid var(--line);
+        }
+
+        .brand {
+          font-size: 30px;
+          font-weight: 800;
+          letter-spacing: 0.3px;
+          color: #2b3552;
+        }
+
+        .nav {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-left: 10px;
+          flex: 1;
+          justify-content: center;
+        }
+
+        .nav a {
+          text-decoration: none;
+          color: #46506b;
+          font-size: 16px;
+          font-weight: 600;
+          padding: 12px 16px;
+          border-radius: 999px;
+        }
+
+        .nav a.active {
+          color: #314b85;
+          background: #edf3ff;
+          box-shadow: inset 0 0 0 1px #dce7fb;
+        }
+
+        .status {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          border-radius: 999px;
+          padding: 12px 18px;
+          font-weight: 700;
+          color: var(--green);
+          background: var(--green-bg);
+          font-size: 14px;
+          white-space: nowrap;
+        }
+
+        .status::before {
+          content: "";
+          width: 11px;
+          height: 11px;
+          border-radius: 999px;
+          background: #2e9b84;
+          box-shadow: 0 0 0 3px rgba(46, 155, 132, 0.12);
+        }
+
+        .search-row,
+        .filter-row {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          padding: 16px 22px;
+          border-bottom: 1px solid var(--line);
+          background: rgba(255,255,255,0.28);
+        }
+
+        .filter-button {
+          flex: 0 0 202px;
+          height: 44px;
+          border: none;
+          border-radius: 999px;
+          background: linear-gradient(180deg, #62a1f1 0%, #4f8fe6 100%);
+          color: white;
+          font-size: 17px;
+          font-weight: 700;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 11px;
+          box-shadow: 0 8px 18px rgba(85, 145, 233, 0.2);
+          cursor: pointer;
+        }
+
+        .filter-button svg,
+        .menu-button svg,
+        .search-box svg,
+        .quick-item svg,
+        .dropdown-item svg {
+          flex: 0 0 auto;
+        }
+
+        .search-box {
+          flex: 1;
+          height: 46px;
+          border: 1px solid var(--line-2);
+          border-radius: 999px;
+          background: #f8f9fc;
+          display: flex;
+          align-items: center;
+          padding: 0 18px 0 20px;
+          gap: 14px;
+        }
+
+        .search-box input {
+          flex: 1;
+          border: none;
+          outline: none;
+          background: transparent;
+          font-size: 16px;
+          color: var(--text);
+        }
+
+        .search-box input::placeholder {
+          color: #a0a8bb;
+          font-weight: 500;
+        }
+
+        .filter-surface {
+          position: relative;
+          width: 100%;
+          min-height: 58px;
+          border: 1px solid var(--line-2);
+          border-radius: 17px;
+          background: rgba(255,255,255,0.52);
+          display: flex;
+          align-items: center;
+          padding: 8px 12px;
+          gap: 0;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+        }
+
+        .quick-item,
+        .menu-button {
+          height: 40px;
+          border: none;
+          background: transparent;
+          color: #4c5877;
+          font-size: 17px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          gap: 12px;
+          padding: 0 16px;
+          border-radius: 12px;
+          cursor: pointer;
+        }
+
+        .quick-divider {
+          width: 1px;
+          height: 28px;
+          background: var(--line-2);
+          margin: 0 6px;
+        }
+
+        .menu-button {
+          margin-left: auto;
+          background: linear-gradient(180deg, #62a1f1 0%, #4f8fe6 100%);
+          color: white;
+          padding: 0 18px;
+          border-radius: 999px;
+          box-shadow: 0 8px 18px rgba(85, 145, 233, 0.18);
+        }
+
+        .dropdown {
+          position: absolute;
+          top: calc(100% + 8px);
+          right: 18px;
+          width: 290px;
+          background: #ffffff;
+          border: 1px solid var(--line);
+          border-radius: 16px;
+          box-shadow: 0 18px 44px rgba(35, 52, 84, 0.14);
+          padding: 10px 0;
+          display: none;
+          z-index: 20;
+        }
+
+        .dropdown.open { display: block; }
+
+        .dropdown-item {
+          width: 100%;
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 11px 16px;
+          background: transparent;
+          border: none;
+          text-align: left;
+          color: #4c5877;
+          font-size: 15px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+
+        .dropdown-item:hover {
+          background: #f6f8fc;
+        }
+
+        .dropdown-divider {
+          height: 1px;
+          background: var(--line);
+          margin: 8px 16px;
+        }
+
+        .content {
+          padding: 18px 22px 28px;
+        }
+
+        .count {
+          color: #8c95ab;
+          font-size: 16px;
+          font-weight: 600;
+          margin: 8px 0 18px 8px;
+          letter-spacing: 0.2px;
+        }
+
+        .grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 14px;
+        }
+
+        .model-card {
+          position: relative;
+          background: var(--card);
+          border: 1px solid #e8ebf2;
+          border-radius: 20px;
+          min-height: 162px;
+          padding: 20px 18px 18px 18px;
+          box-shadow: 0 6px 14px rgba(43, 61, 99, 0.03);
+          transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        }
+
+        .model-card:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 10px 24px rgba(43, 61, 99, 0.08);
+          border-color: #dbe3f0;
+        }
+
+        .provider {
+          color: #8c96b0;
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 2px;
+          margin-bottom: 10px;
+          text-transform: uppercase;
+        }
+
+        .model-name {
+          font-size: 21px;
+          line-height: 1.2;
+          font-weight: 500;
+          color: #283452;
+          margin: 0 0 18px;
+          letter-spacing: -0.02em;
+        }
+
+        .tag-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          row-gap: 8px;
+          width: calc(100% - 112px);
+          max-width: calc(100% - 112px);
+        }
+
+        .chat-link {
+          position: absolute;
+          right: 18px;
+          bottom: 18px;
+          z-index: 3;
+          min-width: 92px;
+          height: 32px;
+          padding: 0 14px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          color: #ffffff;
+          text-decoration: none;
+          text-transform: uppercase;
+          background: #111111;
+          border-radius: 999px;
+          white-space: nowrap;
+          border: none;
+          cursor: pointer;
+        }
+
+        .chat-link:hover {
+          color: #ffffff;
+          background: #000000;
+        }
+
+        .tag {
+          height: 30px;
+          padding: 0 14px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          font-size: 13px;
+          font-weight: 600;
+          color: #818ba3;
+          background: #eff2f7;
+          white-space: nowrap;
+        }
+
+        .tag.primary {
+          background: linear-gradient(180deg, #8ab6f3 0%, #73a5ef 100%);
+          color: white;
+        }
+
+        .state-card {
+          min-height: 162px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 24px;
+          line-height: 1.6;
+          color: #6d7892;
+          font-size: 15px;
+        }
+
+        .hidden { display: none !important; }
+
+        @media (max-width: 1100px) {
+          .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .nav { gap: 4px; }
+          .nav a { padding: 10px 12px; font-size: 15px; }
+        }
+
+        @media (max-width: 820px) {
+          .chat1-page { padding: 20px 12px; }
+          .topbar,
+          .search-row,
+          .filter-row,
+          .content { padding-left: 14px; padding-right: 14px; }
+          .topbar {
+            height: auto;
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 14px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+          }
+          .nav {
+            width: 100%;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+          }
+          .search-row { flex-direction: column; align-items: stretch; }
+          .filter-button { flex: none; width: 100%; }
+          .filter-row { padding-top: 14px; padding-bottom: 14px; }
+          .filter-surface {
+            overflow-x: auto;
+            overflow-y: visible;
+          }
+          .grid { grid-template-columns: 1fr; }
+          .dropdown {
+            right: 8px;
+            width: min(290px, calc(100vw - 56px));
+          }
+        }
+      `}</style>
+
+      <div className="chat1-page">
+        <div className="app">
+          <header className="topbar">
+            <div className="brand">NISAI</div>
+
+            <nav className="nav" aria-label="Ana menü">
+              <a href="#" className="active">Sohbet</a>
+              <a href="#">Görsel Üretim</a>
+              <a href="#">Video</a>
+              <a href="#">Ses (TTS)</a>
+            </nav>
+
+            <div className="status">Sistem çevrimiçi</div>
+          </header>
+
+          <section className="search-row">
+            <button className="filter-button" type="button" onClick={() => {
+              setFilterMode('all');
+              setSort('company_asc');
+              setSearch('');
+            }}>
+              <FilterCheckIcon />
+              Hızlı Filtreler
+              <ArrowRightIcon />
             </button>
-          ))}
-        </div>
 
-        <div className="grid gap-6 border-b border-white/5 px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:px-7">
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
-                Tekli filtre
-              </span>
-              <button className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">
-                Çoklu filtre
+            <label className="search-box" aria-label="Model ara">
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                type="text"
+                placeholder="Özellik, kullanım, avantaj veya model ara..."
+              />
+              <SearchIcon />
+            </label>
+          </section>
+
+          <section className="filter-row">
+            <div ref={dropdownRef} className="filter-surface">
+              <button className="quick-item" type="button" onClick={setPriceFilter}>
+                <GridLightIcon />
+                Fiyata Göre Filtrele
               </button>
-            </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Hizmet sınıfı</div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-sm font-semibold text-emerald-300">
-                    Tümü
-                  </button>
-                  <button className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white">
-                    Chat
-                  </button>
-                </div>
-              </div>
+              <div className="quick-divider"></div>
 
-              <div>
-                <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Özellik</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { key: 'all', label: 'Tümü' },
-                    { key: 'multimodal', label: 'Görsel' },
-                    { key: 'reasoning', label: 'Muhakeme' },
-                    { key: 'search', label: 'Arama' },
-                    { key: 'speed', label: 'Hıza göre' },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      onClick={() => setFeature(item.key as FeatureFilter)}
-                      className={[
-                        'rounded-full border px-4 py-2 text-sm font-semibold transition',
-                        feature === item.key
-                          ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-300'
-                          : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white',
-                      ].join(' ')}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <button className="quick-item" type="button" onClick={setSpeedFilter}>
+                <GridDarkIcon />
+                Hıza Göre Filtrele
+              </button>
 
-              <div>
-                <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Sektör</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { key: 'all', label: 'Tümü' },
-                    { key: 'agency', label: 'Ajanslar için' },
-                    { key: 'student', label: 'Öğrenciler için' },
-                    { key: 'enterprise', label: 'Kurumsal' },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      onClick={() => setAudience(item.key as AudienceFilter)}
-                      className={[
-                        'rounded-full border px-4 py-2 text-sm font-semibold transition',
-                        audience === item.key
-                          ? 'border-lime-400/30 bg-lime-400/10 text-lime-300'
-                          : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white',
-                      ].join(' ')}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <div className="quick-divider"></div>
 
-              <div>
-                <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Fiyat</div>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { key: 'speed_desc', label: 'Hızlıdan yavaşa' },
-                    { key: 'input_price_asc', label: 'Kredi artan' },
-                    { key: 'input_price_desc', label: 'Kredi azalan' },
-                    { key: 'name_asc', label: 'Ada göre' },
-                  ].map((item) => (
-                    <button
-                      key={item.key}
-                      onClick={() => setSort(item.key)}
-                      className={[
-                        'rounded-full border px-4 py-2 text-sm font-semibold transition',
-                        sort === item.key
-                          ? 'border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-300'
-                          : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:text-white',
-                      ].join(' ')}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+              <button
+                className="menu-button"
+                type="button"
+                aria-expanded={menuOpen}
+                aria-controls="advancedDropdown"
+                onClick={() => setMenuOpen((prev) => !prev)}
+              >
+                <DotsIcon />
+                Gelişmiş Filtreler
+                <ChevronDownWhite />
+              </button>
 
-            <div className="mt-5 flex flex-wrap gap-2 text-xs text-zinc-400">
-              <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
-                {filteredModels.length} / {catalog?.total ?? 0} model
-              </span>
-              {company !== 'ALL' && (
-                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-emerald-300">
-                  Şirket: {company}
-                </span>
-              )}
-              {feature !== 'all' && (
-                <span className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-cyan-300">
-                  Özellik: {feature}
-                </span>
-              )}
-              {audience !== 'all' && (
-                <span className="rounded-full border border-lime-400/20 bg-lime-400/10 px-3 py-1 text-lime-300">
-                  Sektör: {audience}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-[24px] border border-white/10 bg-[#0a0f1d] p-5">
-            <div className="mb-3 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Anlık bakış</div>
-            <h2 className="text-2xl font-black tracking-tight">{insight.title}</h2>
-            <p className="mt-3 text-sm leading-7 text-zinc-300">{insight.body}</p>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Görünen model</div>
-                <div className="mt-2 text-2xl font-black">{stats.total}</div>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">En hızlı</div>
-                <div className="mt-2 text-sm font-semibold text-white">
-                  {stats.fastest ? stats.fastest.modelName : '-'}
-                </div>
-                <div className="mt-1 text-xs text-zinc-400">
-                  {stats.fastest ? stats.fastest.speedLabel : 'Yok'}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <div className="text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">En düşük giriş</div>
-                <div className="mt-2 text-sm font-semibold text-white">
-                  {stats.cheapest ? stats.cheapest.modelName : '-'}
-                </div>
-                <div className="mt-1 text-xs text-zinc-400">
-                  {stats.cheapest ? formatCredits(stats.cheapest.prices.input) : 'Yok'}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-zinc-500">Şirket</div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setCompany('ALL')}
-                  className={[
-                    'rounded-full border px-3 py-1.5 text-sm font-semibold transition',
-                    company === 'ALL'
-                      ? 'border-white/20 bg-white/[0.08] text-white'
-                      : 'border-white/10 bg-white/[0.03] text-zinc-300',
-                  ].join(' ')}
-                >
-                  Tümü
+              <div id="advancedDropdown" className={`dropdown ${menuOpen ? 'open' : ''}`} role="menu">
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('reasoning');
+                  setMenuOpen(false);
+                }}>
+                  <ReasoningIcon />
+                  Muhakeme Gücüne Göre
                 </button>
-                {(catalog?.facets.companies ?? []).slice(0, 12).map((companyName) => (
-                  <button
-                    key={companyName}
-                    onClick={() => setCompany(companyName)}
-                    className={[
-                      'rounded-full border px-3 py-1.5 text-sm font-semibold transition',
-                      company === companyName
-                        ? 'border-white/20 bg-white/[0.08] text-white'
-                        : 'border-white/10 bg-white/[0.03] text-zinc-300',
-                    ].join(' ')}
-                  >
-                    {companyName}
-                  </button>
-                ))}
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('web');
+                  setMenuOpen(false);
+                }}>
+                  <WebIcon />
+                  İnternette Arama Yeteneğine Göre
+                </button>
+
+                <div className="dropdown-divider"></div>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('speed_desc');
+                  setMenuOpen(false);
+                }}>
+                  <FastSlowIcon />
+                  Hızlıdan Yavaşa
+                </button>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('speed_asc');
+                  setMenuOpen(false);
+                }}>
+                  <SlowFastIcon />
+                  Yavaştan Hızlıya
+                </button>
+
+                <div className="dropdown-divider"></div>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('input_price_asc');
+                  setMenuOpen(false);
+                }}>
+                  <PriceIcon />
+                  Fiyata Göre
+                </button>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('company_asc');
+                  setMenuOpen(false);
+                }}>
+                  <ProviderIcon />
+                  Sağlayıcı Firmaya Göre
+                </button>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('name_asc');
+                  setMenuOpen(false);
+                }}>
+                  <NameIcon />
+                  Ada Göre
+                </button>
+
+                <div className="dropdown-divider"></div>
+
+                <button className="dropdown-item" type="button" onClick={() => {
+                  setFilterMode('all');
+                  setSort('params_desc');
+                  setMenuOpen(false);
+                }}>
+                  <ParamsIcon />
+                  Parametre Sayısına Göre
+                </button>
               </div>
             </div>
-          </div>
-        </div>
+          </section>
 
-        <div className="px-5 py-5 md:px-7">
-          {loading && (
-            <div className="grid gap-4 lg:grid-cols-3">
-              {Array.from({ length: 6 }).map((_, index) => (
-                <div key={index} className="h-[340px] animate-pulse rounded-[24px] border border-white/10 bg-white/[0.03]" />
-              ))}
+          <main className="content">
+            <div className="count">
+              {loading
+                ? 'Yükleniyor...'
+                : error
+                ? '0 / 0 model'
+                : `${visibleModels.length} / ${totalCount} model`}
             </div>
-          )}
 
-          {!loading && error && (
-            <div className="rounded-[24px] border border-red-400/20 bg-red-400/10 p-6 text-red-200">
-              <div className="text-lg font-bold">Model kataloğu yüklenemedi</div>
-              <p className="mt-2 text-sm leading-7">{error}</p>
-            </div>
-          )}
+            <section className="grid">
+              {loading &&
+                Array.from({ length: 9 }).map((_, index) => (
+                  <article key={index} className="model-card" aria-hidden="true">
+                    <div className="provider">YÜKLENİYOR</div>
+                    <h3 className="model-name">Model yükleniyor...</h3>
+                    <div className="tag-row">
+                      <span className="tag primary">Yükleniyor</span>
+                      <span className="tag">Yükleniyor</span>
+                      <span className="tag">Yükleniyor</span>
+                    </div>
+                  </article>
+                ))}
 
-          {!loading && !error && filteredModels.length === 0 && (
-            <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-8 text-center">
-              <div className="text-xl font-bold text-white">Eşleşen sohbet modeli bulunamadı</div>
-              <p className="mt-3 text-sm leading-7 text-zinc-400">
-                Arama veya filtreleri sadeleştir. Katalog yalnızca CHAT rozetli worker kayıtlarını gösterir.
-              </p>
-            </div>
-          )}
+              {!loading && error && (
+                <article className="model-card state-card">
+                  {error}
+                </article>
+              )}
 
-          {!loading && !error && filteredModels.length > 0 && (
-            <div className="grid gap-5 xl:grid-cols-3">
-              {filteredModels.map((model) => {
-                const inputCredits = priceToCredits(model.prices.input);
-                const outputCredits = priceToCredits(model.prices.output);
-                const isPreview = previewModel?.modelId === model.modelId;
+              {!loading && !error && visibleModels.length === 0 && (
+                <article className="model-card state-card">
+                  Aramana uygun model bulunamadı.
+                </article>
+              )}
+
+              {!loading && !error && visibleModels.map((model) => {
+                const tags = extractTags(model);
 
                 return (
-                  <button
-                    key={model.modelId}
-                    type="button"
-                    onClick={() => openChat(model)}
-                    onMouseEnter={() => setPreviewModelId(model.modelId)}
-                    className={[
-                      'group text-left overflow-hidden rounded-[26px] border p-5 transition-all',
-                      isPreview
-                        ? 'border-white/20 bg-white/[0.06] shadow-[0_24px_80px_-36px_rgba(255,255,255,0.25)]'
-                        : 'border-white/10 bg-[#0a0f1d] hover:border-white/20 hover:bg-white/[0.04]',
-                    ].join(' ')}
-                    style={{
-                      boxShadow: isPreview ? `0 24px 80px -40px ${model.style.accent}55` : undefined,
-                    }}
-                  >
-                    <div className="mb-4 flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-[11px] font-bold uppercase tracking-[0.24em]" style={{ color: model.style.accent }}>
-                          {model.company}
-                        </div>
-                        <div className="mt-2 text-2xl font-black tracking-tight text-white">{model.modelName}</div>
-                        <div className="mt-2 text-xs text-zinc-500">{model.modelId}</div>
-                      </div>
+                  <article key={model.modelId} className="model-card" data-provider={model.provider} data-name={model.modelName}>
+                    <div className="provider">{(model.provider || model.company).toUpperCase()}</div>
+                    <h3 className="model-name">{model.modelName}</h3>
 
-                      <div className="rounded-xl border px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em]" style={{ borderColor: `${model.style.accent}55`, color: model.style.accent }}>
-                        {model.categoryRaw.replace('LLM / ', '')}
-                      </div>
-                    </div>
-
-                    <div className="mb-4 flex flex-wrap gap-2">
-                      {model.badges.slice(0, 3).map((badge) => (
-                        <span
-                          key={badge}
-                          className="rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em]"
-                          style={{ borderColor: `${model.style.accent}40`, color: model.style.accent }}
-                        >
-                          {badge}
-                        </span>
-                      ))}
-                      <span className="rounded-full border border-white/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-300">
-                        {model.speedLabel}
-                      </span>
-                    </div>
-
-                    <div className="space-y-3 border-y border-white/5 py-4 text-sm text-zinc-300">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-1 h-1.5 w-1.5 rounded-full" style={{ backgroundColor: model.style.accent }} />
-                        <span>{model.standoutFeature}</span>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <span className="mt-1 h-1.5 w-1.5 rounded-full bg-cyan-300" />
-                        <span>{model.useCase}</span>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <span className="mt-1 h-1.5 w-1.5 rounded-full bg-fuchsia-300" />
-                        <span>{model.rivalAdvantage}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Giriş</div>
-                        <div className="mt-2 text-xl font-black text-white">{inputCredits !== null ? `${inputCredits} kr` : '-'}</div>
-                        <div className="mt-1 text-xs text-zinc-400">{formatUsd(model.prices.input)} / 1M token</div>
-                      </div>
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-500">Çıkış</div>
-                        <div className="mt-2 text-xl font-black text-white">{outputCredits !== null ? `${outputCredits} kr` : '-'}</div>
-                        <div className="mt-1 text-xs text-zinc-400">{formatUsd(model.prices.output)} / 1M token</div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {model.traits.slice(0, 3).map((trait) => (
-                        <span key={trait} className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-zinc-300">
-                          {trait}
+                    <div className="tag-row">
+                      {tags.map((tag, index) => (
+                        <span key={`${model.modelId}-${tag}-${index}`} className={`tag ${index === 0 ? 'primary' : ''}`}>
+                          {tag}
                         </span>
                       ))}
                     </div>
 
-                    <div className="mt-5 flex items-center justify-between">
-                      <div className="text-xs text-zinc-500">Parametre: {model.parameters}</div>
-                      <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-300 transition group-hover:bg-emerald-400/15">
-                        Sohbete geç
-                      </span>
-                    </div>
-                  </button>
+                    <button type="button" className="chat-link" onClick={() => openChat(model)}>
+                      SOHBET ET
+                    </button>
+                  </article>
                 );
               })}
-            </div>
-          )}
+            </section>
+          </main>
         </div>
       </div>
-    </div>
+    </>
   );
 }
