@@ -1,42 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import toast from 'react-hot-toast';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import AILayout from '../../components/AILayout';
+import toast from 'react-hot-toast';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
-const IMAGE_WORKER_ENDPOINTS = ['/api/ai/image/generate', '/api/ai/image'];
-
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
-
-type ImageLocationState = {
-  selectedModel?: ModelCatalogItem;
-};
 
 type SortKey = 'price-asc' | 'price-desc' | 'fast' | 'quality' | 'photo' | 'type' | 'edit';
 type RatioKey = '1:1' | '16:9' | '9:16' | '4:3';
 type StyleKey = 'Cizim' | 'Gercekci' | 'Anime' | 'Yagli Boya' | 'Piksel Sanati' | '3D' | 'Antik';
-
-type AttachmentItem = {
-  id: string;
-  name: string;
-  file: File;
-};
-
-type GridCard = {
-  id: string;
-  src: string;
-  alt: string;
-  overlay: string;
-};
-
-type ImageResultPayload = {
-  url?: string;
-  urls?: string[];
-  images?: Array<{ url?: string }>;
-  assetId?: string;
-  requestId?: string;
-  modelId?: string;
-};
 
 type WorkerEnvelope<T> = {
   ok: boolean;
@@ -44,8 +17,6 @@ type WorkerEnvelope<T> = {
   data: T;
   error?: {
     message?: string;
-    retryable?: boolean;
-    details?: unknown;
   } | null;
 };
 
@@ -82,11 +53,59 @@ type ModelCatalogPayload = {
   limit: number;
   offset: number;
   hasMore: boolean;
-  facets?: {
+  facets: {
     companies: string[];
     badges: string[];
     categories: string[];
   };
+  source: {
+    type: string;
+    totalModels: number;
+    sourceUrl: string;
+  };
+  filters: {
+    search: string;
+    company: string;
+    badge: string;
+    category: string;
+    sort: string;
+    modelId: string;
+  };
+};
+
+type AttachmentItem = {
+  id: string;
+  name: string;
+  file: File;
+};
+
+type GridCard = {
+  id: string;
+  src: string;
+  alt: string;
+  overlay: string;
+};
+
+type ImageLocationState = {
+  selectedModel?: ModelCatalogItem;
+};
+
+type ImageResultPayload = {
+  url?: string;
+  urls?: string[];
+  images?: Array<{ url?: string }>;
+  data?: {
+    url?: string;
+    urls?: string[];
+    images?: Array<{ url?: string }>;
+  };
+  assetId?: string;
+  requestId?: string;
+  modelId?: string;
+  error?: {
+    message?: string;
+  } | null;
+  message?: string;
 };
 
 declare global {
@@ -96,33 +115,6 @@ declare global {
   }
 }
 
-const PAGE_DATA: Record<number, string[]> = {
-  1: [
-    'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1518791841217-8f162f1e1131?auto=format&fit=crop&w=900&q=80',
-  ],
-  2: [
-    'https://images.unsplash.com/photo-1511300636408-a63a89df3482?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1504208434309-cb69f4fe52b0?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=900&q=80',
-  ],
-  3: [
-    'https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1516574187841-cb9cc2ca948b?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1473773508845-188df298d2d1?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=900&q=80',
-  ],
-  4: [
-    'https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=900&q=80',
-    'https://images.unsplash.com/photo-1502082553048-f009c37129b9?auto=format&fit=crop&w=900&q=80',
-  ],
-};
-
 const SUGGESTIONS = [
   'Bir dağ köyünü sabahın erken saatlerinde çiz.',
   'Steampunk tarzında bir robot kedi tasarla.',
@@ -131,6 +123,20 @@ const SUGGESTIONS = [
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function lower(value: string | null | undefined) {
+  return String(value || '').toLocaleLowerCase('tr');
+}
+
+function formatCredits(value: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return `${value.toLocaleString('tr-TR', { maximumFractionDigits: 4 })} kredi`;
+}
+
+function formatUsd(value: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return `$${value.toLocaleString('en-US', { maximumFractionDigits: 4 })}`;
 }
 
 function bagOfModel(model: ModelCatalogItem) {
@@ -151,37 +157,9 @@ function bagOfModel(model: ModelCatalogItem) {
 }
 
 function isImageModel(model: ModelCatalogItem) {
-  const bag = bagOfModel(model);
-  return (
-    bag.includes('image generation') ||
-    bag.includes('görsel') ||
-    bag.includes('txt2img') ||
-    bag.includes('image') ||
-    model.prices.image !== null
-  );
-}
-
-function pickInitialImageModel(
-  allItems: ModelCatalogItem[],
-  initialModelId: string,
-  selectedModel?: ModelCatalogItem,
-) {
-  const filtered = allItems.filter(isImageModel);
-
-  if (selectedModel && isImageModel(selectedModel)) {
-    const matchFromState = filtered.find((item) => item.modelId === selectedModel.modelId);
-    if (matchFromState) return matchFromState;
-  }
-
-  if (initialModelId) {
-    const matchFromQuery = filtered.find((item) => item.modelId === initialModelId || item.id === initialModelId);
-    if (matchFromQuery) return matchFromQuery;
-  }
-
-  const matchFromSession = cleanStoredModel(filtered);
-  if (matchFromSession) return matchFromSession;
-
-  return filtered[0] ?? null;
+  const category = lower(model.categoryRaw);
+  const badges = (model.badges || []).map((item) => lower(item));
+  return category.includes('image generation') || badges.includes('görsel') || model.prices.image !== null;
 }
 
 function parseModelStrengthScore(model: ModelCatalogItem) {
@@ -241,13 +219,53 @@ function sortImageModels(items: ModelCatalogItem[], sort: SortKey) {
   }
 }
 
-function buildBaseCards(page: number): GridCard[] {
-  const images = PAGE_DATA[page] || PAGE_DATA[1];
-  return images.map((src, index) => ({
-    id: `sample_${page}_${index + 1}`,
-    src,
-    alt: `Ornek gorsel ${page}-${index + 1}`,
-    overlay: 'Daha fazla',
+function getStoredModelId() {
+  try {
+    const raw = sessionStorage.getItem(IMAGE_MODEL_SESSION_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as Partial<ModelCatalogItem> | string;
+    if (typeof parsed === 'string') return parsed;
+    return String(parsed.modelId || parsed.id || '');
+  } catch {
+    return '';
+  }
+}
+
+function setStoredModel(model: ModelCatalogItem | null) {
+  if (!model) {
+    sessionStorage.removeItem(IMAGE_MODEL_SESSION_KEY);
+    return;
+  }
+  sessionStorage.setItem(IMAGE_MODEL_SESSION_KEY, JSON.stringify(model));
+}
+
+function pickInitialImageModel(
+  items: ModelCatalogItem[],
+  options: {
+    stateModelId?: string;
+    queryModelId?: string;
+  },
+) {
+  const candidates = [
+    options.stateModelId,
+    options.queryModelId,
+    getStoredModelId(),
+  ].filter(Boolean) as string[];
+
+  for (const candidate of candidates) {
+    const match = items.find((item) => item.modelId === candidate || item.id === candidate);
+    if (match) return match;
+  }
+
+  return items[0] ?? null;
+}
+
+function buildEmptyCards(page: number, overlay: string): GridCard[] {
+  return Array.from({ length: 4 }).map((_, index) => ({
+    id: `empty_${page}_${index + 1}`,
+    src: '',
+    alt: `Bos sonuc ${page}-${index + 1}`,
+    overlay,
   }));
 }
 
@@ -255,24 +273,138 @@ function extractImageUrls(result: ImageResultPayload | null | undefined) {
   if (!result) return [] as string[];
 
   const urls = new Set<string>();
+  const sources = [result, result.data].filter(Boolean) as Array<ImageResultPayload['data'] | ImageResultPayload>;
 
-  if (typeof result.url === 'string' && result.url.trim()) {
-    urls.add(result.url.trim());
-  }
-
-  if (Array.isArray(result.urls)) {
-    for (const item of result.urls) {
-      if (typeof item === 'string' && item.trim()) urls.add(item.trim());
+  for (const source of sources) {
+    if (typeof source?.url === 'string' && source.url.trim()) urls.add(source.url.trim());
+    if (Array.isArray(source?.urls)) {
+      for (const item of source.urls) {
+        if (typeof item === 'string' && item.trim()) urls.add(item.trim());
+      }
     }
-  }
-
-  if (Array.isArray(result.images)) {
-    for (const item of result.images) {
-      if (item && typeof item.url === 'string' && item.url.trim()) urls.add(item.url.trim());
+    if (Array.isArray(source?.images)) {
+      for (const item of source.images) {
+        if (item && typeof item.url === 'string' && item.url.trim()) urls.add(item.url.trim());
+      }
     }
   }
 
   return [...urls];
+}
+
+async function fetchImageModels(): Promise<ModelCatalogItem[]> {
+  const attempts = [
+    { badge: 'GÖRSEL', category: 'Image generation', sort: 'company_asc' },
+    { badge: 'GÖRSEL', sort: 'company_asc' },
+    { category: 'Image generation', sort: 'company_asc' },
+    { sort: 'company_asc' },
+  ];
+
+  let lastError = 'Model kataloğu yüklenemedi.';
+
+  for (const params of attempts) {
+    const url = new URL(MODEL_WORKER_URL);
+    url.searchParams.set('limit', '250');
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) url.searchParams.set(key, value);
+    });
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const json = (await response.json()) as WorkerEnvelope<ModelCatalogPayload>;
+      if (!response.ok || !json?.ok) {
+        lastError = json?.error?.message || 'Model kataloğu yüklenemedi.';
+        continue;
+      }
+
+      const filtered = (json.data?.items || []).filter(isImageModel);
+      if (filtered.length > 0) return filtered;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Model kataloğu yüklenemedi.';
+    }
+  }
+
+  throw new Error(lastError);
+}
+
+async function requestImageGeneration(args: {
+  prompt: string;
+  modelId: string;
+  style: StyleKey;
+  ratio: RatioKey;
+  attachments: AttachmentItem[];
+}) {
+  const { prompt, modelId, style, ratio, attachments } = args;
+  const clientRequestId = createId('image');
+
+  const meta = {
+    source: 'ImageGen.tsx',
+    page: 'gorsel',
+    style,
+    ratio,
+  };
+
+  let response: Response;
+
+  if (attachments.length > 0) {
+    const formData = new FormData();
+    formData.append('prompt', prompt);
+    formData.append('model', modelId);
+    formData.append('modelId', modelId);
+    formData.append('clientRequestId', clientRequestId);
+    formData.append('style', style);
+    formData.append('ratio', ratio);
+    formData.append('meta', JSON.stringify(meta));
+    attachments.forEach((item) => {
+      formData.append('files', item.file, item.name);
+    });
+
+    response = await fetch('/api/ai/image', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+  } else {
+    response = await fetch('/api/ai/image', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        prompt,
+        model: modelId,
+        modelId,
+        clientRequestId,
+        style,
+        ratio,
+        meta,
+      }),
+    });
+  }
+
+  const text = await response.text();
+  let json: ImageResultPayload | null = null;
+
+  try {
+    json = text ? (JSON.parse(text) as ImageResultPayload) : null;
+  } catch {
+    json = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(json?.error?.message || json?.message || text || 'Görsel üretimi başarısız oldu.');
+  }
+
+  if (!json) {
+    throw new Error('Görsel üretimi boş yanıt döndürdü.');
+  }
+
+  return json;
 }
 
 export default function ImageGen() {
@@ -280,25 +412,37 @@ export default function ImageGen() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  
+  const stateModelId = (location.state as ImageLocationState)?.selectedModel?.modelId;
+  const queryModelId = searchParams.get('model') || '';
 
-  const locationState = location.state as ImageLocationState | null;
-  const initialModelId = searchParams.get('model') || locationState?.selectedModel?.modelId || '';
-
-  const [allModels, setAllModels] = useState<ModelCatalogItem[]>([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState('');
-  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
-
-  const [activeStyle, setActiveStyle] = useState<StyleKey>('Anime');
-  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
-  const [activeRatio, setActiveRatio] = useState<RatioKey>('1:1');
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+
+  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
+  const [activeStyle, setActiveStyle] = useState<StyleKey>('Gercekci');
+  const [activeRatio, setActiveRatio] = useState<RatioKey>('16:9');
+
+  const selectedModelId = selectedModel?.modelId;
+  const rawPrompt = prompt;
+
   const [currentPage, setCurrentPage] = useState(1);
-  const [generatedPages, setGeneratedPages] = useState<Record<number, GridCard[]>>({});
+  const [generatedPages, setGeneratedPages] = useState<Record<number, GridCard[]>>({
+    1: buildEmptyCards(1, 'Sonuç bekleniyor'),
+    2: buildEmptyCards(2, 'Boş'),
+    3: buildEmptyCards(3, 'Boş'),
+    4: buildEmptyCards(4, 'Boş'),
+  });
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const modelWrapRef = useRef<HTMLDivElement | null>(null);
@@ -313,22 +457,22 @@ export default function ImageGen() {
       try {
         setLoadingCatalog(true);
         setCatalogError('');
-
-        const payload = await fetchCatalog();
-
+        const items = await fetchImageModels();
         if (!mounted) return;
 
-        const items = payload.items || [];
-        setAllModels(items);
+        const initial = pickInitialImageModel(items, {
+          stateModelId,
+          queryModelId,
+        });
 
-        const initial = pickInitialImageModel(items, initialModelId, locationState?.selectedModel);
+        setCatalog(items);
         setSelectedModel(initial);
-
-        if (initial) {
-          sessionStorage.setItem(IMAGE_MODEL_SESSION_KEY, JSON.stringify(initial));
-        }
+        setStoredModel(initial);
       } catch (error) {
         if (!mounted) return;
+        setCatalog([]);
+        setSelectedModel(null);
+        setStoredModel(null);
         setCatalogError(error instanceof Error ? error.message : 'Model kataloğu alınamadı.');
       } finally {
         if (mounted) setLoadingCatalog(false);
@@ -340,7 +484,7 @@ export default function ImageGen() {
     return () => {
       mounted = false;
     };
-  }, [initialModelId, locationState?.selectedModel]);
+  }, [queryModelId, stateModelId]);
 
   useEffect(() => {
     const textarea = promptRef.current;
@@ -393,23 +537,15 @@ export default function ImageGen() {
     };
   }, []);
 
-  const imageModels = useMemo(() => allModels.filter(isImageModel), [allModels]);
-  const visibleModels = useMemo(() => sortImageModels(imageModels, activeSort), [imageModels, activeSort]);
-  const filteredModelCards = useMemo(() => visibleModels.slice(0, 12), [visibleModels]);
-
-  const handleSelectModel = (model: ModelCatalogItem) => {
-    setSelectedModel(model);
-    sessionStorage.setItem(IMAGE_MODEL_SESSION_KEY, JSON.stringify(model));
-    setModelMenuOpen(false);
-  };
+  const visibleModels = useMemo(() => sortImageModels(catalog, activeSort), [catalog, activeSort]);
 
   const selectedModelLabel = selectedModel
-    ? `${selectedModel.provider} • ${selectedModel.modelName}`
+    ? selectedModel.modelName
     : loadingCatalog
     ? 'Model Seçimi'
     : 'Aktif model bulunamadı';
 
-  const gridCards = generatedPages[currentPage] || buildBaseCards(currentPage);
+  const selectedPageCards = generatedPages[currentPage] || buildEmptyCards(currentPage, 'Boş');
 
   const ensureAuth = () => {
     if (user) return true;
@@ -447,55 +583,32 @@ export default function ImageGen() {
   };
 
   const handleGenerate = async () => {
-    const rawPrompt = prompt.trim();
-    if (!rawPrompt) {
-      promptRef.current?.focus();
+    if (!user) {
+      navigate('/giris', { replace: true, state: { from: { pathname: '/gorsel' } } });
       return;
     }
 
-    if (!ensureAuth()) return;
-    if (!selectedModel || isGenerating) {
-      toast.error('Aktif model bulunamadı.');
-      return;
-    }
-
-    setIsGenerating(true);
-
+    if (!prompt || !selectedModelId) return;
+    setLoading(true);
+    setError('');
+    
     try {
-      const formData = new FormData();
-      formData.set('prompt', rawPrompt);
-      formData.set('model', selectedModel.modelId);
-      formData.set('modelId', selectedModel.modelId);
-      formData.set('ratio', activeRatio);
-      formData.set('style', activeStyle);
-      formData.set('quality', 'high');
-      formData.set('n', '4');
-      formData.set('responseFormat', 'url');
-      formData.set('clientRequestId', createId('image'));
-      formData.set(
-        'metadata',
-        JSON.stringify({
-          page: 'imagegen',
-          source: 'frontend',
-          selectedProvider: selectedModel.provider,
-        }),
-      );
-
-      attachments.forEach((attachment, index) => {
-        formData.append(index === 0 ? 'reference' : `attachment_${index}`, attachment.file, attachment.name);
+      const payload = await requestImageGeneration({
+        prompt: rawPrompt,
+        modelId: selectedModel.modelId,
+        style: activeStyle,
+        ratio: activeRatio,
+        attachments,
       });
 
-      const payload = await requestImageGeneration(formData);
       const urls = extractImageUrls(payload);
-
       if (urls.length === 0) {
-        toast.error('Görsel üretildi ama URL dönmedi.');
-        return;
+        throw new Error('Görsel üretildi ancak geçerli bir görsel URL döndürmedi.');
       }
 
-      const nextCards = buildBaseCards(1);
+      const cards = buildEmptyCards(1, 'Daha fazla');
       urls.slice(0, 4).forEach((url, index) => {
-        nextCards[index] = {
+        cards[index] = {
           id: createId('generated'),
           src: url,
           alt: `Uretilen gorsel ${index + 1}`,
@@ -505,19 +618,19 @@ export default function ImageGen() {
 
       setGeneratedPages((prev) => ({
         ...prev,
-        1: nextCards,
+        1: cards,
       }));
-      setCurrentPage(1);
       toast.success('Görsel hazır.');
-    } catch (error: any) {
-      toast.error(error?.message || 'Görsel üretimi başarısız oldu.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Görsel üretimi başarısız oldu.';
+      setGeneratedPages((prev) => ({
+        ...prev,
+        1: buildEmptyCards(1, 'Hata'),
+      }));
+      toast.error(message);
     } finally {
       setIsGenerating(false);
     }
-  };
-
-  const renderPage = (page: number) => {
-    setCurrentPage(Math.max(1, Math.min(4, page)));
   };
 
   return (
@@ -740,85 +853,6 @@ export default function ImageGen() {
           color: #ffffff;
         }
 
-        .model-results {
-          padding: 14px 28px 4px;
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        .model-results-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          flex-wrap: wrap;
-        }
-
-        .model-results-title {
-          font-size: 16px;
-          font-weight: 800;
-          color: #202123;
-        }
-
-        .model-results-meta {
-          font-size: 13px;
-          font-weight: 700;
-          color: #6b7280;
-        }
-
-        .model-card-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .mini-model-card {
-          min-height: 98px;
-          border-radius: 18px;
-          border: 1px solid #e2e6eb;
-          background: linear-gradient(180deg, #ffffff 0%, #f8fafb 100%);
-          box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
-          padding: 14px;
-          display: flex;
-          flex-direction: column;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 8px;
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .mini-model-card.active {
-          border-color: #8fb4ae;
-          background: linear-gradient(180deg, #f7fbfa 0%, #eef6f4 100%);
-        }
-
-        .mini-model-provider {
-          font-size: 11px;
-          font-weight: 800;
-          letter-spacing: 0.14em;
-          color: #7a8794;
-        }
-
-        .mini-model-name {
-          font-size: 15px;
-          line-height: 1.35;
-          font-weight: 700;
-          color: #1f2937;
-        }
-
-        .mini-model-footer {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          font-size: 12px;
-          font-weight: 700;
-          color: #5a6776;
-        }
-
         .hero {
           padding: 20px 28px 10px;
           display: flex;
@@ -965,7 +999,7 @@ export default function ImageGen() {
         }
 
         .generate:disabled {
-          opacity: 0.65;
+          opacity: 0.6;
           cursor: not-allowed;
         }
 
@@ -1049,6 +1083,11 @@ export default function ImageGen() {
           background: #f5f8f7;
         }
 
+        .model-option:disabled {
+          cursor: default;
+          opacity: 0.75;
+        }
+
         .model-option-text {
           display: flex;
           flex-direction: column;
@@ -1124,6 +1163,21 @@ export default function ImageGen() {
           height: 100%;
           object-fit: cover;
           display: block;
+        }
+
+        .card.empty {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .card-placeholder {
+          padding: 24px;
+          text-align: center;
+          color: #536072;
+          font-size: 15px;
+          line-height: 1.5;
+          font-weight: 600;
         }
 
         .card-overlay {
@@ -1205,7 +1259,6 @@ export default function ImageGen() {
         @media (max-width: 1280px) {
           .images { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .suggestions { grid-template-columns: 1fr; }
-          .model-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 980px) {
@@ -1219,7 +1272,6 @@ export default function ImageGen() {
           .nav { gap: 18px; }
           .toolbar,
           .hero,
-          .model-results,
           .images,
           .footer-row { padding-left: 16px; padding-right: 16px; }
           .prompt-top {
@@ -1236,7 +1288,6 @@ export default function ImageGen() {
 
         @media (max-width: 760px) {
           .images { grid-template-columns: 1fr; }
-          .model-card-grid { grid-template-columns: 1fr; }
           .toolbar-row { justify-content: flex-start; }
           .pagination-block { flex-direction: column; align-items: flex-start; }
           .model-select-wrap,
@@ -1327,28 +1378,37 @@ export default function ImageGen() {
                     </button>
                   )}
 
-                  {!loadingCatalog && visibleModels.length === 0 && (
+                  {!loadingCatalog && catalogError && (
                     <button className="model-option active" type="button" disabled>
-                      Görsel modeli bulunamadı
+                      {catalogError}
                     </button>
                   )}
 
-                  {!loadingCatalog && visibleModels.map((model) => {
+                  {!loadingCatalog && !catalogError && visibleModels.length === 0 && (
+                    <button className="model-option active" type="button" disabled>
+                      Aktif image modeli bulunamadı.
+                    </button>
+                  )}
+
+                  {!loadingCatalog && !catalogError && visibleModels.map((model) => {
                     const active = selectedModel?.modelId === model.modelId;
                     return (
                       <button
                         key={model.modelId}
                         className={`model-option ${active ? 'active' : ''}`}
-                        data-model-label={model.modelName}
                         type="button"
                         onClick={() => {
-                          handleSelectModel(model);
+                          setSelectedModel(model);
+                          setStoredModel(model);
+                          setModelMenuOpen(false);
                           toast.success(`${model.modelName} seçildi.`);
                         }}
                       >
                         <div className="model-option-text">
                           <span className="model-option-name">{model.modelName}</span>
-                          <span className="model-option-meta">{model.provider} • {formatCredits(model.prices.image)} • {formatUsd(model.prices.image)}</span>
+                          <span className="model-option-meta">
+                            {model.provider} • {formatCredits(model.prices.image)} • {formatUsd(model.prices.image)}
+                          </span>
                         </div>
                         <span className="model-option-price" style={{ color: model.style.accent }}>
                           {model.speedLabel}
@@ -1397,38 +1457,6 @@ export default function ImageGen() {
                   </button>
                 ))}
               </div>
-            </div>
-          </section>
-
-          <section className="model-results">
-            <div className="model-results-head">
-              <div className="model-results-title">Filtre Sonuçları</div>
-              <div className="model-results-meta">{filteredModelCards.length} model • {activeSort}</div>
-            </div>
-
-            <div className="model-card-grid">
-              {filteredModelCards.map((model) => {
-                const active = selectedModel?.modelId === model.modelId;
-
-                return (
-                  <button
-                    key={model.modelId}
-                    type="button"
-                    className={`mini-model-card ${active ? 'active' : ''}`}
-                    onClick={() => {
-                      handleSelectModel(model);
-                      toast.success(`${model.modelName} seçildi.`);
-                    }}
-                  >
-                    <div className="mini-model-provider">{(model.provider || model.company).toUpperCase()}</div>
-                    <div className="mini-model-name">{model.modelName}</div>
-                    <div className="mini-model-footer">
-                      <span>{formatCredits(model.prices.image)}</span>
-                      <span>{model.speedLabel}</span>
-                    </div>
-                  </button>
-                );
-              })}
             </div>
           </section>
 
@@ -1488,7 +1516,13 @@ export default function ImageGen() {
                   </div>
                 </div>
 
-                <button className="generate" id="generateButton" type="button" onClick={handleGenerate} disabled={isGenerating || loadingCatalog || !selectedModel}>
+                <button
+                  className="generate"
+                  id="generateButton"
+                  type="button"
+                  onClick={handleGenerate}
+                  disabled={isGenerating || loadingCatalog || !selectedModel}
+                >
                   {isGenerating ? 'Oluşturuluyor' : 'Oluştur'}
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path>
@@ -1500,6 +1534,7 @@ export default function ImageGen() {
                 <div className="subhint">
                   İlk bakışta odak noktası talimat alanı olmalı. Buradan yazabilir, görsel yükleyebilir, kamera kullanabilir ve mikrofonla komut verebilirsin.
                   {selectedModel ? ` Seçili model: ${selectedModel.provider} • ${selectedModel.modelName} • ${formatCredits(selectedModel.prices.image)} • ${formatUsd(selectedModel.prices.image)}.` : ''}
+                  {attachments.length > 0 ? ` Ek sayısı: ${attachments.length}.` : ''}
                 </div>
               </div>
             </div>
@@ -1527,9 +1562,15 @@ export default function ImageGen() {
           </section>
 
           <section className="images" id="imageGrid">
-            {gridCards.map((card) => (
-              <div key={card.id} className="card">
-                <img src={card.src} alt={card.alt} />
+            {selectedPageCards.map((card) => (
+              <div key={card.id} className={`card ${card.src ? '' : 'empty'}`}>
+                {card.src ? (
+                  <img src={card.src} alt={card.alt} />
+                ) : (
+                  <div className="card-placeholder">
+                    {card.overlay === 'Üretiliyor' ? 'Görsel hazırlanıyor…' : 'Henüz sonuç yok'}
+                  </div>
+                )}
                 <div className="card-overlay">{card.overlay}</div>
               </div>
             ))}
@@ -1539,7 +1580,13 @@ export default function ImageGen() {
             <div className="pagination-block">
               <div className="pagination-label">Sayfa Sayısı</div>
               <div className="pagination" id="pagination">
-                <button className="page-arrow" data-nav="prev" aria-label="Önceki sayfa" type="button" onClick={() => renderPage(currentPage - 1)}>
+                <button
+                  className="page-arrow"
+                  data-nav="prev"
+                  aria-label="Önceki sayfa"
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                >
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M14.5 5.5L8 12l6.5 6.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"></path>
                   </svg>
@@ -1550,12 +1597,18 @@ export default function ImageGen() {
                     className={`page-btn ${currentPage === page ? 'active' : ''}`}
                     data-page={page}
                     type="button"
-                    onClick={() => renderPage(page)}
+                    onClick={() => setCurrentPage(page)}
                   >
                     {page}
                   </button>
                 ))}
-                <button className="page-arrow" data-nav="next" aria-label="Sonraki sayfa" type="button" onClick={() => renderPage(currentPage + 1)}>
+                <button
+                  className="page-arrow"
+                  data-nav="next"
+                  aria-label="Sonraki sayfa"
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.min(4, prev + 1))}
+                >
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path d="M9.5 5.5L16 12l-6.5 6.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"></path>
                   </svg>

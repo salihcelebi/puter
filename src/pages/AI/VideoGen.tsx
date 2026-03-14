@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
@@ -371,11 +371,36 @@ function extractVideoAssets(result: VideoResultPayload | null | undefined) {
 
 export default function VideoGen() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
+
+  const locationState = location.state as VideoLocationState;
+  const initialModelId = searchParams.get('model') || '';
+
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [allModels, setAllModels] = useState<ModelCatalogItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+
+  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
+  const [activeMode, setActiveMode] = useState<ModeKey>('text-video');
+  const [activeDuration, setActiveDuration] = useState<DurationKey>('5');
+  const [activeRatio, setActiveRatio] = useState<RatioKey>('16:9');
+  const [activeCamera, setActiveCamera] = useState<CameraKey>('static');
+  const [activeStyle, setActiveStyle] = useState<StyleKey>('cinematic');
+
+  const selectedModelId = selectedModel?.id;
+  const rawPrompt = prompt;
+
   const [currentPage, setCurrentPage] = useState(1);
   const [generatedPages, setGeneratedPages] = useState<Record<number, VideoCard[]>>({});
 
