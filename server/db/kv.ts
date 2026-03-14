@@ -2,7 +2,8 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { getWritableBaseDir, isServerlessRuntime } from './runtime.js';
 
 type KvPrimitive = string | number | boolean | null;
 export type KvValue =
@@ -117,9 +118,9 @@ export type ListJobsOptions = {
   newestFirst?: boolean;
 };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const KV_JSON_PATH = path.join(__dirname, 'kv.json');
+const KV_JSON_PATH = isServerlessRuntime()
+  ? path.join(getWritableBaseDir(), 'data', 'kv.json')
+  : path.join(getWritableBaseDir(), '.data', 'kv.json');
 
 export const KV_KEYS = Object.freeze({
   JOB_PREFIX: 'ai_job:',
@@ -493,19 +494,17 @@ export async function cleanupExpired(): Promise<{ removedKeys: string[]; removed
 }
 
 export const kv = {
-  async get(key: string): Promise<string | null> {
+  async get(key: string): Promise<any | null> {
     await cleanupExpired();
     const store = await readStore();
     const item = store.items[key];
     if (!item) return null;
     if (isExpired(item.expiresAt)) return null;
-    return JSON.stringify(item.value);
+    return sanitizeKvValue(item.value);
   },
 
   async getJson<T = KvValue>(key: string): Promise<T | null> {
-    const raw = await kv.get(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
+    return kv.get(key) as Promise<T | null>;
   },
 
   async set(key: string, value: KvValue, options?: { ttlMs?: number | null; kind?: KvItemRecord['kind'] }): Promise<void> {
@@ -564,6 +563,21 @@ export const kv = {
   async rawStore(): Promise<KvFileSchema> {
     await cleanupExpired();
     return readStore();
+  },
+
+  async list(prefix = ''): Promise<Array<{ key: string; value: any }>> {
+    await cleanupExpired();
+    const store = await readStore();
+    return Object.values(store.items)
+      .filter((item) => item.key.startsWith(prefix) && !isExpired(item.expiresAt))
+      .map((item) => ({
+        key: item.key,
+        value: sanitizeKvValue(item.value),
+      }));
+  },
+
+  async delete(key: string): Promise<boolean> {
+    return kv.del(key);
   },
 };
 
