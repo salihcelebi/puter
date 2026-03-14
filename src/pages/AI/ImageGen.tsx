@@ -1,9 +1,8 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
-import { useAuth } from '../../context/AuthContext';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
@@ -410,11 +409,33 @@ async function requestImageGeneration(args: {
 
 export default function ImageGen() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  
+  const stateModelId = (location.state as ImageLocationState)?.selectedModel?.modelId;
+  const queryModelId = searchParams.get('model') || '';
+
   const [prompt, setPrompt] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+  const [catalog, setCatalog] = useState<ModelCatalogItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState<ModelCatalogItem | null>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+
+  const [activeSort, setActiveSort] = useState<SortKey>('price-asc');
+  const [activeStyle, setActiveStyle] = useState<StyleKey>('Gercekci');
+  const [activeRatio, setActiveRatio] = useState<RatioKey>('16:9');
+
+  const selectedModelId = selectedModel?.modelId;
+  const rawPrompt = prompt;
+
   const [currentPage, setCurrentPage] = useState(1);
   const [generatedPages, setGeneratedPages] = useState<Record<number, GridCard[]>>({
     1: buildEmptyCards(1, 'Sonuç bekleniyor'),
