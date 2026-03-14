@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
-const IMAGE_WORKER_ENDPOINT = '/api/ai/image';
+const IMAGE_WORKER_ENDPOINT = 'https://image.puter.work/generate';
 
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
 
@@ -36,20 +36,6 @@ type ImageResultPayload = {
   assetId?: string;
   requestId?: string;
   modelId?: string;
-};
-
-
-type ImageGenerateRequestPayload = {
-  prompt: string;
-  model: string;
-  modelId: string;
-  ratio: RatioKey;
-  style: StyleKey;
-  quality: 'high';
-  n: '4';
-  responseFormat: 'url';
-  clientRequestId: string;
-  metadata: string;
 };
 
 type WorkerEnvelope<T> = {
@@ -348,7 +334,7 @@ function getContextualErrorMessage(context: string, error: unknown) {
     case 'page-change':
       return `Sayfa değiştirilemedi çünkü ${reason}.`;
     case 'render':
-      return `ImageGen-final.tsx çalışamadı çünkü ${reason}.`;
+      return `ImageGen-revised.tsx çalışamadı çünkü ${reason}.`;
     default:
       return `İşlem tamamlanamadı çünkü ${reason}.`;
   }
@@ -390,32 +376,26 @@ async function fetchCatalog(): Promise<ModelCatalogPayload> {
   return json.data;
 }
 
-async function requestImageGeneration(payload: ImageGenerateRequestPayload): Promise<ImageResultPayload> {
+async function requestImageGeneration(formData: FormData): Promise<ImageResultPayload> {
   const response = await fetch(IMAGE_WORKER_ENDPOINT, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    body: formData,
   });
 
-  const contentType = response.headers.get('content-type') || '';
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
   const rawBody = await response.text();
   const trimmedBody = rawBody.trim();
-  const isJson = contentType.toLowerCase().includes('application/json');
-  const isHtml = trimmedBody.startsWith('<');
 
-  if (!isJson) {
-    if (isHtml) {
-      throw new Error(`görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde JSON yerine HTML döndürdü`);
+  if (!contentType.includes('application/json')) {
+    if (trimmedBody.startsWith('<')) {
+      throw new Error('görsel üretim servisi JSON yerine HTML döndürdü');
     }
 
     if (!response.ok && trimmedBody) {
       throw new Error(trimmedBody);
     }
 
-    throw new Error(`görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde JSON olmayan bir yanıt döndürdü`);
+    throw new Error('görsel üretim servisi JSON olmayan bir yanıt döndürdü');
   }
 
   let json: WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
@@ -423,16 +403,14 @@ async function requestImageGeneration(payload: ImageGenerateRequestPayload): Pro
   try {
     json = JSON.parse(rawBody) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
   } catch {
-    throw new Error(`görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde bozuk JSON döndürdü`);
+    throw new Error('görsel üretim servisi bozuk JSON döndürdü');
   }
 
   if ('ok' in (json as Record<string, unknown>)) {
     const envelope = json as WorkerEnvelope<ImageResultPayload>;
-
     if (!response.ok || !envelope.ok) {
-      throw new Error(envelope?.error?.message || `görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde yanıt veremedi`);
+      throw new Error(envelope?.error?.message || 'görsel üretim servisi yanıt veremedi');
     }
-
     return envelope.data;
   }
 
@@ -441,7 +419,7 @@ async function requestImageGeneration(payload: ImageGenerateRequestPayload): Pro
       throw new Error(trimmedBody);
     }
 
-    throw new Error(`görsel üretim servisi ${IMAGE_WORKER_ENDPOINT} adresinde geçersiz yanıt döndürdü`);
+    throw new Error('görsel üretim servisi geçersiz yanıt döndürdü');
   }
 
   return json as ImageResultPayload;
@@ -706,41 +684,42 @@ export default function ImageGen() {
       return;
     }
 
-    if (attachments.length > 0) {
-      showVisibleError('Görsel üretme işlemi başlatılamadı çünkü bu canlı uç nokta referans görsel yüklemeyi henüz desteklemiyor.');
-      return;
-    }
-
     setIsGenerating(true);
     clearVisibleError();
 
     try {
-      let requestPayload: ImageGenerateRequestPayload;
+      let formData: FormData;
 
       try {
-        requestPayload = {
-          prompt: rawPrompt,
-          model: selectedModel.modelId,
-          modelId: selectedModel.modelId,
-          ratio: activeRatio,
-          style: activeStyle,
-          quality: 'high',
-          n: '4',
-          responseFormat: 'url',
-          clientRequestId: createId('image'),
-          metadata: JSON.stringify({
+        formData = new FormData();
+        formData.set('prompt', rawPrompt);
+        formData.set('model', selectedModel.modelId);
+        formData.set('modelId', selectedModel.modelId);
+        formData.set('ratio', activeRatio);
+        formData.set('style', activeStyle);
+        formData.set('quality', 'high');
+        formData.set('n', '4');
+        formData.set('responseFormat', 'url');
+        formData.set('clientRequestId', createId('image'));
+        formData.set(
+          'metadata',
+          JSON.stringify({
             page: 'imagegen',
             source: 'frontend',
             selectedProvider: selectedModel.provider,
           }),
-        };
+        );
+
+        attachments.forEach((attachment, index) => {
+          formData.append(index === 0 ? 'reference' : `attachment_${index}`, attachment.file, attachment.name);
+        });
       } catch (error) {
         throw new Error(getContextualErrorMessage('generate-prepare', error));
       }
 
       let payload: ImageResultPayload;
       try {
-        payload = await requestImageGeneration(requestPayload);
+        payload = await requestImageGeneration(formData);
       } catch (error) {
         throw new Error(getContextualErrorMessage('generate-request', error));
       }
@@ -819,7 +798,7 @@ export default function ImageGen() {
         <main className="page">
           {(visibleError || catalogError) && (
             <div className="error-banner">
-              {visibleError || catalogError || 'ImageGen-final.tsx çalışamadı çünkü beklenmeyen bir hata oluştu.'}
+              {visibleError || catalogError || 'ImageGen-revised.tsx çalışamadı çünkü beklenmeyen bir hata oluştu.'}
             </div>
           )}
 
