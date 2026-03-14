@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
-const IMAGE_WORKER_ENDPOINTS = ['/api/ai/image/generate', '/api/ai/image'];
+const IMAGE_WORKER_ENDPOINT = '/api/ai/image/generate';
 
 const IMAGE_MODEL_SESSION_KEY = 'nisai:selected-image-model';
 
@@ -377,36 +377,47 @@ async function fetchCatalog(): Promise<ModelCatalogPayload> {
 }
 
 async function requestImageGeneration(formData: FormData): Promise<ImageResultPayload> {
-  const failures: string[] = [];
+  const response = await fetch(IMAGE_WORKER_ENDPOINT, {
+    method: 'POST',
+    body: formData,
+  });
 
-  for (const endpoint of IMAGE_WORKER_ENDPOINTS) {
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        body: formData,
-      });
+  const contentType = response.headers.get('content-type') || '';
+  const rawBody = await response.text();
 
-      const json = (await response.json()) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
-
-      if ('ok' in (json as Record<string, unknown>)) {
-        const envelope = json as WorkerEnvelope<ImageResultPayload>;
-        if (!response.ok || !envelope.ok) {
-          throw new Error(envelope?.error?.message || 'görsel üretim servisi yanıt veremedi');
-        }
-        return envelope.data;
-      }
-
-      if (!response.ok) {
-        throw new Error('görsel üretim servisi geçersiz yanıt döndürdü');
-      }
-
-      return json as ImageResultPayload;
-    } catch (error) {
-      failures.push(getSafeErrorMessage(error, `${endpoint} çağrısı başarısız oldu`));
+  if (!contentType.toLowerCase().includes('application/json')) {
+    if (!response.ok && rawBody.trim()) {
+      throw new Error(rawBody.trim());
     }
+
+    if (rawBody.trim().startsWith('<')) {
+      throw new Error('görsel üretim servisi JSON yerine HTML döndürdü');
+    }
+
+    throw new Error('görsel üretim servisi JSON olmayan bir yanıt döndürdü');
   }
 
-  throw new Error(failures[0] || 'görsel üretim servisine ulaşılamadı');
+  let json: WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
+
+  try {
+    json = JSON.parse(rawBody) as WorkerEnvelope<ImageResultPayload> | ImageResultPayload;
+  } catch {
+    throw new Error('görsel üretim servisi bozuk JSON döndürdü');
+  }
+
+  if ('ok' in (json as Record<string, unknown>)) {
+    const envelope = json as WorkerEnvelope<ImageResultPayload>;
+    if (!response.ok || !envelope.ok) {
+      throw new Error(envelope?.error?.message || 'görsel üretim servisi yanıt veremedi');
+    }
+    return envelope.data;
+  }
+
+  if (!response.ok) {
+    throw new Error('görsel üretim servisi geçersiz yanıt döndürdü');
+  }
+
+  return json as ImageResultPayload;
 }
 
 export default function ImageGen() {
