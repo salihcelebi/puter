@@ -141,29 +141,50 @@ function normalizeWorkerErrorMessage(payload, response) {
 }
 
 async function requestWorker(path, options = {}) {
+  const retryCount = Math.max(0, Math.min(20, safeNumber(options.retryCount, 2)));
   let response;
-  let timer = null;
+  let lastNetworkError = null;
 
-  try {
-    const controller = new AbortController();
-    timer = window.setTimeout(() => controller.abort(), 60000);
+  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = window.setTimeout(() => controller.abort(), 60000);
 
-    response = await fetch(`${WORKER_BASE_URL}${path}`, {
-      method: options.method || 'GET',
-      headers: {
-        'content-type': 'application/json',
-        ...(options.headers || {}),
-      },
-      credentials: 'include',
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal,
-    });
+      response = await fetch(`${WORKER_BASE_URL}${path}`, {
+        method: options.method || 'GET',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+        credentials: 'include',
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
 
-  } catch (error) {
-    const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
-    throw new Error(isAbort ? 'İstek zaman aşımına uğradı.' : 'Worker erişilemedi. Lütfen tekrar deneyin.');
-  } finally {
-    if (timer) window.clearTimeout(timer);
+      if (response.status >= 500 && attempt <= retryCount + 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+      } else {
+        break;
+      }
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt > retryCount) {
+        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+        throw new Error(
+          isAbort
+            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
+            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }
+
+  if (!response) {
+    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
   }
 
   const payload = await readJson(response);
