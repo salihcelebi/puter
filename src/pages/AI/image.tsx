@@ -1,52 +1,41 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 /*
-█████████████████████████████████████████████
-1) BU DOSYA, KULLANICININ METİNDEN GÖRSEL ÜRETİMİ YAPABİLDİĞİ REACT TABANLI AI IMAGE SAYFASIDIR.
-2) SAYFA, TÜM ARKA UÇ İLETİŞİMİNİ WORKER_BASE_URL OLARAK TANIMLANAN https://idm.puter.work ÜZERİNDEN YAPAR.
-3) DOSYANIN GÖREVİ DOĞRUDAN MODEL ÇALIŞTIRMAK DEĞİL, WORKER API'SİYLE KONUŞAN BİR İSTEMCİ ARAYÜZÜ SUNMAKTIR.
-4) WorkerEnvelope TİPİ, SUNUCUDAN GELEN YANITLARI ok, data, error, meta GİBİ STANDART BİR ZARF İÇİNDE ELE ALIR.
-5) ModelItem TİPİ, GÖRSEL ÜRETİMİNDE KULLANILABİLECEK MODEL METAVERİSİNİ TAŞIR.
-6) JobRequest TİPİ, KULLANICININ FORMDA SEÇTİĞİ MODEL, ORAN, KALİTE, PROMPT VE DİĞER AYARLARI İSTEK GÖVDESİNE DÖNÜŞTÜRÜR.
-7) JobRecord TİPİ, ÜRETİM İŞİNİN KUYRUKTA MI, İŞLENİYOR MU, TAMAMLANDI MI GİBİ DURUM TAKİBİNİ YAPAR.
-8) HistoryPayload VE GeneratePayload TİPLERİ, GEÇMİŞ KAYITLARI VE ANLIK ÜRETİM SONUÇLARINI AYRI AYRI YÖNETMEK İÇİN TANIMLANMIŞTIR.
-9) FormState, EKRANDAKİ TÜM KULLANICI GİRDİLERİNİN TEK MERKEZDEN YÖNETİLMESİNİ SAĞLAR.
-10) DEFAULT_MODEL_ID DEĞERİ, KULLANICI HENÜZ BİR MODEL SEÇMEDİYSE VARSAYILAN OLARAK openai/gpt-image-1 MODELİNİ HEDEF ALIR.
-11) RATIO_OPTIONS, FARKLI GÖRSEL EN-BOY ORANLARINI KULLANICIYA HAZIR SEÇENEK OLARAK SUNAR.
-12) QUALITY_OPTIONS, GÖRSEL ÜRETİM KALİTESİNİ düşük / orta / yüksek GİBİ KATMANLARLA YÖNETİR.
-13) QUICK_PROMPTS, KULLANICIYA HIZLI BAŞLANGIÇ SAĞLAYAN ÖRNEK PROMPT'LARI TUTAR.
-14) normalizeText, normalizeNumber VE clamp GİBİ YARDIMCI FONKSİYONLAR, FORM VE API VERİSİNİ GÜVENLİ ŞEKİLDE TEMİZLER.
-15) isImageModel FONKSİYONU, /models'DEN GELEN TÜM MODELLER ARASINDAN SADECE GÖRSEL ÜRETİM İLE İLGİLİ OLANLARI AYIKLAR.
-16) pickJobImages FONKSİYONU, outputUrls, urls, outputUrl VE url ALANLARINDAN GÖRSEL LİNKLERİNİ TOPLAYIP TEKRARSIZ HALE GETİRİR.
-17) formatDateTime VE formatEta, İŞ GEÇMİŞİ VE TAHMİNİ SÜRE BİLGİLERİNİ KULLANICIYA OKUNUR BİÇİMDE GÖSTERİR.
-18) statusLabel VE statusTone, İŞ DURUMUNU HEM METİNSEL HEM DE GÖRSEL OLARAK ANLAŞILIR HALE GETİRİR.
-19) readJson FONKSİYONU, WORKER JSON DÖNMEZSE BUNU GÜVENLİ BİR HATA NESNESİNE ÇEVİREREK UI'NIN ÇÖKMESİNİ ENGELLER.
-20) normalizeWorkerErrorMessage, 404, 405, 429, OTURUM VE AĞ HATALARINI KULLANICI DOSTU TÜRKÇE MESAJLARA ÇEVİRİR.
-21) requestWorker FONKSİYONU, TÜM fetch ÇAĞRILARININ TEK MERKEZDEN VE credentials: 'include' İLE YAPILMASINI SAĞLAR.
-22) SAYFA AÇILINCA loadWorkerInfo, loadModels VE loadHistory ÇAĞRILARAK HEM WORKER BİLGİSİ HEM MODEL LİSTESİ HEM DE İŞ GEÇMİŞİ ÇEKİLİR.
-23) handleSubmit, FORMU POST /generate ROTASINA GÖNDERİR; SONRA GELEN jobId İLE İŞİ TAKİP ETMEYE BAŞLAR.
-24) pollJob, GET /jobs/status/:id ÜZERİNDEN BELİRLİ ARALIKLARLA DURUM SORGULAR; TAMAMLANINCA GÖRSELLERİ VE GEÇMİŞİ GÜNCELLER.
-25) ÖNEMLİ NOT: BU DOSYA /generate, /jobs/status/:id, /jobs/history VE /jobs/cancel ROTALARINI BEKLİYOR; AMA CANLI worker info ŞU ANDA AÇIKÇA SADECE /, /health VE /models ROTALARINI DUYURUYOR, YANİ İSTEMCİ-WORKER UYUŞMAZLIĞI OLABİLİR.
-█████████████████████████████████████████████
-*/
-/*
-DOSYA: idm.js
-AMAÇ: MODEL KATALOĞU + IMAGE GENERATION + JOB YÖNETİMİ
+KISA AÇIKLAMA:
+Bu React sayfası sadece worker API ile konuşur, modeli tarayıcıda çalıştırmaz.
 */
 
-// ─────────────────── YARDIMCI ARAÇLAR ───────────────────
+const WORKER_BASE_URL = 'https://idm.puter.work';
+const DEFAULT_MODEL_ID = 'openai/dall-e-3';
+const DEFAULT_RATIO = '1:1';
+const DEFAULT_QUALITY = 'standard';
+const POLL_INTERVAL_MS = 2500;
+const HISTORY_LIMIT = 20;
 
-function nowIso() {
-  return new Date().toISOString();
-}
+const RATIO_OPTIONS = [
+  { value: '1:1', label: '1:1 Kare' },
+  { value: '16:9', label: '16:9 Yatay' },
+  { value: '9:16', label: '9:16 Dikey' },
+  { value: '4:3', label: '4:3 Klasik' },
+  { value: '3:4', label: '3:4 Portre' },
+];
+
+const QUALITY_OPTIONS = [
+  { value: 'standard', label: 'Standart' },
+  { value: 'hd', label: 'HD' },
+];
+
+const QUICK_PROMPTS = [
+  'Turuncu gözlü sevimli bir kedi, sinematik ışık, ultra detaylı, temiz arka plan',
+  'Yağmurlu gece sokakta yürüyen futuristik robot, neon ışıklar, yüksek detay',
+  'Dağın tepesinde gün doğumunda ahşap kulübe, gerçekçi, huzurlu atmosfer',
+];
 
 function nowMs() {
   return Date.now();
 }
 
-function createId(prefix = 'req') {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function safeString(value, fallback = '') {
+function safeText(value, fallback = '') {
   try {
     if (value === undefined || value === null) return fallback;
     const text = String(value).trim();
@@ -58,7 +47,6 @@ function safeString(value, fallback = '') {
 
 function safeNumber(value, fallback = 0) {
   try {
-    if (value === undefined || value === null || value === '') return fallback;
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
   } catch {
@@ -66,1255 +54,962 @@ function safeNumber(value, fallback = 0) {
   }
 }
 
-function normalizeNullablePrice(value) {
-  try {
-    if (value === undefined || value === null || value === '') return null;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
+function normalizeArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
-function toPositiveInteger(value, fallback) {
-  try {
-    const n = Number(value);
-    return Number.isInteger(n) && n > 0 ? n : fallback;
-  } catch {
-    return fallback;
-  }
-}
+function pickJobImages(job, inlinePreview) {
+  const bag = [];
 
-function clampLimit(value) {
-  const parsed = toPositiveInteger(value, DEFAULTS.limit);
-  return Math.min(parsed, DEFAULTS.maxLimit);
-}
-
-function clampOffset(value) {
-  try {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return 0;
-    return Math.floor(n);
-  } catch {
-    return 0;
-  }
-}
-
-function sanitizeError(error) {
-  try {
-    const code = safeString(error?.code, 'UNEXPECTED_ERROR');
-    const message = safeString(error?.message, 'BEKLENMEYEN HATA OLUŞTU.');
-    return { code, message };
-  } catch {
-    return { code: 'UNEXPECTED_ERROR', message: 'BEKLENMEYEN HATA OLUŞTU.' };
-  }
-}
-
-// ─────────────────── CORS / HEADER / JSON ───────────────────
-
-function buildCorsHeaders(request) {
-  const origin = request.headers.get('origin') || '*';
-  return {
-    'access-control-allow-origin': origin,
-    'access-control-allow-headers': '*',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-credentials': 'true',
-    vary: 'origin',
+  const pushIf = (v) => {
+    const clean = safeText(v);
+    if (clean && !bag.includes(clean)) bag.push(clean);
   };
+
+  pushIf(job?.outputUrl);
+  pushIf(job?.url);
+
+  normalizeArray(job?.outputUrls).forEach(pushIf);
+  normalizeArray(job?.urls).forEach(pushIf);
+
+  pushIf(inlinePreview);
+
+  return bag;
 }
 
-function buildJsonHeaders(request, extra = {}) {
-  const cacheControl = extra['cache-control'] || extra['Cache-Control'] || 'no-store';
-  return {
-    ...buildCorsHeaders(request),
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': cacheControl,
-    ...extra,
-  };
+function formatDateTime(value) {
+  const text = safeText(value);
+  if (!text) return '-';
+  try {
+    return new Date(text).toLocaleString('tr-TR');
+  } catch {
+    return text;
+  }
 }
 
-function jsonResponse(request, body, status = 200, extra = {}) {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: buildJsonHeaders(request, extra),
-  });
+function statusLabel(status) {
+  const s = safeText(status).toLowerCase();
+  if (s === 'queued') return 'Kuyrukta';
+  if (s === 'processing') return 'İşleniyor';
+  if (s === 'completed') return 'Tamamlandı';
+  if (s === 'failed_storage') return 'Depolama Hatası';
+  if (s === 'failed') return 'Başarısız';
+  if (s === 'cancelled') return 'İptal Edildi';
+  return s || 'Bilinmiyor';
 }
 
-function safeJsonParse(text, fallback = null) {
+function statusTone(status) {
+  const s = safeText(status).toLowerCase();
+  if (s === 'completed') return '#00c2ff';
+  if (s === 'processing' || s === 'queued') return '#f59e0b';
+  if (s === 'failed_storage' || s === 'failed') return '#ef4444';
+  if (s === 'cancelled') return '#94a3b8';
+  return '#64748b';
+}
+
+async function readJson(response) {
+  const text = await response.text();
   try {
     return JSON.parse(text);
   } catch {
-    return fallback;
+    return {
+      ok: false,
+      code: 'INVALID_JSON_RESPONSE',
+      error: {
+        message: text || 'Worker JSON dönmedi.',
+      },
+      data: null,
+      meta: null,
+      httpStatus: response.status,
+    };
   }
 }
 
-// ─────────────────── ENVELOPE ───────────────────
+function normalizeWorkerErrorMessage(payload, response) {
+  const message = safeText(payload?.error?.message, '');
+  if (message) return message;
 
-const APP_INFO = Object.freeze({
-  worker: 'idm',
-  version: '2.0.0',
-  protocolVersion: '2026-03-15',
-  purpose: 'MODEL CATALOG + IMAGE GENERATION API',
-  billingMode: 'owner_pays',
-  sourceType: 'excel-snapshot',
-  supportsCatalog: true,
-  supportsImageGeneration: true,
-  supportsJobs: true,
-});
-
-function createEnvelopeBase(requestId, traceId, startedAt) {
-  return {
-    worker: APP_INFO.worker,
-    version: APP_INFO.version,
-    protocolVersion: APP_INFO.protocolVersion,
-    billingMode: APP_INFO.billingMode,
-    requestId,
-    traceId,
-    time: nowIso(),
-    durationMs: Math.max(0, nowMs() - startedAt),
-  };
+  const code = safeText(payload?.code, '');
+  if (code === 'PROMPT_REQUIRED') return 'Prompt boş bırakılamaz.';
+  if (code === 'NOT_FOUND') return 'Kayıt bulunamadı.';
+  if (code === 'IMAGE_NOT_READY') return 'Görsel henüz hazır değil.';
+  if (code === 'JOB_ID_REQUIRED') return 'Job kimliği eksik.';
+  if (response?.status === 404) return 'Worker rotası bulunamadı.';
+  if (response?.status === 429) return 'Çok sık istek atıldı.';
+  if (response?.status >= 500) return 'Sunucu tarafında hata oluştu.';
+  return 'İstek başarısız oldu.';
 }
 
-function successEnvelope({ requestId, traceId, startedAt, code = 'OK', data = null, meta = null }) {
-  return {
-    ok: true,
-    code,
-    error: null,
-    data,
-    meta,
-    ...createEnvelopeBase(requestId, traceId, startedAt),
-  };
-}
-
-function errorEnvelope({ requestId, traceId, startedAt, code, message, details = null, status = 400 }) {
-  return {
-    ok: false,
-    code,
-    error: {
-      type: 'idm.error',
-      message,
-      details,
-      retryable: false,
+async function requestWorker(path, options = {}) {
+  const response = await fetch(`${WORKER_BASE_URL}${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      'content-type': 'application/json',
+      ...(options.headers || {}),
     },
-    data: null,
-    meta: null,
-    status,
-    ...createEnvelopeBase(requestId, traceId, startedAt),
-  };
+    credentials: 'include',
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const payload = await readJson(response);
+
+  if (!response.ok || payload?.ok === false) {
+    const error = new Error(normalizeWorkerErrorMessage(payload, response));
+    error.payload = payload;
+    error.status = response.status;
+    throw error;
+  }
+
+  return payload;
 }
 
-// ─────────────────── MODEL KATALOĞU SABİTLERİ ───────────────────
+export default function IDMImagePage() {
+  const [workerInfo, setWorkerInfo] = useState(null);
+  const [models, setModels] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [activeJob, setActiveJob] = useState(null);
+  const [activeInlinePreview, setActiveInlinePreview] = useState('');
+  const [activeImageUrls, setActiveImageUrls] = useState([]);
+  const [pageError, setPageError] = useState('');
+  const [loadingInfo, setLoadingInfo] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-const DEFAULTS = Object.freeze({
-  limit: 50,
-  maxLimit: 250,
-  cacheSeconds: 300,
-});
+  const pollRef = useRef(null);
 
-const SPEED_SCORE_MAP = Object.freeze({
-  'Rekor Hız': 100,
-  'Gerçek zamanlı': 97,
-  'Ultra Hızlı': 94,
-  'Çok Hızlı': 88,
-  'Hızlı': 78,
-  'Orta-Hızlı': 68,
-  'Orta': 58,
-  'Orta/Derin': 52,
-  'Derin': 42,
-  'Yavaş/Derin': 34,
-  'Derin/Yavaş': 30,
-  'Ultra Derin': 24,
-  '~1 sn/görsel': 92,
-  '~3 sn/görsel': 78,
-  '~4 sn/görsel': 70,
-  '~5 sn/görsel': 62,
-  '~6 sn/görsel': 56,
-  '~7 sn/görsel': 50,
-  '~8 sn/görsel': 44,
-});
+  const [form, setForm] = useState({
+    model: DEFAULT_MODEL_ID,
+    prompt: '',
+    negativePrompt: '',
+    ratio: DEFAULT_RATIO,
+    quality: DEFAULT_QUALITY,
+    style: '',
+  });
 
-const RAW_MODELS = [
-  {
-    "company": "Amazon",
-    "provider": "Amazon",
-    "modelName": "Nova 2 Lite",
-    "modelId": "amazon/nova-2-lite-v1",
-    "categoryRaw": "LLM / multimodal",
-    "badges": ["MULTIMODAL"],
-    "parameters": "~12B",
-    "speedLabel": "Çok Hızlı",
-    "inputPrice": 0.45,
-    "outputPrice": 3.75,
-    "imagePrice": null,
-    "traits": ["2. nesil AWS zekası","Nova ailesinin güncel üyesi","Kurumsal multimodal","Gelişmiş AWS entegrasyonu","Ölçeklenebilir bulut AI"],
-    "standoutFeature": "Nova 1'e göre kapsamlı mimari güncellemesi",
-    "useCase": "AWS kurumsal AI, yüksek hacim cloud deploy",
-    "rivalAdvantage": "Amazon ekosistemine entegrasyonda Bedrock'un en iyi seçeneği",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "amazon","accent": "#ff9900"}
-  },
-  {
-    "company": "Amazon",
-    "provider": "Amazon",
-    "modelName": "Nova Lite 1.0",
-    "modelId": "amazon/nova-lite-v1",
-    "categoryRaw": "LLM / multimodal",
-    "badges": ["MULTIMODAL"],
-    "parameters": "~7B",
-    "speedLabel": "Ultra Hızlı",
-    "inputPrice": 0.09,
-    "outputPrice": 0.36,
-    "imagePrice": null,
-    "traits": ["AWS ekosistemine native","Bedrock altyapı güvencesi","Kurumsal güvenilirlik","Hızlı multimodal erişim","Bulut entegre zeka"],
-    "standoutFeature": "AWS Bedrock native — S3, Lambda, SageMaker entegrasyonu",
-    "useCase": "AWS tabanlı AI pipeline, bulut kurumsal uygulamalar",
-    "rivalAdvantage": "AWS servisleriyle native entegrasyonda rakipsiz",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "amazon","accent": "#ff9900"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Dev",
-    "modelId": "bfl/flux-dev",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0375,
-    "traits": ["Geliştirici öncelikli erişim","Fine-tuning altyapısı","Açık araştırma lisansı","Prototip kalite standardı","Topluluk ekosistemi"],
-    "standoutFeature": "Geliştirici ve araştırmacı lisansı ile tam Pro kalite",
-    "useCase": "Model fine-tuning, araştırma, uygulama prototipi",
-    "rivalAdvantage": "Pro kalitesinde geliştirici dostu fiyat ve lisans",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Pro",
-    "modelId": "bfl/flux-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B Pro diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.075,
-    "traits": ["Profesyonel üretim standardı","Fotogerçekçi çıktı","Detay ve kompozisyon dengesi","Yaratıcı direktör onaylı","Güvenilir üretim modeli"],
-    "standoutFeature": "FLUX Pro — ticari üretim için standart model",
-    "useCase": "İçerik ajansı, e-ticaret, pazarlama görseli",
-    "rivalAdvantage": "DALL-E 3'e kıyasla renk ve kompozisyon üstünlüğü",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Pro 1.1 Ultra",
-    "modelId": "bfl/flux-pro-1.1-ultra",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Ultra diffusion",
-    "speedLabel": "~6 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.09,
-    "traits": ["BFL amiral gemisi kalite","Ultra çözünürlük kapasitesi","Fotogerçekçilik zirvesi","Profesyonel baskı standardı","Premium üretim kalitesi"],
-    "standoutFeature": "BFL'nin en yüksek kaliteli production modeli",
-    "useCase": "Ticari baskı, reklam kampanyası, billboard",
-    "rivalAdvantage": "Adobe Firefly'a karşı maliyet-kalite oranı üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Schnell",
-    "modelId": "bfl/flux-schnell",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B distilled",
-    "speedLabel": "~1 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0045,
-    "traits": ["Yıldırım hızı üretim","Toplu işlem şampiyonu","Minimum gecikme","Distilasyon mucizesi","Ölçek için tasarlandı"],
-    "standoutFeature": "Apache 2.0 lisanslı en hızlı açık diffusion modeli",
-    "useCase": "Toplu görsel üretim, A/B testi, anlık önizleme",
-    "rivalAdvantage": "Lisans ve hız kategorisinde Flux Schnell mutlak lider",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1 Dev",
-    "modelId": "black-forest-labs/flux-1-dev",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0375,
-    "traits": ["Geliştirici kitlesi için pro kalite","Ticari kullanım uyumlu","Fine-tuning dostu","Açık araştırma modeli","Topluluk onaylı"],
-    "standoutFeature": "Flux 1 Pro kalitesi — geliştirici lisansı ile",
-    "useCase": "Uygulama geliştirme, prototipler, özel fine-tune",
-    "rivalAdvantage": "Pro'ya yakın kalite %37 daha düşük maliyetle",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1 Schnell",
-    "modelId": "black-forest-labs/flux-1-schnell",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B distilled",
-    "speedLabel": "~1 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0045,
-    "traits": ["Alman hız mühendisliği","Saniyenin altında üretim","Maliyet minimize uzmanı","Yüksek hacim makinesi","Distilled verimlilik"],
-    "standoutFeature": "Distilled model — 4 adımlı üretim, 1 saniyenin altında",
-    "useCase": "Gerçek zamanlı önizleme, yüksek hacim thumbnail",
-    "rivalAdvantage": "Kategorisinde en hızlı ve en ucuz profesyonel diffusion",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1.1 Pro",
-    "modelId": "black-forest-labs/flux-1.1-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Profesyonel görsel kalite","Detay sadakati zirvesi","Fotogerçekçilik uzmanı","Yaratıcı direktöre uygun","Sektör onaylı çıktı"],
-    "standoutFeature": "FLUX mimarisi — stable diffusion ötesi kalite",
-    "useCase": "Ticari görselleştirme, reklam, ürün fotoğrafı",
-    "rivalAdvantage": "DALL-E 3 ve Midjourney'e karşı detay doğruluğu üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1.1 Pro Ultra",
-    "modelId": "black-forest-labs/flux-1.1-pro-ultra",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion Ultra",
-    "speedLabel": "~6 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.09,
-    "traits": ["Ultra yüksek çözünürlük","Maksimum detay yoğunluğu","Baskı hazır kalite","Sanatsal mükemmellik","Ultra gerçekçi doku"],
-    "standoutFeature": "4K+ çözünürlük desteği — en yüksek kalite modu",
-    "useCase": "Baskı medyası, billboard, stüdyo kalitesi içerik",
-    "rivalAdvantage": "Midjourney v6.1 Ultra'ya karşı maliyet-kalite oranı",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux Kontext Max",
-    "modelId": "black-forest-labs/flux-kontext-max",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Kontext diffusion",
-    "speedLabel": "~7 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.12,
-    "traits": ["Bağlamsal görsel zeka","Referans görsel anlama","Tutarlı stil transferi","Çoklu referans füzyonu","Yaratıcı kontrol zirvesi"],
-    "standoutFeature": "Referans görsel ile stil tutarlılığı — sektörde ilk",
-    "useCase": "Marka kimliği, ürün varyasyonları, karakter tutarlılığı",
-    "rivalAdvantage": "IP-Adapter ve ControlNet'e kıyasla çok daha kolay kullanım",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux Kontext Pro",
-    "modelId": "black-forest-labs/flux-kontext-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Kontext diffusion Pro",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Pro düzey bağlam anlama","Stil tutarlılığı","Gelişmiş kompozisyon","Uygun fiyatlı Kontext","Marka uyumlu üretim"],
-    "standoutFeature": "Kontext Max'ın %50 düşük maliyetli versiyonu",
-    "useCase": "İçerik kanalları, sosyal medya şablonları",
-    "rivalAdvantage": "Fiyata göre Kontext özelliklerinde maksimum değer",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Google",
-    "provider": "Google",
-    "modelName": "Gemini 3.1 Flash Image",
-    "modelId": "google/gemini-3.1-flash-image-preview",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Diffusion",
-    "speedLabel": "~3 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.1005,
-    "traits": ["Fotogerçekçi detay","Google mağazası kalitesi","Anlık görsel üretim","Çok dilli prompt desteği","Güvenli içerik filtreleme"],
-    "standoutFeature": "Gemini altyapısıyla metin-görsel entegrasyonu",
-    "useCase": "Pazarlama görselleri, sosyal medya, e-ticaret",
-    "rivalAdvantage": "DALL-E 3'e göre %30 daha hızlı üretim",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "google","accent": "#4285f4"}
-  },
-  {
-    "company": "OpenAI",
-    "provider": "OpenAI",
-    "modelName": "GPT Image 1",
-    "modelId": "openai/gpt-image-1",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Özel diffusion",
-    "speedLabel": "~8 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0165,
-    "traits": ["LLM bağlamlı görsel üretim","Metin anlama üstünlüğü","Prompt sadakati lideri","OpenAI kalite damgası","Native ChatGPT entegrasyonu"],
-    "standoutFeature": "GPT'nin metin anlayışı ile görsel üretim füzyonu",
-    "useCase": "ChatGPT entegrasyonu, metin-görsel içerik, eğitim",
-    "rivalAdvantage": "Prompt takibi doğruluğunda DALL-E 3'ün üstünde",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "openai","accent": "#10a37f"}
-  },
-  {
-    "company": "Recraft",
-    "provider": "Recraft",
-    "modelName": "Recraft 20B",
-    "modelId": "recraft-ai/recraft-20b",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "20B diffusion",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["20 milyar parametre görsel güç","Yüksek parametreli yaratıcılık","Detay derinliği uzmanı","Profesyonel görsel standart","Tasarım odaklı AI"],
-    "standoutFeature": "20B parametre ile görsel sektörünün en büyük modellerinden",
-    "useCase": "Profesyonel yaratıcı stüdyo, reklam, illustrasyon",
-    "rivalAdvantage": "Parametre başına görsel kalitede sektör rekoru",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "recraft","accent": "#8b5cf6"}
-  },
-  {
-    "company": "Recraft",
-    "provider": "Recraft",
-    "modelName": "Recraft V3",
-    "modelId": "recraft-ai/recraft-v3",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Özel vektör+raster",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Vektör tasarım öncüsü","Marka kimliği uyumlu","SVG düzeyinde hassasiyet","Tasarımcı araç seti","Kurumsal görsel standart"],
-    "standoutFeature": "SVG + raster hibrit çıktı — tasarımcı için optimize",
-    "useCase": "Logo, ikon, kurumsal kimlik, UI asset üretimi",
-    "rivalAdvantage": "Midjourney'e karşı vektör çıktı ve logo üretiminde üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "recraft","accent": "#8b5cf6"}
-  }
-];
-
-// ─────────────────── MODEL KATALOĞU FONKSİYONLARI ───────────────────
-
-function deriveSpeedScore(label) {
-  const text = safeString(label);
-  if (Object.prototype.hasOwnProperty.call(SPEED_SCORE_MAP, text)) {
-    return SPEED_SCORE_MAP[text];
-  }
-  return 50;
-}
-
-function normalizeBadges(badges) {
-  try {
-    const source = Array.isArray(badges) ? badges : [];
-    const unique = [];
-    for (const badge of source) {
-      const clean = safeString(badge).toUpperCase();
-      if (clean && !unique.includes(clean)) unique.push(clean);
+  const clearPoll = useCallback(() => {
+    if (pollRef.current) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
     }
-    return unique;
-  } catch {
-    return [];
-  }
-}
+  }, []);
 
-function normalizeModel(row, index) {
-  try {
-    const company = safeString(row.company, 'BİLİNMİYOR');
-    const modelName = safeString(row.modelName, 'ADSIZ MODEL');
-    const modelId = safeString(row.modelId, `unknown-model-${index + 1}`);
-    const provider = safeString(row.provider, company);
-    const categoryRaw = safeString(row.categoryRaw, 'GENEL');
-    const badges = normalizeBadges(row.badges);
-    const parameters = safeString(row.parameters, '-');
-    const speedLabel = safeString(row.speedLabel, 'Orta');
-    const inputPrice = normalizeNullablePrice(row.inputPrice);
-    const outputPrice = normalizeNullablePrice(row.outputPrice);
-    const imagePrice = normalizeNullablePrice(row.imagePrice);
-    const traits = Array.isArray(row.traits)
-      ? row.traits.map((item) => safeString(item)).filter(Boolean).slice(0, 5)
-      : [];
-    const standoutFeature = safeString(row.standoutFeature);
-    const useCase = safeString(row.useCase);
-    const rivalAdvantage = safeString(row.rivalAdvantage);
-    const sourceUrl = safeString(row.sourceUrl);
-    const style = row && typeof row.style === 'object' && row.style ? row.style : {};
+  const mergeActiveImages = useCallback((job, inlinePreview = '') => {
+    const images = pickJobImages(job, inlinePreview);
+    setActiveImageUrls(images);
+  }, []);
 
-    return Object.freeze({
-      id: modelId,
-      company,
-      provider,
-      modelName,
-      modelId,
-      categoryRaw,
-      badges,
-      parameters,
-      speedLabel,
-      speedScore: deriveSpeedScore(speedLabel),
-      prices: Object.freeze({
-        input: inputPrice,
-        output: outputPrice,
-        image: imagePrice,
-      }),
-      traits: Object.freeze(traits),
-      standoutFeature,
-      useCase,
-      rivalAdvantage,
-      sourceUrl,
-      style: Object.freeze({
-        brandKey: safeString(style.brandKey, 'generic'),
-        accent: safeString(style.accent, '#64748b'),
-      }),
-    });
-  } catch {
-    return Object.freeze({
-      id: `broken-model-${index + 1}`,
-      company: 'BİLİNMİYOR',
-      provider: 'BİLİNMİYOR',
-      modelName: 'BOZUK KAYIT',
-      modelId: `broken-model-${index + 1}`,
-      categoryRaw: 'GENEL',
-      badges: Object.freeze(['GENEL']),
-      parameters: '-',
-      speedLabel: 'Orta',
-      speedScore: 50,
-      prices: Object.freeze({ input: null, output: null, image: null }),
-      traits: Object.freeze([]),
-      standoutFeature: '',
-      useCase: '',
-      rivalAdvantage: '',
-      sourceUrl: '',
-      style: Object.freeze({ brandKey: 'generic', accent: '#64748b' }),
-    });
-  }
-}
+  const loadWorkerInfo = useCallback(async () => {
+    const payload = await requestWorker('/');
+    setWorkerInfo(payload?.data || null);
+  }, []);
 
-const MODEL_CATALOG = Object.freeze(RAW_MODELS.map((row, index) => normalizeModel(row, index)));
+  const loadModels = useCallback(async () => {
+    const payload = await requestWorker('/models');
+    const items = normalizeArray(payload?.data?.items);
+    const onlyImageModels = items.filter((item) => safeText(item?.modelId || item?.id) === DEFAULT_MODEL_ID);
+    setModels(onlyImageModels.length ? onlyImageModels : items);
+  }, []);
 
-function uniqueSortedStrings(values) {
-  return [...new Set(values.map((item) => safeString(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'));
-}
+  const hydrateHistoryImages = useCallback(async (items) => {
+    const next = [];
+    for (const item of normalizeArray(items)) {
+      let job = item;
+      const hasDirectImage =
+        safeText(job?.outputUrl) ||
+        normalizeArray(job?.outputUrls).length ||
+        safeText(job?.url) ||
+        normalizeArray(job?.urls).length;
 
-const MODEL_FACETS = Object.freeze({
-  companies: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.company))),
-  badges: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.flatMap((item) => item.badges))),
-  categories: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.categoryRaw))),
-});
-
-function queryContains(haystack, needle) {
-  return safeString(haystack).toLocaleLowerCase('tr').includes(safeString(needle).toLocaleLowerCase('tr'));
-}
-
-function matchesSearch(item, search) {
-  if (!safeString(search)) return true;
-  const bag = [
-    item.company, item.provider, item.modelName, item.modelId, item.categoryRaw,
-    ...item.badges, ...item.traits, item.standoutFeature, item.useCase, item.rivalAdvantage,
-  ];
-  return bag.some((part) => queryContains(part, search));
-}
-
-function matchesCompany(item, company) {
-  if (!safeString(company)) return true;
-  return safeString(item.company).toLocaleLowerCase('tr') === safeString(company).toLocaleLowerCase('tr');
-}
-
-function matchesBadge(item, badge) {
-  if (!safeString(badge)) return true;
-  return item.badges.includes(safeString(badge).toUpperCase());
-}
-
-function matchesCategory(item, category) {
-  if (!safeString(category)) return true;
-  return safeString(item.categoryRaw).toLocaleLowerCase('tr') === safeString(category).toLocaleLowerCase('tr');
-}
-
-function sortModels(items, sortKey) {
-  const cloned = [...items];
-  switch (safeString(sortKey)) {
-    case 'name_asc': return cloned.sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr'));
-    case 'name_desc': return cloned.sort((a, b) => b.modelName.localeCompare(a.modelName, 'tr'));
-    case 'company_asc': return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-    case 'company_desc': return cloned.sort((a, b) => `${b.company} ${b.modelName}`.localeCompare(`${a.company} ${a.modelName}`, 'tr'));
-    case 'input_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.input, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.input, Number.MAX_SAFE_INTEGER));
-    case 'input_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.input, -1) - safeNumber(a.prices.input, -1));
-    case 'output_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.output, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.output, Number.MAX_SAFE_INTEGER));
-    case 'output_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.output, -1) - safeNumber(a.prices.output, -1));
-    case 'image_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.image, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.image, Number.MAX_SAFE_INTEGER));
-    case 'image_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.image, -1) - safeNumber(a.prices.image, -1));
-    case 'speed_desc': return cloned.sort((a, b) => safeNumber(b.speedScore, 0) - safeNumber(a.speedScore, 0));
-    case 'speed_asc': return cloned.sort((a, b) => safeNumber(a.speedScore, 0) - safeNumber(b.speedScore, 0));
-    default: return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-  }
-}
-
-function mapSortKey(sortKey, feature) {
-  const clean = safeString(sortKey, feature === 'image' ? 'price_asc' : 'company_asc');
-  if (clean === 'price_asc') return feature === 'image' ? 'image_price_asc' : 'input_price_asc';
-  if (clean === 'price_desc') return feature === 'image' ? 'image_price_desc' : 'input_price_desc';
-  return clean;
-}
-
-function isImageCatalogModel(item) {
-  const category = safeString(item.categoryRaw).toLocaleLowerCase('tr');
-  const modelId = safeString(item.modelId).toLocaleLowerCase('tr');
-  const badges = Array.isArray(item.badges) ? item.badges.join(' ').toLocaleLowerCase('tr') : '';
-  return (
-    item?.prices?.image != null ||
-    category.includes('image') ||
-    category.includes('görsel') ||
-    badges.includes('görsel') ||
-    badges.includes('image') ||
-    modelId.includes('flux') ||
-    modelId.includes('gpt-image') ||
-    modelId.includes('recraft') ||
-    modelId.includes('ideogram') ||
-    modelId.includes('stable-diffusion')
-  );
-}
-
-function serializeModelForClient(item) {
-  return {
-    ...item,
-    inputPrice: item?.prices?.input ?? null,
-    outputPrice: item?.prices?.output ?? null,
-    imagePrice: item?.prices?.image ?? null,
-  };
-}
-
-function parseQuery(request) {
-  const url = new URL(request.url);
-  const feature = safeString(url.searchParams.get('feature')).toLocaleLowerCase('tr');
-  return {
-    search: safeString(url.searchParams.get('search')),
-    company: safeString(url.searchParams.get('company')),
-    badge: safeString(url.searchParams.get('badge')).toUpperCase(),
-    category: safeString(url.searchParams.get('category')),
-    sort: mapSortKey(url.searchParams.get('sort'), feature),
-    limit: clampLimit(url.searchParams.get('limit')),
-    offset: clampOffset(url.searchParams.get('offset')),
-    modelId: safeString(url.searchParams.get('modelId')),
-    feature,
-  };
-}
-
-function buildListPayload(query) {
-  let items = MODEL_CATALOG.filter((item) =>
-    matchesSearch(item, query.search) &&
-    matchesCompany(item, query.company) &&
-    matchesBadge(item, query.badge) &&
-    matchesCategory(item, query.category)
-  );
-
-  if (query.feature === 'image') {
-    items = items.filter(isImageCatalogModel);
-  }
-
-  items = sortModels(items, query.sort);
-
-  if (query.modelId) {
-    items = items.filter((item) => item.modelId === query.modelId || item.id === query.modelId);
-  }
-
-  const total = items.length;
-  const paginated = items.slice(query.offset, query.offset + query.limit).map(serializeModelForClient);
-
-  return {
-    items: paginated,
-    total,
-    limit: query.limit,
-    offset: query.offset,
-    hasMore: query.offset + query.limit < total,
-    facets: MODEL_FACETS,
-    source: {
-      type: APP_INFO.sourceType,
-      totalModels: MODEL_CATALOG.length,
-      sourceUrl: MODEL_CATALOG[0]?.sourceUrl || '',
-    },
-    filters: {
-      search: query.search,
-      company: query.company,
-      badge: query.badge,
-      category: query.category,
-      sort: query.sort,
-      modelId: query.modelId,
-      feature: query.feature,
-    },
-  };
-}
-
-// ─────────────────── JOB BELLEK DEPOLAMA ───────────────────
-
-const IMAGE_DEFAULTS = Object.freeze({
-  modelId: 'black-forest-labs/flux-1-schnell',
-  quality: 'high',
-  ratio: '1:1',
-  n: 1,
-  maxN: 4,
-  jobHistoryLimit: 20,
-});
-
-const IMAGE_ALLOWED_QUALITIES = new Set(['low', 'medium', 'high']);
-const IMAGE_ALLOWED_RATIOS = new Set(['1:1', '16:9', '9:16', '4:5', '3:2', '2:3']);
-const JOB_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-const JOB_MEMORY_KEY = '__IDM_JOB_MEMORY__';
-const JOB_MEMORY_HISTORY_KEY = '__IDM_JOB_MEMORY_HISTORY__';
-const MEMORY_JOBS = globalThis[JOB_MEMORY_KEY] || (globalThis[JOB_MEMORY_KEY] = new Map());
-const MEMORY_HISTORY = globalThis[JOB_MEMORY_HISTORY_KEY] || (globalThis[JOB_MEMORY_HISTORY_KEY] = []);
-
-function hasKvNamespace(env) {
-  return !!(env && env.IDM_JOBS && typeof env.IDM_JOBS.get === 'function' && typeof env.IDM_JOBS.put === 'function');
-}
-
-function jobStorageKey(jobId) {
-  return `job:${jobId}`;
-}
-
-function historyStorageKey(job) {
-  const created = safeString(job?.createdAt, nowIso());
-  return `history:${created}:${job.jobId}`;
-}
-
-async function saveJob(env, job) {
-  const normalized = { ...job, updatedAt: safeString(job.updatedAt, nowIso()) };
-  MEMORY_JOBS.set(normalized.jobId, normalized);
-  const existingIndex = MEMORY_HISTORY.findIndex((item) => item.jobId === normalized.jobId);
-  if (existingIndex >= 0) MEMORY_HISTORY.splice(existingIndex, 1);
-  MEMORY_HISTORY.unshift({ jobId: normalized.jobId, createdAt: normalized.createdAt || normalized.updatedAt || nowIso() });
-  if (MEMORY_HISTORY.length > 200) MEMORY_HISTORY.splice(200);
-  if (hasKvNamespace(env)) {
-    const payload = JSON.stringify(normalized);
-    await env.IDM_JOBS.put(jobStorageKey(normalized.jobId), payload);
-    await env.IDM_JOBS.put(historyStorageKey(normalized), payload);
-  }
-  return normalized;
-}
-
-async function readJob(env, jobId) {
-  if (!jobId) return null;
-  if (hasKvNamespace(env)) {
-    const text = await env.IDM_JOBS.get(jobStorageKey(jobId));
-    if (text) {
-      const parsed = safeJsonParse(text, null);
-      if (parsed && typeof parsed === 'object') {
-        MEMORY_JOBS.set(jobId, parsed);
-        return parsed;
+      if (safeText(job?.status).toLowerCase() === 'completed' && !hasDirectImage && safeText(job?.jobId)) {
+        try {
+          const imagePayload = await requestWorker(`/jobs/image/${encodeURIComponent(job.jobId)}`);
+          const freshUrl = safeText(imagePayload?.data?.outputUrl);
+          if (freshUrl) {
+            job = {
+              ...job,
+              outputUrl: freshUrl,
+              outputUrls: [freshUrl],
+              url: freshUrl,
+              urls: [freshUrl],
+            };
+          }
+        } catch {
+          // Hata olsa bile history kartı çökmemeli.
+        }
       }
+
+      next.push(job);
     }
-  }
-  return MEMORY_JOBS.get(jobId) || null;
-}
+    return next;
+  }, []);
 
-async function listJobs(env, limit = IMAGE_DEFAULTS.jobHistoryLimit) {
-  const clampedLimit = Math.max(1, Math.min(50, Math.floor(safeNumber(limit, IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-  if (hasKvNamespace(env) && typeof env.IDM_JOBS.list === 'function') {
-    const listed = await env.IDM_JOBS.list({ prefix: 'history:', limit: Math.max(clampedLimit * 3, clampedLimit) });
-    const jobs = [];
-    for (const key of listed.keys || []) {
-      const value = await env.IDM_JOBS.get(key.name);
-      const parsed = safeJsonParse(value, null);
-      if (parsed && typeof parsed === 'object') jobs.push(parsed);
-    }
-    jobs.sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)));
-    return jobs.slice(0, clampedLimit);
-  }
-  return MEMORY_HISTORY
-    .map((item) => MEMORY_JOBS.get(item.jobId))
-    .filter(Boolean)
-    .sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)))
-    .slice(0, clampedLimit);
-}
-
-async function updateJob(env, jobId, updater) {
-  const current = (await readJob(env, jobId)) || { jobId };
-  const next = updater({ ...current });
-  return saveJob(env, { ...next, jobId, updatedAt: nowIso() });
-}
-
-// ─────────────────── GÖRSEL ÜRETİMİ ───────────────────
-
-function buildPromptPreview(text, max = 140) {
-  const clean = safeString(text);
-  if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1)}…`;
-}
-
-function normalizeImageRequest(body) {
-  const prompt = safeString(body?.prompt);
-  if (!prompt) {
-    const error = new Error('PROMPT ZORUNLU.');
-    error.code = 'PROMPT_REQUIRED';
-    throw error;
-  }
-  const model = safeString(body?.model || body?.modelId, IMAGE_DEFAULTS.modelId);
-  const qualityInput = safeString(body?.quality, IMAGE_DEFAULTS.quality).toLowerCase();
-  const quality = IMAGE_ALLOWED_QUALITIES.has(qualityInput) ? qualityInput : IMAGE_DEFAULTS.quality;
-  const ratioInput = safeString(body?.ratio || body?.size, IMAGE_DEFAULTS.ratio);
-  const ratio = IMAGE_ALLOWED_RATIOS.has(ratioInput) ? ratioInput : IMAGE_DEFAULTS.ratio;
-  const n = Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(body?.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n)));
-  const style = safeString(body?.style);
-  const negativePrompt = safeString(body?.negativePrompt);
-  const clientRequestId = safeString(body?.clientRequestId);
-  const responseFormat = safeString(body?.responseFormat, 'url');
-  const guidance = safeString(body?.guidance);
-  const seed = safeString(body?.seed);
-  const metadata = body && typeof body.metadata === 'object' && body.metadata ? body.metadata : {};
-  return {
-    prompt, model, modelId: model, ratio, size: ratio, quality, style,
-    negativePrompt, n, responseFormat, guidance, seed, clientRequestId, metadata,
-    attachmentCount: safeNumber(body?.attachmentCount, 0),
-  };
-}
-
-function buildImageJobRecord(jobId, requestPayload) {
-  const createdAt = nowIso();
-  return {
-    jobId,
-    feature: 'image',
-    status: 'queued',
-    progress: 0,
-    step: 'queued',
-    queuePosition: null,
-    etaMs: null,
-    outputUrl: null,
-    outputUrls: [],
-    url: null,
-    urls: [],
-    retryable: true,
-    cancelRequested: false,
-    requestSummary: {
-      model: requestPayload.modelId,
-      prompt: requestPayload.prompt,
-      promptPreview: buildPromptPreview(requestPayload.prompt),
-    },
-    request: {
-      model: requestPayload.model,
-      modelId: requestPayload.modelId,
-      ratio: requestPayload.ratio,
-      size: requestPayload.size,
-      quality: requestPayload.quality,
-      style: requestPayload.style,
-      negativePrompt: requestPayload.negativePrompt,
-      n: requestPayload.n,
-      responseFormat: requestPayload.responseFormat,
-      metadata: requestPayload.metadata,
-      clientRequestId: requestPayload.clientRequestId,
-      attachmentCount: requestPayload.attachmentCount,
-    },
-    error: null,
-    createdAt,
-    updatedAt: createdAt,
-    finishedAt: null,
-  };
-}
-
-function collectStringCandidates(value, bag) {
-  if (value == null) return;
-  if (typeof value === 'string') {
-    const clean = value.trim();
-    if (clean) bag.push(clean);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectStringCandidates(item, bag);
-    return;
-  }
-  if (typeof value === 'object') {
-    for (const key of ['src', 'url', 'href', 'outputUrl']) {
-      if (typeof value[key] === 'string' && value[key].trim()) bag.push(value[key].trim());
-    }
-    for (const key of ['urls', 'outputUrls', 'images', 'items', 'results', 'data']) {
-      if (value[key] != null) collectStringCandidates(value[key], bag);
-    }
-  }
-}
-
-function extractImageUrls(raw) {
-  const bag = [];
-  collectStringCandidates(raw, bag);
-  return [...new Set(bag.filter(Boolean))];
-}
-
-function getImageGeneratorCandidates(env) {
-  return [
-    env?.me?.puter?.ai?.txt2img,
-    env?.me?.ai?.txt2img,
-    env?.puter?.ai?.txt2img,
-    globalThis?.me?.puter?.ai?.txt2img,
-    globalThis?.me?.ai?.txt2img,
-    globalThis?.puter?.ai?.txt2img,
-    globalThis?.Puter?.ai?.txt2img,
-  ].filter((candidate) => typeof candidate === 'function');
-}
-
-async function runTxt2Img(env, prompt, options) {
-  const candidates = getImageGeneratorCandidates(env);
-  if (!candidates.length) {
-    const error = new Error('WORKER İÇİNDE txt2img FONKSİYONU BULUNAMADI.');
-    error.code = 'TXT2IMG_UNAVAILABLE';
-    throw error;
-  }
-  let lastError = null;
-  for (const candidate of candidates) {
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true);
     try {
-      return await candidate(prompt, options);
-    } catch (error) {
-      lastError = error;
+      const payload = await requestWorker(`/jobs/history?limit=${HISTORY_LIMIT}`);
+      const items = normalizeArray(payload?.data?.items);
+      const hydrated = await hydrateHistoryImages(items);
+      setHistory(hydrated);
+    } finally {
+      setLoadingHistory(false);
     }
-  }
-  throw lastError || new Error('txt2img ÇAĞRISI BAŞARISIZ OLDU.');
-}
+  }, [hydrateHistoryImages]);
 
-function buildTxt2ImgOptions(job) {
-  const request = job.request || {};
-  return {
-    model: safeString(request.modelId || request.model, IMAGE_DEFAULTS.modelId),
-    quality: safeString(request.quality, IMAGE_DEFAULTS.quality),
-    ratio: safeString(request.ratio || request.size, IMAGE_DEFAULTS.ratio),
-    size: safeString(request.size || request.ratio, IMAGE_DEFAULTS.ratio),
-    n: Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(request.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n))),
-    style: safeString(request.style),
-    negativePrompt: safeString(request.negativePrompt),
-    responseFormat: 'url',
-    metadata: request.metadata || {},
-    guidance: safeString(request.guidance),
-    seed: safeString(request.seed),
-  };
-}
+  const stopIfTerminal = useCallback((job) => {
+    const s = safeText(job?.status).toLowerCase();
+    return s === 'completed' || s === 'failed' || s === 'failed_storage' || s === 'cancelled';
+  }, []);
 
-async function processImageJob(env, jobId) {
-  const initialJob = await readJob(env, jobId);
-  if (!initialJob) return;
-  if (JOB_TERMINAL_STATUSES.has(initialJob.status)) return;
-  if (initialJob.cancelRequested) {
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'cancelled', progress: job.progress || 0,
-      step: 'cancelled', finishedAt: nowIso(), error: null,
-    }));
-    return;
-  }
+  const resolveCompletedImageIfNeeded = useCallback(async (job, inlinePreview = '') => {
+    let nextJob = job;
 
-  await updateJob(env, jobId, (job) => ({
-    ...job, status: 'processing', progress: Math.max(5, safeNumber(job.progress, 0)),
-    step: 'processing', retryable: true, error: null,
-  }));
-
-  try {
-    const currentJob = await readJob(env, jobId);
-    if (!currentJob) return;
-    const result = await runTxt2Img(env, currentJob.requestSummary?.prompt || currentJob.request?.prompt || '', buildTxt2ImgOptions(currentJob));
-    const urls = extractImageUrls(result);
-    if (!urls.length) {
-      const error = new Error('GÖRSEL ÜRETİMİ TAMAMLANDI AMA URL ÇIKMADI.');
-      error.code = 'IMAGE_URL_MISSING';
-      throw error;
+    const currentImages = pickJobImages(job, inlinePreview);
+    if (currentImages.length) {
+      mergeActiveImages(job, inlinePreview);
+      return nextJob;
     }
-    const latestJob = await readJob(env, jobId);
-    if (latestJob?.cancelRequested) {
-      await updateJob(env, jobId, (job) => ({
-        ...job, status: 'cancelled', progress: Math.max(safeNumber(job.progress, 0), 90),
-        step: 'cancelled', finishedAt: nowIso(), outputUrl: null, outputUrls: [],
-        url: null, urls: [], error: null,
-      }));
-      return;
-    }
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'completed', progress: 100, step: 'completed',
-      finishedAt: nowIso(), retryable: false,
-      outputUrl: urls[0] || null, outputUrls: urls, url: urls[0] || null, urls, error: null,
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'failed', progress: Math.max(safeNumber(job.progress, 0), 100),
-      step: 'failed', finishedAt: nowIso(), retryable: true,
-      error: { message: safe.message || 'GÖRSEL ÜRETİMİ BAŞARISIZ.', retryable: true },
-    }));
-  }
-}
 
-// ─────────────────── REQUEST PARSE ───────────────────
-
-async function parseRequestJson(request) {
-  const text = await request.text();
-  if (!text.trim()) return {};
-  const parsed = safeJsonParse(text, null);
-  if (!parsed || typeof parsed !== 'object') {
-    const error = new Error('JSON BODY GEÇERSİZ.');
-    error.code = 'INVALID_JSON';
-    throw error;
-  }
-  return parsed;
-}
-
-// ─────────────────── ROUTE HANDLER'LAR ───────────────────
-
-async function handleOptions(request) {
-  return new Response(null, { status: 204, headers: buildCorsHeaders(request) });
-}
-
-async function handleRoot(request) {
-  const startedAt = nowMs();
-  const requestId = createId('info');
-  const traceId = createId('trace');
-  return jsonResponse(request, successEnvelope({
-    requestId, traceId, startedAt, code: 'WORKER_INFO',
-    data: {
-      worker: APP_INFO.worker,
-      version: APP_INFO.version,
-      protocolVersion: APP_INFO.protocolVersion,
-      purpose: APP_INFO.purpose,
-      supportsCatalog: true,
-      supportsImageGeneration: true,
-      supportsJobs: true,
-      routes: ['GET /','GET /health','GET /models','POST /generate','GET /jobs/status/:id','GET /jobs/history','POST /jobs/cancel'],
-      supportedQuery: ['search','company','badge','category','sort','limit','offset','modelId','feature'],
-    },
-    meta: { totalModels: MODEL_CATALOG.length, sourceType: APP_INFO.sourceType },
-  }));
-}
-
-async function handleHealth(request) {
-  const startedAt = nowMs();
-  const requestId = createId('health');
-  const traceId = createId('trace');
-  return jsonResponse(request, successEnvelope({
-    requestId, traceId, startedAt, code: 'HEALTH_OK',
-    data: {
-      status: 'ok', worker: APP_INFO.worker, totalModels: MODEL_CATALOG.length,
-      sourceType: APP_INFO.sourceType, supportsImageGeneration: true, supportsJobs: true, time: nowIso(),
-    },
-  }));
-}
-
-async function handleModels(request) {
-  const startedAt = nowMs();
-  const requestId = createId('models');
-  const traceId = createId('trace');
-  try {
-    const query = parseQuery(request);
-    const payload = buildListPayload(query);
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'MODELS_OK', data: payload,
-      meta: { totalModels: MODEL_CATALOG.length, returnedItems: payload.items.length },
-    }), 200, { 'cache-control': `public, max-age=${DEFAULTS.cacheSeconds}` });
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'MODELS_FAILED',
-      message: safe.message || 'MODEL KATALOĞU İSTEĞİ BAŞARISIZ.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleGenerate(request, env, ctx) {
-  const startedAt = nowMs();
-  const requestId = createId('generate');
-  const traceId = createId('trace');
-  try {
-    const body = await parseRequestJson(request);
-    const imageRequest = normalizeImageRequest(body);
-    const jobId = createId('img');
-    const job = buildImageJobRecord(jobId, imageRequest);
-    await saveJob(env, job);
-    ctx.waitUntil(processImageJob(env, jobId));
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'IMAGE_JOB_QUEUED',
-      data: { jobId, status: 'queued', progress: 0, step: 'queued', modelId: imageRequest.modelId, requestId },
-      meta: { feature: 'image' },
-    }), 202);
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'PROMPT_REQUIRED' || safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'IMAGE_GENERATE_FAILED',
-      message: safe.message || 'GÖRSEL ÜRETİMİ BAŞLATILAMADI.', status,
-    }), status);
-  }
-}
-
-async function handleJobStatus(request, env, jobId) {
-  const startedAt = nowMs();
-  const requestId = createId('status');
-  const traceId = createId('trace');
-  try {
-    const job = await readJob(env, jobId);
-    if (!job) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_NOT_FOUND', message: 'JOB BULUNAMADI.', status: 404,
-      }), 404);
-    }
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_STATUS_OK', data: job, meta: { feature: 'image' },
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_STATUS_FAILED',
-      message: safe.message || 'JOB DURUMU OKUNAMADI.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleJobHistory(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('history');
-  const traceId = createId('trace');
-  try {
-    const url = new URL(request.url);
-    const limit = Math.max(1, Math.min(50, Math.floor(safeNumber(url.searchParams.get('limit'), IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-    const items = await listJobs(env, limit);
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_HISTORY_OK',
-      data: { items, total: items.length, limit, feature: 'image' },
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_HISTORY_FAILED',
-      message: safe.message || 'JOB GEÇMİŞİ OKUNAMADI.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleJobCancel(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('cancel');
-  const traceId = createId('trace');
-  try {
-    const body = await parseRequestJson(request);
-    const jobId = safeString(body?.jobId);
-    if (!jobId) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_ID_REQUIRED', message: 'jobId ZORUNLU.', status: 400,
-      }), 400);
-    }
-    const current = await readJob(env, jobId);
-    if (!current) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_NOT_FOUND', message: 'JOB BULUNAMADI.', status: 404,
-      }), 404);
-    }
-    const job = await updateJob(env, jobId, (jobState) => {
-      if (JOB_TERMINAL_STATUSES.has(jobState.status)) return { ...jobState, cancelRequested: true };
-      return { ...jobState, cancelRequested: true, status: 'cancelled', step: 'cancelled', finishedAt: nowIso() };
-    });
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_CANCELLED', data: job,
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_CANCEL_FAILED',
-      message: safe.message || 'JOB İPTAL EDİLEMEDİ.', status,
-    }), status);
-  }
-}
-
-async function handleNotFound(request) {
-  const startedAt = nowMs();
-  const requestId = createId('route');
-  const traceId = createId('trace');
-  return jsonResponse(request, errorEnvelope({
-    requestId, traceId, startedAt, code: 'ROUTE_NOT_FOUND', message: 'ROUTE BULUNAMADI.', status: 404,
-  }), 404);
-}
-
-// ─────────────────── DISPATCHER ───────────────────
-
-async function dispatchRequest(request, env, ctx) {
-  const url = new URL(request.url);
-  const pathname = url.pathname.replace(/\/+$/, '') || '/';
-  const method = request.method.toUpperCase();
-
-  if (method === 'OPTIONS') return handleOptions(request);
-  if (method === 'GET' && pathname === '/') return handleRoot(request);
-  if (method === 'GET' && pathname === '/health') return handleHealth(request);
-  if (method === 'GET' && pathname === '/models') return handleModels(request);
-  if (method === 'POST' && pathname === '/generate') return handleGenerate(request, env, ctx);
-  if (method === 'GET' && pathname.startsWith('/jobs/status/')) {
-    const jobId = decodeURIComponent(pathname.slice('/jobs/status/'.length));
-    return handleJobStatus(request, env, jobId);
-  }
-  if (method === 'GET' && pathname === '/jobs/history') return handleJobHistory(request, env);
-  if (method === 'POST' && pathname === '/jobs/cancel') return handleJobCancel(request, env);
-  return handleNotFound(request);
-}
-
-// ─────────────────── FETCH ENTRY POINT ───────────────────
-
-addEventListener('fetch', (event) => {
-  event.respondWith(handleFetch(event.request, event));
-});
-
-async function handleFetch(request, event) {
-  const env = {};
-  const ctx = {
-    waitUntil(promise) {
-      if (event && typeof event.waitUntil === 'function') {
-        event.waitUntil(promise);
+    if (safeText(job?.status).toLowerCase() === 'completed' && safeText(job?.jobId)) {
+      try {
+        const imagePayload = await requestWorker(`/jobs/image/${encodeURIComponent(job.jobId)}`);
+        const freshUrl = safeText(imagePayload?.data?.outputUrl);
+        if (freshUrl) {
+          nextJob = {
+            ...job,
+            outputUrl: freshUrl,
+            outputUrls: [freshUrl],
+            url: freshUrl,
+            urls: [freshUrl],
+          };
+        }
+      } catch {
+        // Sessiz fallback.
       }
-    },
-  };
-  try {
-    return await dispatchRequest(request, env, ctx);
-  } catch (error) {
-    const startedAt = nowMs();
-    const requestId = createId('fatal');
-    const traceId = createId('trace');
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt,
-      code: safe.code || 'UNEXPECTED_ERROR',
-      message: safe.message || 'BEKLENMEYEN HATA OLUŞTU.',
-      status: 500,
-    }), 500);
-  }
+    }
+
+    mergeActiveImages(nextJob, inlinePreview);
+    return nextJob;
+  }, [mergeActiveImages]);
+
+  const pollJob = useCallback((jobId) => {
+    clearPoll();
+
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const payload = await requestWorker(`/jobs/status/${encodeURIComponent(jobId)}`);
+        const job = payload?.data || null;
+        if (!job) return;
+
+        setActiveJob(job);
+        mergeActiveImages(job, activeInlinePreview);
+
+        if (stopIfTerminal(job)) {
+          clearPoll();
+          const resolvedJob = await resolveCompletedImageIfNeeded(job, activeInlinePreview);
+          setActiveJob(resolvedJob);
+          await loadHistory();
+        }
+      } catch (error) {
+        clearPoll();
+        setPageError(error.message || 'Job durumu okunamadı.');
+      }
+    }, POLL_INTERVAL_MS);
+  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, resolveCompletedImageIfNeeded, stopIfTerminal]);
+
+  const boot = useCallback(async () => {
+    setLoadingInfo(true);
+    setPageError('');
+    try {
+      await Promise.all([loadWorkerInfo(), loadModels(), loadHistory()]);
+    } catch (error) {
+      setPageError(error.message || 'Sayfa başlatılamadı.');
+    } finally {
+      setLoadingInfo(false);
+    }
+  }, [loadHistory, loadModels, loadWorkerInfo]);
+
+  useEffect(() => {
+    boot();
+    return () => clearPoll();
+  }, [boot, clearPoll]);
+
+  const handleChange = useCallback((key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleQuickPrompt = useCallback((text) => {
+    setForm((prev) => ({ ...prev, prompt: text }));
+  }, []);
+
+  const handleSubmit = useCallback(async (event) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setPageError('');
+    clearPoll();
+    setActiveInlinePreview('');
+    setActiveImageUrls([]);
+
+    try {
+      const payload = await requestWorker('/generate', {
+        method: 'POST',
+        body: {
+          prompt: form.prompt,
+          model: DEFAULT_MODEL_ID,
+          modelId: DEFAULT_MODEL_ID,
+          ratio: form.ratio,
+          quality: form.quality,
+          style: form.style,
+          negativePrompt: form.negativePrompt,
+        },
+      });
+
+      const job = payload?.data || null;
+      const inlinePreview = safeText(payload?.meta?.inlinePreview);
+
+      setActiveInlinePreview(inlinePreview);
+      setActiveJob(job);
+      mergeActiveImages(job, inlinePreview);
+
+      const jobId = safeText(job?.jobId);
+      if (jobId) {
+        if (stopIfTerminal(job)) {
+          const resolvedJob = await resolveCompletedImageIfNeeded(job, inlinePreview);
+          setActiveJob(resolvedJob);
+          await loadHistory();
+        } else {
+          pollJob(jobId);
+        }
+      } else {
+        await loadHistory();
+      }
+    } catch (error) {
+      const failedJob = error?.payload?.meta?.job || null;
+      if (failedJob) {
+        setActiveJob(failedJob);
+      }
+      setPageError(error.message || 'Üretim başlatılamadı.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, resolveCompletedImageIfNeeded, stopIfTerminal]);
+
+  const handleCancel = useCallback(async () => {
+    const jobId = safeText(activeJob?.jobId);
+    if (!jobId) return;
+
+    try {
+      const payload = await requestWorker('/jobs/cancel', {
+        method: 'POST',
+        body: { jobId },
+      });
+      clearPoll();
+      setActiveJob(payload?.data || null);
+      mergeActiveImages(payload?.data || null, activeInlinePreview);
+      await loadHistory();
+    } catch (error) {
+      setPageError(error.message || 'İptal işlemi başarısız oldu.');
+    }
+  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages]);
+
+  const handleRefreshHistory = useCallback(async () => {
+    setPageError('');
+    try {
+      await loadHistory();
+    } catch (error) {
+      setPageError(error.message || 'Geçmiş yenilenemedi.');
+    }
+  }, [loadHistory]);
+
+  const activeStatus = safeText(activeJob?.status).toLowerCase();
+  const activeStep = safeText(activeJob?.step, '-');
+  const activePrompt = safeText(activeJob?.requestSummary?.promptPreview || activeJob?.requestSummary?.prompt || '');
+  const activeProgress = Math.max(0, Math.min(100, Math.floor(safeNumber(activeJob?.progress, 0))));
+  const canCancel = activeStatus === 'queued' || activeStatus === 'processing';
+
+  const renderedHistory = useMemo(() => history.slice(0, HISTORY_LIMIT), [history]);
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.hero}>
+        <div>
+          <div style={styles.eyebrow}>IMAGE WORKER</div>
+          <h1 style={styles.title}>Tek worker üstünden görsel üretim</h1>
+          <p style={styles.subtitle}>
+            Bu sayfa sadece <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
+            Tek model kullanır. Depolama mantığı me.puter üstündedir.
+          </p>
+        </div>
+
+        <div style={styles.routeBox}>
+          <div style={styles.routeTitle}>Aktif route&apos;lar</div>
+          <div style={styles.routeWrap}>
+            {['/models', '/generate', '/jobs/status/:id', '/jobs/history', '/jobs/cancel', '/jobs/image/:id'].map((item) => (
+              <span key={item} style={styles.routePill}>{item}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {pageError ? (
+        <div style={styles.errorBox}>{pageError}</div>
+      ) : null}
+
+      <div style={styles.grid}>
+        <section style={styles.panel}>
+          <div style={styles.panelHead}>
+            <h2 style={styles.panelTitle}>Üretim ayarları</h2>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <label style={styles.label}>Model</label>
+            <select
+              value={form.model}
+              onChange={(e) => handleChange('model', e.target.value)}
+              style={styles.select}
+              disabled
+            >
+              <option value={DEFAULT_MODEL_ID}>OpenAI · DALL-E 3</option>
+            </select>
+
+            <label style={styles.label}>Prompt</label>
+            <textarea
+              value={form.prompt}
+              onChange={(e) => handleChange('prompt', e.target.value)}
+              placeholder="Örnek: Turuncu bir kedi, sinematik ışık, ultra detay"
+              style={styles.textarea}
+            />
+
+            <div style={styles.quickWrap}>
+              {QUICK_PROMPTS.map((item, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  onClick={() => handleQuickPrompt(item)}
+                  style={styles.quickButton}
+                >
+                  Hazır Prompt {index + 1}
+                </button>
+              ))}
+            </div>
+
+            <label style={styles.label}>Negatif prompt</label>
+            <input
+              value={form.negativePrompt}
+              onChange={(e) => handleChange('negativePrompt', e.target.value)}
+              placeholder="Örnek: blurry, watermark, low quality"
+              style={styles.input}
+            />
+
+            <div style={styles.twoCol}>
+              <div>
+                <label style={styles.label}>Oran</label>
+                <select
+                  value={form.ratio}
+                  onChange={(e) => handleChange('ratio', e.target.value)}
+                  style={styles.select}
+                >
+                  {RATIO_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={styles.label}>Kalite</label>
+                <select
+                  value={form.quality}
+                  onChange={(e) => handleChange('quality', e.target.value)}
+                  style={styles.select}
+                >
+                  {QUALITY_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <label style={styles.label}>Stil notu</label>
+            <input
+              value={form.style}
+              onChange={(e) => handleChange('style', e.target.value)}
+              placeholder="Örnek: cinematic, realistic, soft light"
+              style={styles.input}
+            />
+
+            <div style={styles.actionRow}>
+              <button type="submit" disabled={submitting || !safeText(form.prompt)} style={styles.primaryButton}>
+                {submitting ? 'Üretiliyor...' : 'Görsel Üret'}
+              </button>
+
+              <button type="button" disabled={!canCancel} onClick={handleCancel} style={styles.secondaryButton}>
+                İptal
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section style={styles.panel}>
+          <div style={styles.panelHead}>
+            <h2 style={styles.panelTitle}>Aktif job</h2>
+            <span style={{ ...styles.statusPill, borderColor: statusTone(activeStatus), color: statusTone(activeStatus) }}>
+              {statusLabel(activeStatus || 'idle')}
+            </span>
+          </div>
+
+          {!activeJob ? (
+            <div style={styles.emptyText}>Henüz aktif job yok.</div>
+          ) : (
+            <>
+              <div style={styles.jobMetaGrid}>
+                <div>
+                  <div style={styles.metaLabel}>JOB ID</div>
+                  <div style={styles.metaValue}>{safeText(activeJob?.jobId, '-')}</div>
+                </div>
+
+                <div>
+                  <div style={styles.metaLabel}>İLERLEME</div>
+                  <div style={styles.metaValue}>{activeProgress}%</div>
+                </div>
+
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div style={styles.metaLabel}>ADIM</div>
+                  <div style={styles.stepText}>{activeStep}</div>
+                </div>
+
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div style={styles.metaLabel}>PROMPT</div>
+                  <div style={styles.metaValue}>{activePrompt || '-'}</div>
+                </div>
+
+                <div>
+                  <div style={styles.metaLabel}>MODEL</div>
+                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, DEFAULT_MODEL_ID)}</div>
+                </div>
+
+                <div>
+                  <div style={styles.metaLabel}>BİTTİ</div>
+                  <div style={styles.metaValue}>{formatDateTime(activeJob?.finishedAt)}</div>
+                </div>
+              </div>
+
+              <div style={styles.progressBarOuter}>
+                <div style={{ ...styles.progressBarInner, width: `${activeProgress}%` }} />
+              </div>
+
+              {activeStatus === 'failed_storage' ? (
+                <div style={styles.warnBox}>
+                  Görsel üretimi tamamlandı ama kalıcı depolama başarısız oldu.
+                  Bu durumda completed görünmez. Bu beklenen koruma davranışıdır.
+                </div>
+              ) : null}
+
+              {activeStatus === 'failed' ? (
+                <div style={styles.warnBox}>
+                  İş başarısız oldu. Promptu sadeleştirip tekrar deneyin.
+                </div>
+              ) : null}
+
+              <div style={styles.previewWrap}>
+                {activeImageUrls.length ? (
+                  activeImageUrls.map((src, index) => (
+                    <img
+                      key={`${src}-${index}`}
+                      src={src}
+                      alt={`Üretilen görsel ${index + 1}`}
+                      style={styles.previewImage}
+                    />
+                  ))
+                ) : (
+                  <div style={styles.emptyPreview}>Görsel henüz hazır değil. Worker tamamlayınca burada görünür.</div>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+
+        <section style={styles.panel}>
+          <div style={styles.panelHead}>
+            <h2 style={styles.panelTitle}>Job geçmişi</h2>
+            <button type="button" onClick={handleRefreshHistory} style={styles.secondaryButton}>
+              {loadingHistory ? 'Yenileniyor...' : 'Yenile'}
+            </button>
+          </div>
+
+          {renderedHistory.length === 0 ? (
+            <div style={styles.emptyText}>Geçmiş bulunamadı.</div>
+          ) : (
+            <div style={styles.historyList}>
+              {renderedHistory.map((job) => {
+                const imgs = pickJobImages(job);
+                const firstImage = imgs[0] || '';
+                const tone = statusTone(job?.status);
+
+                return (
+                  <button
+                    key={job.jobId}
+                    type="button"
+                    onClick={() => {
+                      setActiveJob(job);
+                      setActiveInlinePreview('');
+                      mergeActiveImages(job, '');
+                    }}
+                    style={{ ...styles.historyCard, borderColor: tone }}
+                  >
+                    <div style={styles.historyTop}>
+                      <div style={styles.historyTitle}>{safeText(job?.requestSummary?.promptPreview, 'İsimsiz job')}</div>
+                      <span style={{ ...styles.statusPill, borderColor: tone, color: tone }}>
+                        {statusLabel(job?.status)}
+                      </span>
+                    </div>
+
+                    <div style={styles.historyDate}>{formatDateTime(job?.createdAt)}</div>
+
+                    <div style={styles.historyMetaRow}>
+                      <span>{safeText(job?.model, DEFAULT_MODEL_ID)}</span>
+                      <span>{Math.max(0, Math.min(100, Math.floor(safeNumber(job?.progress, 0))))}%</span>
+                    </div>
+
+                    {firstImage ? (
+                      <img src={firstImage} alt="Geçmiş görsel" style={styles.historyThumb} />
+                    ) : (
+                      <div style={styles.historyNoImage}>Önizleme yok</div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div style={styles.footerInfo}>
+        <div>Worker: {safeText(workerInfo?.worker, 'idm')}</div>
+        <div>Sürüm: {safeText(workerInfo?.version, '-')}</div>
+        <div>Model: {models[0]?.modelId || DEFAULT_MODEL_ID}</div>
+        <div>Zaman: {formatDateTime(new Date().toISOString())}</div>
+      </div>
+    </div>
+  );
 }
+
+const styles = {
+  page: {
+    minHeight: '100vh',
+    background: '#05060a',
+    color: '#f8fafc',
+    padding: '24px',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+  },
+  hero: {
+    display: 'grid',
+    gridTemplateColumns: '1.5fr 1fr',
+    gap: '20px',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '24px',
+    padding: '24px',
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))',
+    marginBottom: '24px',
+  },
+  eyebrow: {
+    fontSize: '12px',
+    letterSpacing: '4px',
+    color: '#00c2ff',
+    marginBottom: '8px',
+  },
+  title: {
+    fontSize: '28px',
+    lineHeight: 1.1,
+    margin: 0,
+    marginBottom: '12px',
+  },
+  subtitle: {
+    fontSize: '16px',
+    color: '#cbd5e1',
+    margin: 0,
+    lineHeight: 1.6,
+  },
+  code: {
+    background: 'rgba(255,255,255,0.08)',
+    padding: '2px 8px',
+    borderRadius: '8px',
+  },
+  routeBox: {
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '20px',
+    padding: '18px',
+    background: '#020307',
+  },
+  routeTitle: {
+    fontSize: '16px',
+    marginBottom: '14px',
+  },
+  routeWrap: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '10px',
+  },
+  routePill: {
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: '999px',
+    padding: '8px 12px',
+    fontSize: '13px',
+    color: '#e2e8f0',
+  },
+  errorBox: {
+    marginBottom: '20px',
+    border: '1px solid rgba(239,68,68,0.5)',
+    background: 'rgba(239,68,68,0.12)',
+    borderRadius: '16px',
+    padding: '14px 16px',
+    color: '#fecaca',
+  },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr 1fr',
+    gap: '20px',
+    alignItems: 'start',
+  },
+  panel: {
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '24px',
+    padding: '20px',
+    background: '#090b12',
+  },
+  panelHead: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '18px',
+  },
+  panelTitle: {
+    margin: 0,
+    fontSize: '18px',
+  },
+  label: {
+    display: 'block',
+    fontSize: '14px',
+    color: '#e2e8f0',
+    marginBottom: '8px',
+    marginTop: '14px',
+  },
+  input: {
+    width: '100%',
+    boxSizing: 'border-box',
+    borderRadius: '16px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: '#05060a',
+    color: '#fff',
+    padding: '12px 14px',
+    outline: 'none',
+  },
+  textarea: {
+    width: '100%',
+    boxSizing: 'border-box',
+    minHeight: '140px',
+    resize: 'vertical',
+    borderRadius: '16px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: '#05060a',
+    color: '#fff',
+    padding: '12px 14px',
+    outline: 'none',
+  },
+  select: {
+    width: '100%',
+    boxSizing: 'border-box',
+    borderRadius: '16px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: '#05060a',
+    color: '#fff',
+    padding: '12px 14px',
+    outline: 'none',
+  },
+  twoCol: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '14px',
+  },
+  quickWrap: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '10px',
+    marginTop: '12px',
+  },
+  quickButton: {
+    borderRadius: '999px',
+    border: '1px solid rgba(0,194,255,0.35)',
+    background: 'rgba(0,194,255,0.08)',
+    color: '#8ae7ff',
+    padding: '9px 12px',
+    cursor: 'pointer',
+  },
+  actionRow: {
+    display: 'flex',
+    gap: '12px',
+    marginTop: '18px',
+  },
+  primaryButton: {
+    borderRadius: '16px',
+    border: '1px solid rgba(0,194,255,0.4)',
+    background: '#00c2ff',
+    color: '#03131a',
+    fontWeight: 700,
+    padding: '12px 16px',
+    cursor: 'pointer',
+  },
+  secondaryButton: {
+    borderRadius: '16px',
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'transparent',
+    color: '#fff',
+    padding: '12px 16px',
+    cursor: 'pointer',
+  },
+  statusPill: {
+    border: '1px solid rgba(255,255,255,0.14)',
+    borderRadius: '999px',
+    padding: '6px 10px',
+    fontSize: '12px',
+    letterSpacing: '1px',
+    whiteSpace: 'nowrap',
+  },
+  jobMetaGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '14px',
+  },
+  metaLabel: {
+    fontSize: '12px',
+    color: '#94a3b8',
+    marginBottom: '6px',
+    letterSpacing: '1px',
+  },
+  metaValue: {
+    fontSize: '15px',
+    color: '#f8fafc',
+    lineHeight: 1.5,
+    wordBreak: 'break-word',
+  },
+  stepText: {
+    fontSize: '15px',
+    lineHeight: 1.7,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    color: '#f8fafc',
+  },
+  progressBarOuter: {
+    height: '10px',
+    background: 'rgba(255,255,255,0.08)',
+    borderRadius: '999px',
+    overflow: 'hidden',
+    marginTop: '16px',
+  },
+  progressBarInner: {
+    height: '100%',
+    background: '#00c2ff',
+    borderRadius: '999px',
+    transition: 'width 0.25s ease',
+  },
+  previewWrap: {
+    marginTop: '18px',
+    display: 'grid',
+    gap: '14px',
+  },
+  previewImage: {
+    width: '100%',
+    display: 'block',
+    borderRadius: '18px',
+    border: '1px solid rgba(255,255,255,0.08)',
+    background: '#020307',
+  },
+  emptyPreview: {
+    minHeight: '260px',
+    borderRadius: '18px',
+    border: '1px dashed rgba(255,255,255,0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#94a3b8',
+    textAlign: 'center',
+    padding: '20px',
+    background: '#05060a',
+  },
+  warnBox: {
+    marginTop: '14px',
+    border: '1px solid rgba(245,158,11,0.35)',
+    background: 'rgba(245,158,11,0.08)',
+    color: '#fde68a',
+    borderRadius: '16px',
+    padding: '12px 14px',
+    lineHeight: 1.6,
+  },
+  emptyText: {
+    color: '#94a3b8',
+    lineHeight: 1.6,
+  },
+  historyList: {
+    display: 'grid',
+    gap: '14px',
+  },
+  historyCard: {
+    textAlign: 'left',
+    width: '100%',
+    borderRadius: '18px',
+    border: '1px solid rgba(255,255,255,0.08)',
+    background: '#071018',
+    padding: '14px',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  historyTop: {
+    display: 'flex',
+    alignItems: 'start',
+    justifyContent: 'space-between',
+    gap: '10px',
+    marginBottom: '8px',
+  },
+  historyTitle: {
+    fontSize: '18px',
+    fontWeight: 600,
+    lineHeight: 1.35,
+  },
+  historyDate: {
+    color: '#94a3b8',
+    fontSize: '14px',
+    marginBottom: '10px',
+  },
+  historyMetaRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '10px',
+    color: '#cbd5e1',
+    fontSize: '13px',
+    marginBottom: '12px',
+  },
+  historyThumb: {
+    width: '100%',
+    display: 'block',
+    borderRadius: '14px',
+    border: '1px solid rgba(255,255,255,0.08)',
+    background: '#020307',
+  },
+  historyNoImage: {
+    minHeight: '90px',
+    borderRadius: '14px',
+    border: '1px dashed rgba(255,255,255,0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#94a3b8',
+    background: '#05060a',
+  },
+  footerInfo: {
+    marginTop: '24px',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '16px',
+    color: '#94a3b8',
+    fontSize: '13px',
+  },
+};
