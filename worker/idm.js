@@ -5,10 +5,11 @@
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
 const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.0.0';
+const WORKER_VERSION = '18.0.2';
 const JOB_PREFIX = 'ai_job:';
 const MODEL_ID = 'openai/dall-e-3';
 const PROVIDER = 'openai-image-generation';
+const MAX_GENERATION_ATTEMPTS = 20;
 const URL_EXPIRES_MS = 24 * 60 * 60 * 1000; // 24 saat
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
@@ -79,21 +80,22 @@ function normalizeError(err) {
   }
 }
 
-function corsHeaders() {
+function corsHeaders(request) {
+  const origin = ss(request?.headers?.get('origin'), '*');
   return {
-    'access-control-allow-origin': '*',
+    'access-control-allow-origin': origin,
     'access-control-allow-headers': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-credentials': 'true',
+    'access-control-allow-credentials': origin === '*' ? 'false' : 'true',
     'vary': 'origin'
   };
 }
 
-function jsonResponse(body, status = 200, cacheControl = 'no-store') {
+function jsonResponse(body, status = 200, cacheControl = 'no-store', request = null) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
-      ...corsHeaders(),
+      ...corsHeaders(request),
       'content-type': 'application/json; charset=utf-8',
       'cache-control': cacheControl
     }
@@ -185,6 +187,47 @@ function extractImageSrc(result) {
   if (typeof result.src === 'string') return result.src.trim();
   if (typeof result?.image?.src === 'string') return result.image.src.trim();
   return null;
+}
+
+function buildGenerationAttemptPlans(ratio, quality, style) {
+  const normalizedRatio = ss(ratio, '1:1');
+  const requestedQuality = qualityToDalle3(quality);
+  const requestedStyle = ss(style, '').toLowerCase();
+
+  const ratioCandidates = [normalizedRatio, '1:1', '16:9', '9:16', '4:3'];
+  const qualityCandidates = [requestedQuality, 'standard', 'hd'];
+  const styleCandidates = [requestedStyle, 'vivid', 'natural', ''];
+
+  const plans = [];
+
+  for (const r of ratioCandidates) {
+    for (const q of qualityCandidates) {
+      for (const s of styleCandidates) {
+        if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
+        const opts = {
+          provider: PROVIDER,
+          model: 'dall-e-3',
+          test_mode: false,
+          quality: q,
+          ratio: ratioToSize(r)
+        };
+        if (s) opts.style = s;
+
+        plans.push({
+          index: plans.length + 1,
+          ratio: r,
+          quality: q,
+          style: s || '-',
+          timeoutMs: 25000 + (plans.length * 1500),
+          opts
+        });
+      }
+      if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
+    }
+    if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
+  }
+
+  return plans;
 }
 
 function dataUrlToBlob(dataUrl) {
@@ -409,13 +452,31 @@ async function ensureFreshReadUrl(job) {
   }
 }
 
-async function persistGeneratedImage(jobId, dataUrl) {
-  if (!dataUrl || !dataUrl.startsWith('data:')) {
-    throw new Error('Kalıcı dosya yazımı için data URL bekleniyordu');
+async function sourceToBlob(src) {
+  if (src && src.startsWith('data:')) {
+    return dataUrlToBlob(src);
   }
 
-  const blob = dataUrlToBlob(dataUrl);
-  const ext = guessExtensionFromDataUrl(dataUrl);
+  if (src && /^https?:\/\//i.test(src)) {
+    const response = await withTimeout(fetch(src), 20000);
+    if (!response.ok) {
+      throw new Error(`Uzak görsel indirilemedi (HTTP ${response.status})`);
+    }
+    const blob = await response.blob();
+    if (!blob || !blob.size) {
+      throw new Error('Uzak görsel boş döndü');
+    }
+    return blob;
+  }
+
+  throw new Error('Geçersiz görsel kaynağı');
+}
+
+async function persistGeneratedImage(jobId, source) {
+  const blob = await sourceToBlob(source);
+  const ext = source && source.startsWith('data:')
+    ? guessExtensionFromDataUrl(source)
+    : (blob.type || '').includes('jpeg') ? 'jpg' : (blob.type || '').includes('webp') ? 'webp' : 'png';
   const targetPath = buildStoragePath(jobId, ext);
   const fileName = targetPath.split('/').pop();
   const mimeType = blob.type || `image/${ext}`;
@@ -439,43 +500,46 @@ async function persistGeneratedImage(jobId, dataUrl) {
   };
 }
 
-async function runGeneration(jobId, prompt, ratio, quality) {
+async function runGeneration(jobId, prompt, ratio, quality, style) {
   await jobUpdate(jobId, async (j) => ({
     ...j,
     progress: 15,
     step: 'Model hazırlanıyor'
   }));
 
-  const opts = {
-    provider: PROVIDER,
-    model: 'dall-e-3',
-    test_mode: false,
-    quality: qualityToDalle3(quality),
-    ratio: ratioToSize(ratio)
-  };
+  const plans = buildGenerationAttemptPlans(ratio, quality, style);
+  const attemptErrors = [];
+  let src = null;
 
-  await jobUpdate(jobId, async (j) => ({
-    ...j,
-    progress: 30,
-    step: 'AI görsel üretiyor'
-  }));
+  for (const plan of plans) {
+    const progress = Math.min(60, 20 + Math.floor((plan.index / plans.length) * 40));
+    await jobUpdate(jobId, async (j) => ({
+      ...j,
+      progress,
+      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`
+    }));
 
-  const imageResult = await withTimeout(me.puter.ai.txt2img(prompt, opts), 45000);
-  const src = extractImageSrc(imageResult);
+    try {
+      const imageResult = await withTimeout(me.puter.ai.txt2img(prompt, plan.opts), plan.timeoutMs);
+      src = extractImageSrc(imageResult);
+      if (!src) {
+        throw new Error('AI boş sonuç döndürdü');
+      }
+      break;
+    } catch (e) {
+      attemptErrors.push(`Deneme ${plan.index}: ${normalizeError(e)}`);
+    }
+  }
 
   if (!src) {
-    throw new Error('AI sonuç döndürmedi');
-  }
-
-  if (!src.startsWith('data:') && /^https?:\/\//i.test(src)) {
-    // Nadir durumda doğrudan URL dönerse yine storage canonical olsun diye fetch edip blob’a çevirmek yerine
-    // resmi kaynak URL olarak kullanmıyoruz; me.puter standardı için storage şart.
-    throw new Error('Beklenmeyen çıktı tipi: data URL bekleniyordu');
+    const finalError = new Error(`Görsel üretimi ${plans.length} farklı alternatif denemeye rağmen tamamlanamadı.`);
+    finalError.attemptBullets = attemptErrors.slice(0, 10);
+    throw finalError;
   }
 
   await jobUpdate(jobId, async (j) => ({
     ...j,
-    progress: 65,
+    progress: 70,
     step: 'Görsel me.puter depolamaya yazılıyor'
   }));
 
@@ -508,10 +572,10 @@ async function runGeneration(jobId, prompt, ratio, quality) {
   };
 }
 
-router.options('/*page', async () => {
+router.options('/*page', async ({ request }) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders()
+    headers: corsHeaders(request)
   });
 });
 
@@ -524,7 +588,7 @@ router.get('/', async ({ request }) => {
     version: WORKER_VERSION,
     totalModels: 1,
     model: MODEL_ID
-  }));
+  }), 200, 'no-store', request);
 });
 
 router.get('/health', async ({ request }) => {
@@ -536,7 +600,7 @@ router.get('/health', async ({ request }) => {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
     storageMode: 'me.puter'
-  }));
+  }), 200, 'no-store', request);
 });
 
 router.get('/models', async ({ request }) => {
@@ -546,7 +610,8 @@ router.get('/models', async ({ request }) => {
   return jsonResponse(
     okEnvelope(rid, trid, t, 'MODELS_OK', buildModels()),
     200,
-    'public, max-age=300'
+    'public, max-age=300',
+    request
   );
 });
 
@@ -561,11 +626,14 @@ router.post('/generate', async ({ request }) => {
     const prompt = ss(body?.prompt, '');
     const ratio = ss(body?.ratio || body?.size, '1:1');
     const quality = qualityToDalle3(body?.quality || 'standard');
+    const style = ss(body?.style, '');
 
     if (!prompt) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'PROMPT_REQUIRED', 'Prompt alanı boş bırakılamaz.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -575,15 +643,18 @@ router.post('/generate', async ({ request }) => {
     await jobWrite(job);
 
     try {
-      const result = await runGeneration(jobId, prompt, ratio, quality);
+      const result = await runGeneration(jobId, prompt, ratio, quality, style);
 
       return jsonResponse(okEnvelope(rid, trid, t, 'IMAGE_JOB_COMPLETED', result.job, {
         feature: 'image',
         model: MODEL_ID,
         inlinePreview: result.inlinePreview // UI anlık gösterim için kullanabilir
-      }));
+      }), 200, 'no-store', request);
     } catch (generationError) {
       const msg = normalizeError(generationError);
+      const extraBullets = Array.isArray(generationError?.attemptBullets)
+        ? generationError.attemptBullets
+        : [];
 
       // AI üretimi olmuş olabilir ama storage patlamış olabilir.
       // Bu durumda completed YOK; ayrı hata durumu var.
@@ -611,7 +682,8 @@ router.post('/generate', async ({ request }) => {
           [
             'completed durumu verilmedi',
             'Kalıcı URL oluşmadı',
-            'Job kaydı failed_storage olarak işaretlendi'
+            'Job kaydı failed_storage olarak işaretlendi',
+            ...extraBullets
           ],
           500,
           {
@@ -620,7 +692,9 @@ router.post('/generate', async ({ request }) => {
             job: failedJob
           }
         ),
-        500
+        500,
+        'no-store',
+        request
       );
     }
   } catch (err) {
@@ -644,7 +718,9 @@ router.post('/generate', async ({ request }) => {
 
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', `Ana çöküş: ${msg}`, [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -659,7 +735,9 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -667,7 +745,9 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     if (!job) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -678,11 +758,13 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     return jsonResponse(okEnvelope(rid, trid, t, 'JOB_STATUS_OK', job, {
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -709,11 +791,13 @@ router.get('/jobs/history', async ({ request }) => {
       limit: HISTORY_LIMIT,
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -728,7 +812,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -736,7 +822,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     if (!job) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -754,7 +842,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
           ],
           409
         ),
-        409
+        409,
+        'no-store',
+        request
       );
     }
 
@@ -770,11 +860,13 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     }, {
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -791,7 +883,9 @@ router.post('/jobs/cancel', async ({ request }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -799,7 +893,9 @@ router.post('/jobs/cancel', async ({ request }) => {
     if (!current) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -811,11 +907,13 @@ router.post('/jobs/cancel', async ({ request }) => {
       finishedAt: j.status === 'processing' ? nowIso() : j.finishedAt
     }));
 
-    return jsonResponse(okEnvelope(rid, trid, t, 'JOB_CANCEL_OK', updated));
+    return jsonResponse(okEnvelope(rid, trid, t, 'JOB_CANCEL_OK', updated), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
