@@ -275,7 +275,8 @@ async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
   const envelope = body as WorkerEnvelope<T>;
 
   if (!response.ok || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
-    const message = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
+    const rawMessage = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
+    const message = normalizeWorkerErrorMessage(rawMessage, response.status);
     throw new Error(message);
   }
 
@@ -284,6 +285,18 @@ async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return body as T;
+}
+
+
+function normalizeWorkerErrorMessage(message: string, status: number): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("reading 'puter'") || lower.includes('reading "puter"') || lower.includes('undefined') && lower.includes('puter')) {
+    return 'Worker oturum doğrulaması başarısız. Lütfen yeniden giriş yapıp tekrar dene.';
+  }
+  if (lower.includes('failed to fetch')) {
+    return 'Worker ağına erişilemedi. Lütfen bağlantını kontrol edip tekrar dene.';
+  }
+  return message || `İstek başarısız oldu (${status}).`;
 }
 
 function styles() {
