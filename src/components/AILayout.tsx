@@ -1,3 +1,21 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, AI SAYFALARI İÇİN ORTAK BİR EKRAN YERLEŞİMİ SAĞLAYAN YARDIMCI BİLEŞENDİR.
+2) title, breadcrumb, children, usageCount, settings VE recentItems PROP'LARINI ALIR.
+3) YANİ BU BİLEŞEN HEM ANA İÇERİĞİ HEM DE SAĞ YAN PANEL ÖZETLERİNİ AYNI ÇATIDA SUNMAK İÇİN TASARLANMIŞTIR.
+4) useAuth() İLE GİRİŞ YAPMIŞ KULLANICI BİLGİSİNİ ALIR.
+5) Kalan Kredi HESABI user.toplam_kredi - user.kullanilan_kredi FORMÜLÜYLE YAPILIR.
+6) BİLEŞENİN ANA ORTASINDA title, breadcrumb VE children GÖSTERİLİR.
+7) SAĞ YAN PANELDE “Kullanım Özeti” BÖLÜMÜ BULUNUR.
+8) AYNI PANELDE “Ayarlar” BÖLÜMÜ AYRI PROP OLARAK GÖSTERİLİR.
+9) “Son İşlemler” BÖLÜMÜ, recentItems VARSA ONU YOKSA “Henüz bir işlem yok” METNİNİ BASAR.
+10) BU BİLEŞEN, CHAT, IMAGE, VIDEO VE TTS GİBİ AI EKRANLARINDA TUTARLI BİR ÜRÜN DENEYİMİ KURMAYI AMAÇLAR.
+11) ANA İÇERİKLE YAN BİLGİ BLOKLARINI AYIRDIĞI İÇİN KOD TEKRARINI AZALTIR.
+12) KISACA: BU DOSYA, AI SAYFALARINDA BAŞLIK, BREADCRUMB, KULLANIM ÖZETİ, AYARLAR VE SON İŞLEMLERİ TEK ŞABLONDA BİRLEŞTİREN ORTAK LAYOUT BİLEŞENİDİR.
+█████████████████████████████████████████████
+*/
+
+
 import React from 'react';
 import { useAuth } from '../context/AuthContext';
 
