@@ -246,13 +246,24 @@ function statusTone(status?: string): { bg: string; fg: string; border: string }
 
 async function readJson<T>(response: Response): Promise<WorkerEnvelope<T> | T> {
   const text = await response.text();
-  const parsed = text ? JSON.parse(text) : {};
-  return parsed as WorkerEnvelope<T> | T;
+  if (!text.trim()) return {} as WorkerEnvelope<T>;
+
+  try {
+    return JSON.parse(text) as WorkerEnvelope<T> | T;
+  } catch {
+    return {
+      ok: false,
+      error: {
+        message: `Worker JSON dönmedi: ${text.slice(0, 180)}`,
+      },
+    } as WorkerEnvelope<T>;
+  }
 }
 
 async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${WORKER_BASE_URL}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
