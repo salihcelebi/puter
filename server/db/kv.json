@@ -1,3 +1,17 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, kv.ts MODÜLÜNÜN DISK ÜZERİNDEKİ SNAPSHOT VERİ DOSYASIDIR.
+2) version ALANI, DOSYA ŞEMASININ HANGİ SÜRÜMDE OLDUĞUNU GÖSTERİR.
+3) updatedAt ALANI, EN SON YAZMA ZAMANINI KAYDETMEK İÇİN KULLANILIR.
+4) stats NESNESİ, reads, writes VE deletes SAYILARINI TUTAR.
+5) items NESNESİ, ANA KEY-VALUE KAYITLARININ ANA KONTEYNERIDIR.
+6) jobs.order DİZİSİ, AI İŞLERİNİN SIRALAMA TAKİBİNİ YAPAR.
+7) jobs.history DİZİSİ, GEÇMİŞ İŞ KAYITLARINI TUTMAK İÇİN AYRILMIŞTIR.
+8) jobs.byFeature NESNESİ, İŞLERİ ÖZELLİK TÜRÜNE GÖRE AYIRIR.
+9) jobs.byStatus NESNESİ, İŞLERİ DURUMLARINA GÖRE AYIRIR.
+10) jobs.byOwner NESNESİ, İŞLERİ SAHİP KULLANICIYA GÖRE GRUPLAMAK İÇİN KULLANILIR.
+█████████████████████████████████████████████
+*/
 {
   "version": 1,
   "updatedAt": "2026-03-14T00:00:00.000Z",
