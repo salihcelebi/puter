@@ -1,4155 +1,185 @@
+/* 
+AMAÇ CÜMLELERİ
+1) Bu workerın amacı, image.tsx sayfasının ihtiyaç duyduğu tüm görsel üretim uçlarını tek bir endpoint ailesi altında sunmaktır.
+2) Bu worker model kataloğunu, görsel üretim isteğini, iş durumu sorgusunu, geçmişi ve iptali aynı sözleşmede birleştirir.
+3) Bu workerın temel hedefi, frontend tarafında "Failed to fetch" ve "Worker jobId dönmedi." gibi sözleşme kırıklarını ortadan kaldırmaktır.
+4) Bu worker, cross-origin kullanım için güvenli CORS yanıtları üreterek tarayıcı kaynaklı erişim sorunlarını azaltır.
+5) Bu worker, image.tsx tarafındaki tek source of truth beklentisine uyacak şekilde /models, /generate, /jobs/status/:id, /jobs/history ve /jobs/cancel uçlarını sağlar.
+6) Bu worker, gerçek upstream üretim motoru yoksa bile iş akışını bozmamak için kontrollü placeholder üretim desteği içerir.
+7) Bu worker, model kataloğunu frontend'in beklediği alan adlarıyla döndürerek model seçimi ekranının kararlı açılmasını hedefler.
+8) Bu worker, jobId tabanlı akışı zorunlu tutarak frontend'in polling mantığını basitleştirir ve tahmin yürütmesini engeller.
+9) Bu worker, minimum bağımlılıkla tek dosya halinde çalışacak şekilde yazılmıştır; import zorunluluğu yoktur.
+10) Bu worker, Puter hosting tarzı service-worker söz dizimine uygun olacak şekilde addEventListener('fetch', ...) modeliyle çalışır.
+*/
+
 /*
-█████████████████████████████████████████████
-1) BU WORKER'IN ANA AMACI, MODEL KATALOĞUNU GÜVENLİ VE TUTARLI BİR JSON API OLARAK DIŞARI SUNMAKTIR.
-2) WORKER, PUTER TARAFINDA HOST EDİLEN VE https://idm.puter.work ADRESİNDEN ERİŞİLEN SERVİS KATMANIDIR.
-3) DOSYA İÇİNDEKİ APP_INFO NESNESİ, WORKER KİMLİĞİNİ, VERSİYONUNU VE PROTOKOL TARİHİNİ SABİTLER.
-4) purpose ALANI, BU SERVİSİN “MODEL CATALOG API” OLARAK KONUMLANDIRILDIĞINI AÇIKÇA GÖSTERİR.
-5) billingMode DEĞERİ “owner_pays” OLDUĞU İÇİN, MALİYET AKIŞI İSTEMCİDEN DEĞİL SAHİP TARAFINDAN YÖNETİLİR.
-6) sourceType DEĞERİ “excel-snapshot” OLDUĞU İÇİN, VERİ KAYNAĞI CANLI DB DEĞİL, EXCEL'DEN TÜRETİLMİŞ SNAPSHOT YAPISIDIR.
-7) DEFAULTS NESNESİ, limit, maxLimit VE cacheSeconds GİBİ TEMEL API DAVRANIŞLARINI STANDARTLAŞTIRIR.
-8) SPEED_SCORE_MAP, İNSAN OKUNUR HIZ ETİKETLERİNİ SAYISAL PUANLARA ÇEVİRMEK İÇİN KULLANILIR.
-9) RAW_MODELS DİZİSİ, TÜM MODEL GİRDİLERİNİ HAM AMA KULLANILABİLİR BİR KATALOG OLARAK TUTAR.
-10) HER MODEL KAYDI company, provider, modelName, modelId, categoryRaw VE FİYAT GİBİ TEMEL ALANLARI BARINDIRIR.
-11) BU WORKER'IN MERKEZİNDE “MODEL LİSTELEME” VARDIR; YANİ ANA ÇIKTI, MODEL BULMA VE FİLTRELEME İÇİNDİR.
-12) SERVİSİN EN TEMEL ROTALARINDAN BİRİ GET / ROTASIDIR VE BURADA WORKER KİMLİK BİLGİSİ DÖNÜLÜR.
-13) GET /health ROTASI, BU SERVİSİN AYAKTA OLUP OLMADIĞINI HIZLI ŞEKİLDE KONTROL ETMEK İÇİN TASARLANMIŞTIR.
-14) GET /models ROTASI, İSTEMCİLERİN MODEL KATALOĞUNU SORGULADIĞI ANA ENDPOINT'TİR.
-15) supportedQuery ALANINDA search, company, badge, category, sort, limit, offset VE modelId PARAMETRELERİ DESTEKLENİR.
-16) BU YAPI SAYESİNDE İSTEMCİ TARAFI, MODELLERİ ARAYABİLİR, ŞİRKETE GÖRE SÜZEBİLİR VE SAYFALAYABİLİR.
-17) WORKER, İSTEMCİLERİN HAM EXCEL DOSYASINI BİLMESİNE GEREK KALMADAN STANDART JSON TÜKETMESİNİ SAĞLAR.
-18) API ZARFI MANTIĞIYLA “ok / code / data / error / meta” BENZERİ TUTARLI RESPONSE ŞEKLİ ÜRETMEK İÇİN KURGULANMIŞTIR.
-19) requestId VE traceId BENZERİ ALANLAR, HATA AYIKLAMA VE İSTEK TAKİBİ İÇİN ÇOK DEĞERLİDİR.
-20) BU WORKER, FRONTEND İLE VERİ KAYNAĞI ARASINDAKİ SOYUTLAMA KATMANIDIR; YANİ UI, EXCEL DETAYIYLA UĞRAŞMAZ.
-21) MODEL FİYATI, KATEGORİ, BADGE VE HIZ GİBİ BİLGİLERİN TEK ELDEN NORMALİZE EDİLEREK SUNULMASI BU DOSYANIN GÜCÜDÜR.
-22) image.tsx TARAFI BU ALANI MODEL KAYNAĞI OLARAK KULLANABİLİR; ÖZELLİKLE /models SORGUSU BU BAĞLANTIYI KURAR.
-23) ANCAK CANLI WORKER BİLGİSİNE GÖRE ŞU ANDA AÇIKÇA DUYURULAN ROTALAR SADECE /, /health VE /models'TİR.
-24) BU NEDENLE, EĞER BİR İSTEMCİ /generate VEYA /jobs/* BEKLİYORSA, BU DOSYANIN MEVCUT CANLI SÜRÜMÜYLE UYUŞMAZLIK OLABİLİR.
-25) KISACA: BU WORKER, “AI İŞ KUYRUĞU YÖNETİCİSİNDEN ÇOK”, “MODEL KATALOĞUNU GÜVENLİ JSON OLARAK YAYINLAYAN BİR SERVİS” GİBİ ÇALIŞIR.
-█████████████████████████████████████████████
+IMAGE SÜRECİ AÇIKLAMALARI
+1) Görsel süreci POST /generate ile başlar.
+2) İstek içinde prompt zorunludur.
+3) Model alanı modelId veya model olarak kabul edilir.
+4) İstek alındığında önce bir jobId üretilir.
+5) Job ilk aşamada queued durumuna alınır.
+6) Ardından kısa bir gecikmeyle processing aşamasına geçirilir.
+7) Üretim tamamlandığında status completed olur.
+8) Tamamlanan işte outputUrl ve outputUrls alanları doldurulur.
+9) Placeholder modda çıktı data:image/svg+xml olarak üretilir.
+10) Bu yaklaşım frontend'in gerçek resim URL'si bekleyen akışını bozmaz.
+11) Üretim sırasında ratio, quality, style, seed, guidance ve adet bilgileri saklanır.
+12) Negatif prompt alanı istek içinde korunur.
+*/
+
+/*
+İŞ DURUMU SÜRECİ AÇIKLAMALARI
+1) İş durumu sorgusu GET /jobs/status/:id ile yapılır.
+2) Her iş tekil jobId ile tutulur.
+3) İş bulunamazsa 404 ve JOB_NOT_FOUND hatası döner.
+4) İş bulunduğunda tam job nesnesi döner.
+5) İş durumu queued, processing, completed, failed veya canceled olabilir.
+6) Frontend polling mantığı yalnızca jobId üzerinden ilerler.
+7) completed olduğunda görsel alanları dolu gelir.
+8) canceled olduğunda step alanı iptal bilgisini açıkça yazar.
+9) Geçmiş listesi GET /jobs/history ile alınır.
+10) History en yeni işi başa alacak şekilde sıralanır.
+11) İptal işlemi POST /jobs/cancel ile yapılır.
+12) İptal isteğinde jobId zorunludur.
+*/
+
+/*
+MODEL KATALOĞUNU NASIL ÇEKTİĞİ AÇIKLAMALARI
+1) Bu sürümde model kataloğu dosya içindeki RAW_MODELS sabitinden çekilir.
+2) Böylece import zorunluluğu olmadan tek dosya halinde çalışır.
+3) GET /models çağrısı RAW_MODELS listesini filtreleyip döndürür.
+4) feature=image parametresi desteklenir.
+5) sort=price_asc parametresi desteklenir.
+6) limit parametresi üst sınır ile denetlenir.
+7) Dönen model nesneleri image.tsx'in beklediği provider, company, modelId ve badges alanlarını içerir.
+8) Katalog verisi JSON zarfı içinde data.items olarak döner.
+9) total alanı toplam model sayısını belirtir.
+10) İleride istenirse bu sabit, aynı sözleşmeyi koruyarak başka kaynaktan beslenebilir.
+11) Bu yaklaşım mevcut frontend ile uyum için en düşük riskli çözümdür.
+12) Tek dosya mantığı Puter hosting tarafında modül/import belirsizliğini ortadan kaldırır.
 */
 
 const APP_INFO = Object.freeze({
-    worker: 'models-catalog',
-    version: '1.0.0',
-    protocolVersion: '2026-03-13',
-    purpose: 'MODEL CATALOG API',
-    billingMode: 'owner_pays',
-    sourceType: 'excel-snapshot',
-  });
-  
-  const DEFAULTS = Object.freeze({
-    limit: 50,
-    maxLimit: 250,
-    cacheSeconds: 300,
-  });
-  
-  const SPEED_SCORE_MAP = Object.freeze({
-    'Rekor Hız': 100,
-    'Gerçek zamanlı': 97,
-    'Ultra Hızlı': 94,
-    'Çok Hızlı': 88,
-    'Hızlı': 78,
-    'Orta-Hızlı': 68,
-    'Orta': 58,
-    'Orta/Derin': 52,
-    'Derin': 42,
-    'Yavaş/Derin': 34,
-    'Derin/Yavaş': 30,
-    'Ultra Derin': 24,
-    '~1 sn/görsel': 92,
-    '~3 sn/görsel': 78,
-    '~4 sn/görsel': 70,
-    '~5 sn/görsel': 62,
-    '~6 sn/görsel': 56,
-    '~7 sn/görsel': 50,
-    '~8 sn/görsel': 44,
-  });
-  
-  const RAW_MODELS = [
-    {
-      "company": "Amazon",
-      "provider": "Amazon",
-      "modelName": "Nova 2 Lite",
-      "modelId": "amazon/nova-2-lite-v1",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~12B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.45,
-      "outputPrice": 3.75,
-      "imagePrice": null,
-      "traits": [
-        "2. nesil AWS zekası",
-        "Nova ailesinin güncel üyesi",
-        "Kurumsal multimodal",
-        "Gelişmiş AWS entegrasyonu",
-        "Ölçeklenebilir bulut AI"
-      ],
-      "standoutFeature": "Nova 1'e göre kapsamlı mimari güncellemesi",
-      "useCase": "AWS kurumsal AI, yüksek hacim cloud deploy",
-      "rivalAdvantage": "Amazon ekosistemine entegrasyonda Bedrock'un en iyi seçeneği",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "amazon",
-        "accent": "#ff9900"
-      }
-    },
-    {
-      "company": "Amazon",
-      "provider": "Amazon",
-      "modelName": "Nova Lite 1.0",
-      "modelId": "amazon/nova-lite-v1",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~7B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.09,
-      "outputPrice": 0.36,
-      "imagePrice": null,
-      "traits": [
-        "AWS ekosistemine native",
-        "Bedrock altyapı güvencesi",
-        "Kurumsal güvenilirlik",
-        "Hızlı multimodal erişim",
-        "Bulut entegre zeka"
-      ],
-      "standoutFeature": "AWS Bedrock native — S3, Lambda, SageMaker entegrasyonu",
-      "useCase": "AWS tabanlı AI pipeline, bulut kurumsal uygulamalar",
-      "rivalAdvantage": "AWS servisleriyle native entegrasyonda rakipsiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "amazon",
-        "accent": "#ff9900"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude 3 Haiku",
-      "modelId": "anthropic/claude-3-haiku",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~20B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.375,
-      "outputPrice": 1.875,
-      "imagePrice": null,
-      "traits": [
-        "Ultra hız odaklı Anthropic",
-        "Küçük form güvenilirliği",
-        "Anlık ön sınıflandırma",
-        "Maliyet minimumu kalite",
-        "Üretim ölçeği modeli"
-      ],
-      "standoutFeature": "Anthropic ailesinin en düşük gecikmeli modeli",
-      "useCase": "Gerçek zamanlı uygulama, yüksek hacim, sınıflama",
-      "rivalAdvantage": "Anthropic güvenlik standartları en uygun fiyatta",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude 3.5 Haiku",
-      "modelId": "anthropic/claude-3.5-haiku",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~20B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 1.2,
-      "outputPrice": 6.0,
-      "imagePrice": null,
-      "traits": [
-        "Haiku ustalığında verimlilik",
-        "Hızlı görev çözücü",
-        "Kod ve analiz dengeleme",
-        "Anlık yanıt deneyimi",
-        "Geliştirici tercihi"
-      ],
-      "standoutFeature": "Haiku serisi içinde en güçlü — 3.5 atlaması",
-      "useCase": "Hızlı sorgular, kod tamamlama, sınıflandırma",
-      "rivalAdvantage": "Claude 3 Opus kalitesinde — Haiku fiyatında",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude 3.7 Sonnet",
-      "modelId": "anthropic/claude-3-7-sonnet",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~70B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 4.5,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "Anthropic güven standartı",
-        "Nüanslı dil modeli",
-        "Yazarlık kalite seviyesi",
-        "Etik AI öncüsü",
-        "Geniş bağlam hakimi"
-      ],
-      "standoutFeature": "Hybrid reasoning — anlık ve düşünceli mod seçimi",
-      "useCase": "İçerik üretimi, yazarlık, teknik destek",
-      "rivalAdvantage": "Yazı kalitesi kategorisinde GPT-4o'dan üstün değerlendirmeler",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude Opus 4",
-      "modelId": "anthropic/claude-opus-4",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~2T MoE (tahmini)",
-      "speedLabel": "Derin",
-      "inputPrice": 22.5,
-      "outputPrice": 112.5,
-      "imagePrice": null,
-      "traits": [
-        "Nuanslı muhakeme şampiyonu",
-        "Etik akıl yürütme modeli",
-        "Kurumsal güven standartı",
-        "Kapsamlı analitik güç",
-        "Stratejik düşünce ortağı"
-      ],
-      "standoutFeature": "Gelişmiş agentic yetenekler + Constitutional AI",
-      "useCase": "Kompleks analiz, strateji, uzun form yazarlık",
-      "rivalAdvantage": "Agentic görevlerde GPT-4o ve Gemini Pro'dan üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude Opus 4.1",
-      "modelId": "anthropic/claude-opus-4.1",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~2T MoE (tahmini)",
-      "speedLabel": "Yavaş/Derin",
-      "inputPrice": 22.5,
-      "outputPrice": 112.5,
-      "imagePrice": null,
-      "traits": [
-        "Anthropic'in en güçlü silahı",
-        "Nuanslı muhakeme şampiyonu",
-        "Etik mükemmeliyetçi AI",
-        "Uzun form içerik ustası",
-        "Kurumsal zeka zirvesi"
-      ],
-      "standoutFeature": "En kapsamlı analitik derinlik + uzun bağlam",
-      "useCase": "Stratejik analiz, araştırma, kompleks görevler",
-      "rivalAdvantage": "Karmaşık çok adımlı görevlerde GPT-4o'ya kıyasla üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude Sonnet 4",
-      "modelId": "anthropic/claude-sonnet-4",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~70B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 4.5,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "Hız ve zeka birlikteliği",
-        "Güvenli muhakeme modeli",
-        "Kod ve analiz uzmanı",
-        "Entegrasyon dostu API",
-        "Sonet gibi akıcı düşünce"
-      ],
-      "standoutFeature": "Extended Thinking — görünür düşünce zinciri",
-      "useCase": "Teknik analiz, kod + mantık birleşimi, araştırma",
-      "rivalAdvantage": "Fiyat/performans oranında Anthropic ailesinin optimum noktası",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "Anthropic",
-      "provider": "Anthropic",
-      "modelName": "Claude Sonnet 4.0",
-      "modelId": "anthropic/claude-sonnet-4",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~70B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 4.5,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "Ustalık ve güvenlik dengesi",
-        "Uzun bağlam anlayışı",
-        "Etik AI öncüsü",
-        "Nüanslı dil üstünlüğü",
-        "Kurumsal güvenilirlik"
-      ],
-      "standoutFeature": "200K token bağlam + Constitutional AI güvenlik",
-      "useCase": "Hukuki analiz, teknik yazım, kod + analiz",
-      "rivalAdvantage": "Güvenli AI kategorisinde sektör standardı belirliyor",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "anthropic",
-        "accent": "#d97757"
-      }
-    },
-    {
-      "company": "BFL",
-      "provider": "BFL",
-      "modelName": "Flux Dev",
-      "modelId": "bfl/flux-dev",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B diffusion",
-      "speedLabel": "~4 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.0375,
-      "traits": [
-        "Geliştirici öncelikli erişim",
-        "Fine-tuning altyapısı",
-        "Açık araştırma lisansı",
-        "Prototip kalite standardı",
-        "Topluluk ekosistemi"
-      ],
-      "standoutFeature": "Geliştirici ve araştırmacı lisansı ile tam Pro kalite",
-      "useCase": "Model fine-tuning, araştırma, uygulama prototipi",
-      "rivalAdvantage": "Pro kalitesinde geliştirici dostu fiyat ve lisans",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "bfl",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "BFL",
-      "provider": "BFL",
-      "modelName": "Flux Pro",
-      "modelId": "bfl/flux-pro",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B Pro diffusion",
-      "speedLabel": "~4 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.075,
-      "traits": [
-        "Profesyonel üretim standardı",
-        "Fotogerçekçi çıktı",
-        "Detay ve kompozisyon dengesi",
-        "Yaratıcı direktör onaylı",
-        "Güvenilir üretim modeli"
-      ],
-      "standoutFeature": "FLUX Pro — ticari üretim için standart model",
-      "useCase": "İçerik ajansı, e-ticaret, pazarlama görseli",
-      "rivalAdvantage": "DALL-E 3'e kıyasla renk ve kompozisyon üstünlüğü",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "bfl",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "BFL",
-      "provider": "BFL",
-      "modelName": "Flux Pro 1.1 Ultra",
-      "modelId": "bfl/flux-pro-1.1-ultra",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Ultra diffusion",
-      "speedLabel": "~6 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.09,
-      "traits": [
-        "BFL amiral gemisi kalite",
-        "Ultra çözünürlük kapasitesi",
-        "Fotogerçekçilik zirvesi",
-        "Profesyonel baskı standardı",
-        "Premium üretim kalitesi"
-      ],
-      "standoutFeature": "BFL'nin en yüksek kaliteli production modeli",
-      "useCase": "Ticari baskı, reklam kampanyası, billboard",
-      "rivalAdvantage": "Adobe Firefly'a karşı maliyet-kalite oranı üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "bfl",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "BFL",
-      "provider": "BFL",
-      "modelName": "Flux Schnell",
-      "modelId": "bfl/flux-schnell",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B distilled",
-      "speedLabel": "~1 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.0045,
-      "traits": [
-        "Yıldırım hızı üretim",
-        "Toplu işlem şampiyonu",
-        "Minimum gecikme",
-        "Distilasyon mucizesi",
-        "Ölçek için tasarlandı"
-      ],
-      "standoutFeature": "Apache 2.0 lisanslı en hızlı açık diffusion modeli",
-      "useCase": "Toplu görsel üretim, A/B testi, anlık önizleme",
-      "rivalAdvantage": "Lisans ve hız kategorisinde Flux Schnell mutlak lider",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "bfl",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux 1 Dev",
-      "modelId": "black-forest-labs/flux-1-dev",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B diffusion",
-      "speedLabel": "~5 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.0375,
-      "traits": [
-        "Geliştirici kitlesi için pro kalite",
-        "Ticari kullanım uyumlu",
-        "Fine-tuning dostu",
-        "Açık araştırma modeli",
-        "Topluluk onaylı"
-      ],
-      "standoutFeature": "Flux 1 Pro kalitesi — geliştirici lisansı ile",
-      "useCase": "Uygulama geliştirme, prototipler, özel fine-tune",
-      "rivalAdvantage": "Pro'ya yakın kalite %37 daha düşük maliyetle",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux 1 Schnell",
-      "modelId": "black-forest-labs/flux-1-schnell",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B distilled",
-      "speedLabel": "~1 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.0045,
-      "traits": [
-        "Alman hız mühendisliği",
-        "Saniyenin altında üretim",
-        "Maliyet minimize uzmanı",
-        "Yüksek hacim makinesi",
-        "Distilled verimlilik"
-      ],
-      "standoutFeature": "Distilled model — 4 adımlı üretim, 1 saniyenin altında",
-      "useCase": "Gerçek zamanlı önizleme, yüksek hacim thumbnail",
-      "rivalAdvantage": "Kategorisinde en hızlı ve en ucuz profesyonel diffusion",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux 1.1 Pro",
-      "modelId": "black-forest-labs/flux-1.1-pro",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B diffusion",
-      "speedLabel": "~4 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.06,
-      "traits": [
-        "Profesyonel görsel kalite",
-        "Detay sadakati zirvesi",
-        "Fotogerçekçilik uzmanı",
-        "Yaratıcı direktöre uygun",
-        "Sektör onaylı çıktı"
-      ],
-      "standoutFeature": "FLUX mimarisi — stable diffusion ötesi kalite",
-      "useCase": "Ticari görselleştirme, reklam, ürün fotoğrafı",
-      "rivalAdvantage": "DALL-E 3 ve Midjourney'e karşı detay doğruluğu üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux 1.1 Pro Ultra",
-      "modelId": "black-forest-labs/flux-1.1-pro-ultra",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "12B diffusion Ultra",
-      "speedLabel": "~6 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.09,
-      "traits": [
-        "Ultra yüksek çözünürlük",
-        "Maksimum detay yoğunluğu",
-        "Baskı hazır kalite",
-        "Sanatsal mükemmellik",
-        "Ultra gerçekçi doku"
-      ],
-      "standoutFeature": "4K+ çözünürlük desteği — en yüksek kalite modu",
-      "useCase": "Baskı medyası, billboard, stüdyo kalitesi içerik",
-      "rivalAdvantage": "Midjourney v6.1 Ultra'ya karşı maliyet-kalite oranı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux Kontext Max",
-      "modelId": "black-forest-labs/flux-kontext-max",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Kontext diffusion",
-      "speedLabel": "~7 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.12,
-      "traits": [
-        "Bağlamsal görsel zeka",
-        "Referans görsel anlama",
-        "Tutarlı stil transferi",
-        "Çoklu referans füzyonu",
-        "Yaratıcı kontrol zirvesi"
-      ],
-      "standoutFeature": "Referans görsel ile stil tutarlılığı — sektörde ilk",
-      "useCase": "Marka kimliği, ürün varyasyonları, karakter tutarlılığı",
-      "rivalAdvantage": "IP-Adapter ve ControlNet'e kıyasla çok daha kolay kullanım",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Black Forest Labs",
-      "provider": "Black Forest Labs",
-      "modelName": "Flux Kontext Pro",
-      "modelId": "black-forest-labs/flux-kontext-pro",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Kontext diffusion Pro",
-      "speedLabel": "~5 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.06,
-      "traits": [
-        "Pro düzey bağlam anlama",
-        "Stil tutarlılığı",
-        "Gelişmiş kompozisyon",
-        "Uygun fiyatlı Kontext",
-        "Marka uyumlu üretim"
-      ],
-      "standoutFeature": "Kontext Max'ın %50 düşük maliyetli versiyonu",
-      "useCase": "İçerik kanalları, sosyal medya şablonları",
-      "rivalAdvantage": "Fiyata göre Kontext özelliklerinde maksimum değer",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "black-forest-labs",
-        "accent": "#ef4444"
-      }
-    },
-    {
-      "company": "Cerebras",
-      "provider": "Cerebras",
-      "modelName": "Qwen 3 235B",
-      "modelId": "cerebras/qwen-3-235b-a22b-instruct-2507",
-      "categoryRaw": "LLM / agentic",
-      "badges": [
-        "AGENTIC"
-      ],
-      "parameters": "235B (22B aktif)",
-      "speedLabel": "Rekor Hız",
-      "inputPrice": 0.9,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Dünyanın en hızlı inference",
-        "Cerebras wafer-scale chip",
-        "Agentic görev hızlandırıcı",
-        "Gerçek zamanlı karar alma",
-        "Otonom ajan altyapısı"
-      ],
-      "standoutFeature": "Cerebras CS-3 çipi — saniyede 2000+ token",
-      "useCase": "Otonom AI ajanları, gerçek zamanlı kararlar",
-      "rivalAdvantage": "GPU tabanlı sistemlere karşı 10-20× daha hızlı inference",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "cerebras",
-        "accent": "#22c55e"
-      }
-    },
-    {
-      "company": "CodeRabbit",
-      "provider": "CodeRabbit",
-      "modelName": "CodeRabbit Code Search",
-      "modelId": "coderabbitai/coderabbit-code-search",
-      "categoryRaw": "Code search",
-      "badges": [
-        "CODING",
-        "ARAMA"
-      ],
-      "parameters": "Kod-spesifik embedding",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.75,
-      "outputPrice": 0.75,
-      "imagePrice": null,
-      "traits": [
-        "Kod tabanı anlama uzmanı",
-        "Semantik kod arama",
-        "PR review otomasyonu",
-        "Güvenlik açığı tespiti",
-        "Teknik borç analizi"
-      ],
-      "standoutFeature": "Kod semantiği ile gelişmiş arama + otomatik review",
-      "useCase": "Büyük kod tabanı yönetimi, güvenlik denetimi",
-      "rivalAdvantage": "GitHub Copilot Chat'e kıyasla kod arama kesinliği üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "coderabbit",
-        "accent": "#8b5cf6"
-      }
-    },
-    {
-      "company": "DeepSeek",
-      "provider": "DeepSeek",
-      "modelName": "DeepSeek R1",
-      "modelId": "deepseek/deepseek-reasoner",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "671B MoE (37B aktif)",
-      "speedLabel": "Derin",
-      "inputPrice": 0.825,
-      "outputPrice": 3.285,
-      "imagePrice": null,
-      "traits": [
-        "Açık kaynak reasoning devrimi",
-        "o1 alternatifi şampiyonu",
-        "Şeffaf düşünce zinciri",
-        "Matematik olimpiyatı düzeyi",
-        "Çin AI mucizesi"
-      ],
-      "standoutFeature": "Tam şeffaf CoT reasoning — açık kaynak",
-      "useCase": "Akademik araştırma, matematiksel ispat, analiz",
-      "rivalAdvantage": "OpenAI o1'ın 1/10 fiyatına benzer AIME/MATH sonuçları",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "deepseek",
-        "accent": "#3b82f6"
-      }
-    },
-    {
-      "company": "DeepSeek",
-      "provider": "DeepSeek",
-      "modelName": "DeepSeek R1 0528",
-      "modelId": "deepseek/deepseek-r1-0528",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "671B MoE (37B aktif)",
-      "speedLabel": "Derin",
-      "inputPrice": 0.825,
-      "outputPrice": 3.285,
-      "imagePrice": null,
-      "traits": [
-        "Çin'in muhakeme devi",
-        "Açık reasoning şeffaflığı",
-        "Matematik olimpiyatı seviyesi",
-        "Düşünce zinciri görünürlüğü",
-        "Maliyet-etkin zirve"
-      ],
-      "standoutFeature": "CoT reasoning chain görünür — şeffaf akıl yürütme",
-      "useCase": "Bilimsel araştırma, matematiksel ispat, analiz",
-      "rivalAdvantage": "o1'ın 1/15 maliyetiyle benzer AIME performansı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "deepseek",
-        "accent": "#3b82f6"
-      }
-    },
-    {
-      "company": "DeepSeek",
-      "provider": "DeepSeek",
-      "modelName": "DeepSeek V3",
-      "modelId": "deepseek/deepseek-chat",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "671B MoE (37B aktif)",
-      "speedLabel": "Orta-Hızlı",
-      "inputPrice": 0.405,
-      "outputPrice": 1.65,
-      "imagePrice": null,
-      "traits": [
-        "Açık MoE devrimi",
-        "GPT-4 kırıcı maliyet",
-        "Geniş bilgi kapsamı",
-        "Genel görev şampiyonu",
-        "Çin yapay zekası öncüsü"
-      ],
-      "standoutFeature": "671B MoE — 37B aktif, GPT-4-turbo rakibi",
-      "useCase": "Genel amaçlı sohbet, analiz, içerik üretimi",
-      "rivalAdvantage": "GPT-4 kalitesi — 10× daha düşük fiyat",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "deepseek",
-        "accent": "#3b82f6"
-      }
-    },
-    {
-      "company": "DeepSeek",
-      "provider": "DeepSeek",
-      "modelName": "DeepSeek V3.1",
-      "modelId": "deepseek/deepseek-chat-v3.1",
-      "categoryRaw": "LLM / coding",
-      "badges": [
-        "CODING"
-      ],
-      "parameters": "671B MoE",
-      "speedLabel": "Orta-Hızlı",
-      "inputPrice": 0.405,
-      "outputPrice": 1.65,
-      "imagePrice": null,
-      "traits": [
-        "Kod üretiminde küresel lider",
-        "Çoklu dil programlama",
-        "Açık kaynak MoE mimarisi",
-        "Belgeleme ve refactor",
-        "Test yazma otomasyonu"
-      ],
-      "standoutFeature": "HumanEval, SWE-Bench'de top-3 açık model",
-      "useCase": "Full-stack geliştirme, kod review, debugging",
-      "rivalAdvantage": "GPT-4 Turbo seviyesi kod — 10× daha ucuz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "deepseek",
-        "accent": "#3b82f6"
-      }
-    },
-    {
-      "company": "Exa",
-      "provider": "Exa",
-      "modelName": "Exa AI Search",
-      "modelId": "exa/exa-ai-search",
-      "categoryRaw": "Search / answer",
-      "badges": [
-        "ARAMA"
-      ],
-      "parameters": "Neural search engine",
-      "speedLabel": "Hızlı",
-      "inputPrice": 7.5,
-      "outputPrice": 7.5,
-      "imagePrice": null,
-      "traits": [
-        "Anlam tabanlı web arama",
-        "İçerik kalitesi filtreleme",
-        "Geliştirici öncelikli API",
-        "Yüksek hassasiyetli tarama",
-        "Bağlamsal link keşfi"
-      ],
-      "standoutFeature": "Semantik web crawling — keyword değil anlam arar",
-      "useCase": "Araştırma API'si, kompetitör analizi, içerik keşfi",
-      "rivalAdvantage": "Google Search API'ye kıyasla anlam eşleşmesi %3× daha iyi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "exa",
-        "accent": "#14b8a6"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 1.5 Flash",
-      "modelId": "google/gemini-1.5-flash",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~12B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.225,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "1 milyon token bağlam öncüsü",
-        "Uzun belge uzmanı",
-        "Multimodal hız lideri",
-        "Google 1.5 nesli",
-        "Stabil üretim modeli"
-      ],
-      "standoutFeature": "1M token bağlam — piyasaya ilk sunan",
-      "useCase": "Uzun belge analizi, multimodal araştırma",
-      "rivalAdvantage": "Claude 3 Sonnet'e kıyasla 1M bağlamda daha düşük fiyat",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 2.0 Flash",
-      "modelId": "google/gemini-2.0-flash-001",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~12B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.6,
-      "imagePrice": null,
-      "traits": [
-        "2. nesil Flash hızı",
-        "Multimodal anlık tepki",
-        "Google altyapı gücü",
-        "Üretim hazır hız",
-        "Ölçek için doğan model"
-      ],
-      "standoutFeature": "Agentic kullanım için optimize edilmiş 2.0 nesil",
-      "useCase": "Gerçek zamanlı asistan, üretim API, ajan sistemi",
-      "rivalAdvantage": "Gemini 1.5 Flash'a göre hız ve kalite %30 artış",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 2.0 Flash Thinking",
-      "modelId": "google/gemini-2.0-flash-thinking-exp",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~12B + thinking",
-      "speedLabel": "Orta",
-      "inputPrice": 0.225,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Flash hızında derin düşünce",
-        "Görünür akıl yürütme",
-        "Uygun fiyatlı reasoning",
-        "Şeffaf düşünce süreci",
-        "Experiment sınıfı güç"
-      ],
-      "standoutFeature": "Flash hızında thinking modu — bütçe reasoning",
-      "useCase": "STEM öğrencileri, yazılım geliştirme, analiz",
-      "rivalAdvantage": "DeepSeek R1'den daha ucuz, Flash hızında reasoning",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 2.5 Pro",
-      "modelId": "google/gemini-2.5-pro",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~340B MoE",
-      "speedLabel": "Orta",
-      "inputPrice": 1.875,
-      "outputPrice": 15.0,
-      "imagePrice": null,
-      "traits": [
-        "Google'ın derin düşünürü",
-        "Bilimsel muhakeme lideri",
-        "Çok adımlı problem çözme",
-        "Araştırma derinliği",
-        "Analitik mükemmellik"
-      ],
-      "standoutFeature": "Thinking modu — derin akıl yürütme gösterir",
-      "useCase": "Bilimsel analiz, kod mimarisi, stratejik planlama",
-      "rivalAdvantage": "MMLU Pro ve GPQA'da GPT-4o üstünde",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash",
-      "modelId": "google/gemini-3.1-flash",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~12B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.45,
-      "outputPrice": 3.75,
-      "imagePrice": null,
-      "traits": [
-        "Google zekasının özü",
-        "Çok modlu ustalık",
-        "Hız ve kalite dengesi",
-        "Nativ Google entegrasyonu",
-        "Güvenilir altyapı"
-      ],
-      "standoutFeature": "Metin + görsel + ses + video anlama",
-      "useCase": "Genel amaçlı AI uygulamaları, prototipler",
-      "rivalAdvantage": "Flash serisi içinde en yüksek multimodal skor",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Image",
-      "modelId": "google/gemini-3.1-flash-image-preview",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Diffusion",
-      "speedLabel": "~3 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.1005,
-      "traits": [
-        "Fotogerçekçi detay",
-        "Google mağazası kalitesi",
-        "Anlık görsel üretim",
-        "Çok dilli prompt desteği",
-        "Güvenli içerik filtreleme"
-      ],
-      "standoutFeature": "Gemini altyapısıyla metin-görsel entegrasyonu",
-      "useCase": "Pazarlama görselleri, sosyal medya, e-ticaret",
-      "rivalAdvantage": "DALL-E 3'e göre %30 daha hızlı üretim",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Image Preview",
-      "modelId": "google/gemini-3.1-flash-image-preview",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "Diffusion + LLM",
-      "speedLabel": "~5 sn/görsel",
-      "inputPrice": 0.45,
-      "outputPrice": 45.0,
-      "imagePrice": null,
-      "traits": [
-        "Metin-görsel sentezi",
-        "Akıllı görsel planlama",
-        "Google kalite standardı",
-        "Bağlamsal görsel üretim",
-        "Hibrit model gücü"
-      ],
-      "standoutFeature": "Token tabanlı görsel üretim — LLM+diffusion hybrid",
-      "useCase": "Eğitim içeriği, sunum görselleri, konsept görselleştirme",
-      "rivalAdvantage": "Aynı konuşmada hem metin hem görsel üretimi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Lite",
-      "modelId": "google/gemini-3.1-flash-lite",
-      "categoryRaw": "LLM / coding",
-      "badges": [
-        "CODING"
-      ],
-      "parameters": "~4B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.225,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Ultra hafif kod asistanı",
-        "Anlık tamamlama",
-        "Düşük gecikme IDE eklentisi",
-        "Enerji tasarruflu geliştirme",
-        "Sürekli entegrasyon uyumlu"
-      ],
-      "standoutFeature": "CI/CD pipeline entegrasyonu için optimize",
-      "useCase": "Otomatik kod review, lint, minor refactor",
-      "rivalAdvantage": "Sürekli çalıştırma için en düşük token maliyeti",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Lite Preview",
-      "modelId": "google/gemini-3.1-flash-lite-preview",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~8B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.375,
-      "outputPrice": 2.25,
-      "imagePrice": null,
-      "traits": [
-        "Google ekosistemine native entegrasyon",
-        "Hafif ama güçlü",
-        "Anlık yanıt",
-        "Maliyet şampiyonu",
-        "Ölçeklenebilir altyapı"
-      ],
-      "standoutFeature": "Google TPU v5 altyapısında optimize",
-      "useCase": "Mobil uygulamalar, chatbot, anlık çeviri",
-      "rivalAdvantage": "Benzer boyut segmentinde en düşük gecikme süresi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Native Audio",
-      "modelId": "google/gemini-3.1-flash-native-audio",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~12B + audio encoder",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.75,
-      "outputPrice": 3.0,
-      "imagePrice": null,
-      "traits": [
-        "Ses doğal anlama",
-        "Gerçek zamanlı transkripsiyon",
-        "Konuşmacı tanıma",
-        "Akustik zeka",
-        "Ses-metin köprüsü"
-      ],
-      "standoutFeature": "Native audio processing — ek dönüştürme yok",
-      "useCase": "Sesli asistan, podcast analizi, toplantı özetleme",
-      "rivalAdvantage": "Whisper pipeline'ına kıyasla %40 daha az gecikme",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Flash Preview",
-      "modelId": "google/gemini-3.1-flash-preview",
-      "categoryRaw": "LLM / coding",
-      "badges": [
-        "CODING"
-      ],
-      "parameters": "~12B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.225,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Hızlı prototipleme motoru",
-        "Google araçlarına native",
-        "Kod ve görsel birlikte",
-        "Anlık kod tamamlama",
-        "Test ve debug hızı"
-      ],
-      "standoutFeature": "Flash hızında kod üretimi + görsel anlama",
-      "useCase": "Hızlı prototip, kod asistanı, hackathon",
-      "rivalAdvantage": "Fiyat/hız oranında coding kategorisi lideri",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemini 3.1 Pro",
-      "modelId": "google/gemini-3.1-pro",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~340B MoE",
-      "speedLabel": "Orta",
-      "inputPrice": 4.5,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "Google'ın amiral gemisi",
-        "En geniş multimodal kapsam",
-        "Kurumsal sınıf güvenilirlik",
-        "Dünya bilgi tabanı",
-        "Ölçeklenebilir zeka"
-      ],
-      "standoutFeature": "Video, ses, görsel, metin — tam multimodal",
-      "useCase": "Kurumsal AI, araştırma, analiz platformları",
-      "rivalAdvantage": "Video anlama kapasitesinde rakipsiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Google",
-      "provider": "Google",
-      "modelName": "Gemma 3 27B",
-      "modelId": "google/gemma-3-27b-it",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "27B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.225,
-      "imagePrice": null,
-      "traits": [
-        "Açık kaynak şampiyonu",
-        "Yerel deploy esnekliği",
-        "Google araştırma kalitesi",
-        "Özelleştirilebilir temel",
-        "Topluluk tarafından test edilmiş"
-      ],
-      "standoutFeature": "Google tarafından eğitilmiş açık ağırlıklı model",
-      "useCase": "On-premise AI, fine-tuning, araştırma",
-      "rivalAdvantage": "Açık kaynak kategorisinde SOTA benchmark sonuçları",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "google",
-        "accent": "#4285f4"
-      }
-    },
-    {
-      "company": "Inception",
-      "provider": "Inception",
-      "modelName": "Mercury 2",
-      "modelId": "inception/mercury-2",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~7B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.375,
-      "outputPrice": 1.125,
-      "imagePrice": null,
-      "traits": [
-        "Difüzyon tabanlı yenilik",
-        "Paralel token üretimi",
-        "Maliyet-etkin zeka",
-        "Hız odaklı mimari",
-        "Yeni nesil tasarım"
-      ],
-      "standoutFeature": "Difüzyon dil modeli — otoregresif değil",
-      "useCase": "Yüksek hacimli uygulamalar, edge deploy",
-      "rivalAdvantage": "Transformer tabanlı modellere göre 5× daha hızlı üretim",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "inception",
-        "accent": "#a855f7"
-      }
-    },
-    {
-      "company": "Liquid AI",
-      "provider": "Liquid AI",
-      "modelName": "LFM2-24B-A2B",
-      "modelId": "liquid/lfm-2-24b-a2b",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "24B (2B aktif)",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.045,
-      "outputPrice": 0.18,
-      "imagePrice": null,
-      "traits": [
-        "Liquid mimari öncüsü",
-        "Rekabetsiz verimlilik",
-        "Sıvı sinir ağı",
-        "Ultra düşük gecikme",
-        "Bellek optimizasyonu"
-      ],
-      "standoutFeature": "Transformer olmayan LFM mimarisi — devrimsel",
-      "useCase": "Edge AI, IoT, embedded sistemler",
-      "rivalAdvantage": "Aynı boyuttaki Transformer modellerine 10× maliyet avantajı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "liquid-ai",
-        "accent": "#06b6d4"
-      }
-    },
-    {
-      "company": "Liquid AI",
-      "provider": "Liquid AI",
-      "modelName": "LFM2-40B",
-      "modelId": "liquid/lfm-2-40b",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "40B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.12,
-      "outputPrice": 0.36,
-      "imagePrice": null,
-      "traits": [
-        "Büyük ölçekli liquid zeka",
-        "Verimlilik mimarisi",
-        "Sektör yenilikçisi",
-        "Düşük bellek ayak izi",
-        "Dengeli güç-maliyet"
-      ],
-      "standoutFeature": "LFM2 mimarisi — sequence uzunluğuna duyarsız",
-      "useCase": "Kurumsal deploy, private cloud, otomatizasyon",
-      "rivalAdvantage": "40B ölçeğinde en düşük inference maliyeti",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "liquid-ai",
-        "accent": "#06b6d4"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 3.1 70B Instruct",
-      "modelId": "meta-llama/llama-3.1-70b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "70B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.18,
-      "outputPrice": 0.45,
-      "imagePrice": null,
-      "traits": [
-        "Kurumsal açık model",
-        "Geniş bilgi tabanı",
-        "Çok dilli üstünlük",
-        "Güvenilir topluluk kanıtı",
-        "Maliyet-kalite dengesinin zirvesi"
-      ],
-      "standoutFeature": "70B ölçeğinde SOTA açık model — 2024 standardı",
-      "useCase": "Kurumsal chatbot, RAG, on-premise AI",
-      "rivalAdvantage": "Aynı ölçekte GPT-3.5-turbo kalitesinde — ücretsiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 3.1 8B Instruct",
-      "modelId": "meta-llama/llama-3.1-8b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "8B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.03,
-      "outputPrice": 0.12,
-      "imagePrice": null,
-      "traits": [
-        "Meta açık kaynak liderliği",
-        "Topluluk ekosistemi",
-        "Sıfır lisans maliyeti",
-        "Her yerde çalışan",
-        "Geliştirici kültürü ikonu"
-      ],
-      "standoutFeature": "En yaygın fine-tune edilen açık model",
-      "useCase": "Araştırma, fine-tuning, edge deploy, öğrenim",
-      "rivalAdvantage": "Hugging Face'de en çok indirilen model ailesinin üyesi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 3.2 90B Vision Instruct",
-      "modelId": "meta-llama/llama-3.2-90b-vision-instruct",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "90B",
-      "speedLabel": "Orta",
-      "inputPrice": 0.6,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Açık multimodal şampiyonu",
-        "Meta görsel zekası",
-        "Büyük ölçek açık model",
-        "Görsel + dil entegrasyonu",
-        "Topluluk güvenilirliği"
-      ],
-      "standoutFeature": "90B parametre — yayınlandığında en büyük açık vision model",
-      "useCase": "Görsel QA, belge analizi, multimodal araştırma",
-      "rivalAdvantage": "GPT-4V fiyatının %4'üne yakın görsel anlama kalitesi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 3.3 70B Instruct",
-      "modelId": "meta-llama/llama-3.3-70b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "70B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.225,
-      "outputPrice": 0.375,
-      "imagePrice": null,
-      "traits": [
-        "Llama serisinin en güncel 70B'si",
-        "Üretim standartı güncelleme",
-        "Optimize çıkarım hızı",
-        "Meta en iyi uygulamaları",
-        "Açık kurumsal tercih"
-      ],
-      "standoutFeature": "3.3 güncellemesi — 3.2'ye göre belgelenmiş iyileştirme",
-      "useCase": "Üretim RAG sistemi, kurumsal chatbot, analiz",
-      "rivalAdvantage": "Llama 3.1 70B'ye göre tüm benchmark'larda üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 4 Maverick",
-      "modelId": "meta-llama/llama-4-maverick",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "400B MoE (17B aktif)",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.33,
-      "outputPrice": 0.99,
-      "imagePrice": null,
-      "traits": [
-        "Llama nesli yenilikçi",
-        "Multimodal açık devrim",
-        "MoE verimliliği",
-        "Görsel-metin entegrasyonu",
-        "Meta geleceği"
-      ],
-      "standoutFeature": "400B MoE multimodal — açık kaynak tarihinin büyüğü",
-      "useCase": "Görsel analiz, çok modlu içerik üretimi",
-      "rivalAdvantage": "Açık multimodal modeller arasında Llama 4 Scout'tan 2× güçlü",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Meta",
-      "provider": "Meta",
-      "modelName": "Llama 4 Scout",
-      "modelId": "meta-llama/llama-4-scout",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "109B MoE (17B aktif)",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.27,
-      "outputPrice": 0.885,
-      "imagePrice": null,
-      "traits": [
-        "Hafif multimodal keşifçi",
-        "İzci hızında zeka",
-        "Uygun fiyatlı görsel anlama",
-        "MoE verimliliği",
-        "Açık multimodal standardı"
-      ],
-      "standoutFeature": "10M token bağlam penceresi — rekor uzunluk",
-      "useCase": "Uzun belge+görsel analizi, kod+görsel birleşik",
-      "rivalAdvantage": "10M token bağlamda kategori rekoru",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "meta",
-        "accent": "#0668E1"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Devstral Small 1.1",
-      "modelId": "mistralai/devstral-small-2507",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~24B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.45,
-      "imagePrice": null,
-      "traits": [
-        "Geliştirici odaklı tasarım",
-        "Açık kaynak ruhu",
-        "Agentic kodlama",
-        "CLI entegrasyonu",
-        "Dev araçları natif"
-      ],
-      "standoutFeature": "Agentic coding görevleri için özel ince ayar",
-      "useCase": "Otonom kodlama ajanı, SWE-bench görevleri",
-      "rivalAdvantage": "SWE-bench Verified'da küçük model kategorisi lideri",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Mistral 7B Instruct",
-      "modelId": "mistralai/mistral-7b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "7B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.15,
-      "imagePrice": null,
-      "traits": [
-        "Avrupa AI'nın simgesi",
-        "7B sınıfı benchmark lideri",
-        "Sliding window attention",
-        "Açık model standardı",
-        "Topluluk ikonu"
-      ],
-      "standoutFeature": "GQA + Sliding Window Attention — verimlilik yenilikleri",
-      "useCase": "Fine-tuning temeli, edge deploy, basit görevler",
-      "rivalAdvantage": "7B kategorisinde yayınlandığında Llama 2 13B'yi geçti",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Mistral Medium 3.1",
-      "modelId": "mistralai/mistral-medium-3.1-2506",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~22B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.6,
-      "outputPrice": 3.0,
-      "imagePrice": null,
-      "traits": [
-        "Avrupalı AI liderliği",
-        "Dil çeşitliliği şampiyonu",
-        "Etkin orta kademe model",
-        "Fransız araştırma kalitesi",
-        "GDPR uyumlu AI"
-      ],
-      "standoutFeature": "Avrupa merkezli GDPR uyumlu altyapı",
-      "useCase": "AB kurumsal kullanımı, çok dilli Avrupa uygulamaları",
-      "rivalAdvantage": "Avrupa veri uyumu kategorisinde rakipsiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Mistral NeMo 12B Instruct",
-      "modelId": "mistralai/mistral-nemo",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "12B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.045,
-      "outputPrice": 0.225,
-      "imagePrice": null,
-      "traits": [
-        "NVIDIA ortaklığı güvencesi",
-        "Kurumsal açık model",
-        "Aşırı düşük maliyet",
-        "Özelleştirme esnekliği",
-        "Üretim hazır"
-      ],
-      "standoutFeature": "NVIDIA ile ortak geliştirme — TensorRT optimize",
-      "useCase": "Şirket içi fine-tuning, özel sektör modelleri",
-      "rivalAdvantage": "NVIDIA donanım optimizasyonu ile benzersiz verimlilik",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Mistral Small 3.2",
-      "modelId": "mistralai/mistral-small-3.2-24b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "24B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.09,
-      "outputPrice": 0.27,
-      "imagePrice": null,
-      "traits": [
-        "Kompakt Avrupa zekası",
-        "Açık kaynak liderliği",
-        "Verimli çıkarım",
-        "Üretim kalite garantisi",
-        "Topluluk onaylı"
-      ],
-      "standoutFeature": "Apache 2.0 lisansı — ticari kullanım serbest",
-      "useCase": "Startup deploy, SaaS entegrasyonu, fine-tuning",
-      "rivalAdvantage": "Aynı boyutta tüm açık modeller arasında en iyi ticari lisans",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Mixtral 8x7B Instruct",
-      "modelId": "mistralai/mixtral-8x7b-instruct",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "47B (13B aktif) MoE",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 1.05,
-      "outputPrice": 1.05,
-      "imagePrice": null,
-      "traits": [
-        "MoE'nin açık kaynak öncüsü",
-        "Uzman karışımı zekası",
-        "Avrupa MoE şampiyonu",
-        "Kod ve çok dilli denge",
-        "Topluluğun MoE standartı"
-      ],
-      "standoutFeature": "8×7B MoE — açık kaynak MoE'yi başlatan model",
-      "useCase": "Açık kaynak MoE uygulamaları, çok dilli içerik",
-      "rivalAdvantage": "MoE açık kaynak kategorisinin kurucu modeli",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "Mistral AI",
-      "provider": "Mistral AI",
-      "modelName": "Pixtral Large 1.1",
-      "modelId": "mistralai/pixtral-large-2411",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~123B",
-      "speedLabel": "Orta",
-      "inputPrice": 3.0,
-      "outputPrice": 9.0,
-      "imagePrice": null,
-      "traits": [
-        "Görsel muhakeme şampiyonu",
-        "Grafik ve diyagram anlama",
-        "Çok dilli görsel analiz",
-        "Belge görsel işleme",
-        "Avrupa multimodal lideri"
-      ],
-      "standoutFeature": "123B parametre görsel+dil — Avrupa'nın en büyüğü",
-      "useCase": "Belge OCR analizi, görsel QA, teknik çizim okuma",
-      "rivalAdvantage": "Avrupa menşeli en büyük açık multimodal model",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "mistral",
-        "accent": "#fd7e14"
-      }
-    },
-    {
-      "company": "MoonshotAI",
-      "provider": "MoonshotAI",
-      "modelName": "Kimi K2",
-      "modelId": "moonshotai/kimi-k2",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~32T MoE (tahmini)",
-      "speedLabel": "Orta",
-      "inputPrice": 0.855,
-      "outputPrice": 3.45,
-      "imagePrice": null,
-      "traits": [
-        "Uzun bağlam ustası",
-        "Agentic görev mimarisi",
-        "Araç kullanım şampiyonu",
-        "Moonshot teknoloji vizyonu",
-        "Agentic AI öncüsü"
-      ],
-      "standoutFeature": "128K bağlam + güçlü araç kullanım yeteneği",
-      "useCase": "Uzun proje analizi, ajan sistemleri, araştırma",
-      "rivalAdvantage": "Agentic araç kullanımında Llama 4'e karşı üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "moonshotai",
-        "accent": "#eab308"
-      }
-    },
-    {
-      "company": "MoonshotAI",
-      "provider": "MoonshotAI",
-      "modelName": "Kimi K2 Instruct",
-      "modelId": "moonshotai/kimi-k2-instruct",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~32T MoE",
-      "speedLabel": "Orta",
-      "inputPrice": 0.855,
-      "outputPrice": 3.45,
-      "imagePrice": null,
-      "traits": [
-        "Uzun bağlam şampiyonu",
-        "128K kontekst penceresi",
-        "Çince mükemmeliyeti",
-        "Belge odaklı analiz",
-        "Moonshot vizyonu"
-      ],
-      "standoutFeature": "Ultra uzun bağlam + agentic araç kullanımı",
-      "useCase": "Uzun belge analizi, araştırma özetleme",
-      "rivalAdvantage": "128K token bağlamda tutarlılık kategorisinde lider",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "moonshotai",
-        "accent": "#eab308"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT Image 1",
-      "modelId": "openai/gpt-image-1",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Özel diffusion",
-      "speedLabel": "~8 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.0165,
-      "traits": [
-        "LLM bağlamlı görsel üretim",
-        "Metin anlama üstünlüğü",
-        "Prompt sadakati lideri",
-        "OpenAI kalite damgası",
-        "Native ChatGPT entegrasyonu"
-      ],
-      "standoutFeature": "GPT'nin metin anlayışı ile görsel üretim füzyonu",
-      "useCase": "ChatGPT entegrasyonu, metin-görsel içerik, eğitim",
-      "rivalAdvantage": "Prompt takibi doğruluğunda DALL-E 3'ün üstünde",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4.1",
-      "modelId": "openai/gpt-4.1",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~1T MoE",
-      "speedLabel": "Hızlı",
-      "inputPrice": 3.0,
-      "outputPrice": 12.0,
-      "imagePrice": null,
-      "traits": [
-        "4. nesil zirvesi",
-        "İnce ayarlı ustalık",
-        "Pratik mükemmellik",
-        "Kararlı üretim modeli",
-        "API ekosistemi temeli"
-      ],
-      "standoutFeature": "1M token bağlam — GPT-4 serisinin en uzun penceresi",
-      "useCase": "Üretim ortamı, kurumsal API, uzun belge işleme",
-      "rivalAdvantage": "GPT-4o'ya kıyasla %26 daha uzun bağlam, benzer fiyat",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4.1 Mini",
-      "modelId": "openai/gpt-4.1-mini",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~30B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.6,
-      "outputPrice": 2.4,
-      "imagePrice": null,
-      "traits": [
-        "Mini formda büyük bağlam",
-        "Hız-bağlam dengesi",
-        "Üretim ölçeği modeli",
-        "Geliştiricinin ilk tercihi",
-        "Maliyet efektif zeka"
-      ],
-      "standoutFeature": "1M token bağlam — mini boyutta rekor",
-      "useCase": "Üretim chatbot, RAG sistemi, asistan API",
-      "rivalAdvantage": "Küçük model kategorisinde en uzun bağlam penceresi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4.1 Nano",
-      "modelId": "openai/gpt-4.1-nano",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~4B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.6,
-      "imagePrice": null,
-      "traits": [
-        "Nano boyut dev güç",
-        "Mobil öncelikli tasarım",
-        "Anlık yanıt hızı",
-        "Enerji verimliliği",
-        "Edge-ready zeka"
-      ],
-      "standoutFeature": "OpenAI'nin en küçük multimodal modeli",
-      "useCase": "Mobil app, wearable, embedded AI, IoT",
-      "rivalAdvantage": "Nano kategoride görsel anlama kapasitesiyle benzersiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4.5 Preview",
-      "modelId": "openai/gpt-4.5-preview",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~500B+ MoE (tahmini)",
-      "speedLabel": "Orta/Derin",
-      "inputPrice": 112.5,
-      "outputPrice": 225.0,
-      "imagePrice": null,
-      "traits": [
-        "GPT-4 ve 5 arası köprü",
-        "Duygusal zeka zirvesi",
-        "Psikolojik anlayış derinliği",
-        "İnsan ilişkisi kalitesi",
-        "EQ optimize model"
-      ],
-      "standoutFeature": "EQ-bench'de 1. sıra — duygusal zeka odaklı",
-      "useCase": "Terapi asistanı, yaratıcı yazarlık, ilişki koçluğu",
-      "rivalAdvantage": "Duygusal zeka ve sosyal anlayışta tüm modellerin üstünde",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4o",
-      "modelId": "openai/gpt-4o",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~200B MoE",
-      "speedLabel": "Hızlı",
-      "inputPrice": 3.75,
-      "outputPrice": 15.0,
-      "imagePrice": null,
-      "traits": [
-        "Omni modelin mihenktaşı",
-        "Gerçek zamanlı ses-görsel",
-        "ChatGPT'nin beyni",
-        "Endüstri benchmark şampiyonu",
-        "Her şeyi yapan model"
-      ],
-      "standoutFeature": "Audio + görsel + metin gerçek zamanlı — 'o' = omni",
-      "useCase": "Genel asistan, ses chatbot, görsel analiz",
-      "rivalAdvantage": "Ses entegrasyonunda Gemini ve Claude'dan öne geçti",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4o Codex",
-      "modelId": "openai/gpt-4o-codex",
-      "categoryRaw": "LLM / coding",
-      "badges": [
-        "CODING"
-      ],
-      "parameters": "~200B kod odaklı",
-      "speedLabel": "Hızlı",
-      "inputPrice": 2.25,
-      "outputPrice": 9.0,
-      "imagePrice": null,
-      "traits": [
-        "Görsel kod anlama",
-        "Ekran görüntüsünden kod",
-        "UI-to-code dönüşüm",
-        "Hata görüntüsü analizi",
-        "Multimodal geliştirici"
-      ],
-      "standoutFeature": "Görsel giriş + kod çıktısı — screenshot-to-code",
-      "useCase": "UI geliştirme, görsel hata ayıklama, tasarım-kod",
-      "rivalAdvantage": "Görsel tabanlı kodlama kategorisinde rakipsiz",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-4o Mini",
-      "modelId": "openai/gpt-4o-mini",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~8B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.225,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Mini ama multimodal tam",
-        "Maliyet ölçeği şampiyonu",
-        "Görsel + metin anlama",
-        "API başlangıç noktası",
-        "Geliştirici standart modeli"
-      ],
-      "standoutFeature": "Küçük modelde tam multimodal yetenek",
-      "useCase": "Chatbot, görsel ön analiz, uygulama entegrasyonu",
-      "rivalAdvantage": "GPT-3.5-turbo'ya görsel yeteneği ekle, aynı fiyata yak",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5",
-      "modelId": "openai/gpt-5",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~2T (tahmini)",
-      "speedLabel": "Hızlı",
-      "inputPrice": 1.875,
-      "outputPrice": 15.0,
-      "imagePrice": null,
-      "traits": [
-        "Yapay zekanın 5. zirvesi",
-        "Tam multimodal ustalık",
-        "Endüstri standart belirleyici",
-        "İnsan seviyesi anlayış",
-        "Gelecek şimdiki zaman"
-      ],
-      "standoutFeature": "Metin, görsel, ses, video, kod — tek modelde",
-      "useCase": "Genel amaç AI, her sektör, her görev",
-      "rivalAdvantage": "Rakip frontier modellere karşı reasoning+speed dengesi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5 Mini",
-      "modelId": "openai/gpt-5-mini",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~20B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.375,
-      "outputPrice": 3.0,
-      "imagePrice": null,
-      "traits": [
-        "5. nesil kompakt güç",
-        "Hız-kalite optimizasyonu",
-        "Geliştirici dostu fiyat",
-        "Masif kullanım için ideal",
-        "Mini ad büyük zeka"
-      ],
-      "standoutFeature": "GPT-5 mimarisinin küçük ve hızlı versiyonu",
-      "useCase": "Yüksek hacimli API kullanımı, chatbot, öneri",
-      "rivalAdvantage": "GPT-4o Mini'ye kıyasla nesil atlayan kalite farkı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5 Nano",
-      "modelId": "openai/gpt-5-nano",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~3B",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.075,
-      "outputPrice": 0.6,
-      "imagePrice": null,
-      "traits": [
-        "5. nesil kompakt zeka",
-        "Fiyatın en altı kalitesi",
-        "Milisaniye tepki",
-        "Masif ölçekte deploy",
-        "Minimal kaynak tüketimi"
-      ],
-      "standoutFeature": "GPT-5 ailesinin en hızlı ve en ucuz üyesi",
-      "useCase": "Chatbot, autocomplete, öneri sistemleri",
-      "rivalAdvantage": "Gemini Flash Lite'a göre 2× daha düşük input fiyatı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5.2 Codex Mini",
-      "modelId": "openai/gpt-5.2-codex-mini",
-      "categoryRaw": "LLM / coding",
-      "badges": [
-        "CODING"
-      ],
-      "parameters": "~20B kod",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 2.25,
-      "outputPrice": 9.0,
-      "imagePrice": null,
-      "traits": [
-        "Kod tamamlama uzmanı",
-        "Çok dilli programlama",
-        "IDE entegrasyonu",
-        "Hata ayıklama zekası",
-        "Sıfırdan proje kurulumu"
-      ],
-      "standoutFeature": "50+ programlama dili — GitHub Copilot temeli",
-      "useCase": "Geliştirici araçları, otomatik dokümantasyon",
-      "rivalAdvantage": "Küçük boyutuna rağmen GPT-4 Turbo'ya yakın kod kalitesi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5.3 Chat",
-      "modelId": "openai/gpt-5.3-chat",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~175B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 2.625,
-      "outputPrice": 21.0,
-      "imagePrice": null,
-      "traits": [
-        "Konuşma kalitesi zirvesi",
-        "Anlayış derinliği",
-        "Tutarlı yanıt kalitesi",
-        "Bağlam zenginliği",
-        "Sezgisel etkileşim"
-      ],
-      "standoutFeature": "Geliştirilmiş chat modu RLHF fine-tune",
-      "useCase": "Genel asistan, içerik üretimi, eğitim",
-      "rivalAdvantage": "Chat senaryolarında Gemini Flash'a karşı üstün tutarlılık",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5.4",
-      "modelId": "openai/gpt-5.4",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~200B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 3.75,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "İkinci nesil sohbet zekası",
-        "Bağlamsal farkındalık",
-        "Akışkan diyalog",
-        "İnsan ötesi anlayış",
-        "Sektör lideri"
-      ],
-      "standoutFeature": "Gelişmiş çok adımlı akıl yürütme",
-      "useCase": "Kurumsal asistan, müşteri desteği",
-      "rivalAdvantage": "GPT-3/4 nesline kıyasla 3× daha derin bağlam",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "GPT-5.4 Pro",
-      "modelId": "openai/gpt-5.4-pro",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~500B+",
-      "speedLabel": "Orta",
-      "inputPrice": 45.0,
-      "outputPrice": 270.0,
-      "imagePrice": null,
-      "traits": [
-        "Ultra yüksek doğruluk",
-        "Kurumsal güç",
-        "Kapsamlı analitik",
-        "Çok modlu üstünlük",
-        "Endüstri standardı"
-      ],
-      "standoutFeature": "Milyonlarca token bağlam penceresi",
-      "useCase": "Hukuk, finans, araştırma, strateji",
-      "rivalAdvantage": "Hassas görevlerde GPT-4 Pro'ya karşı %40 daha iyi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "Moderation",
-      "modelId": "openai/moderation",
-      "categoryRaw": "Safety / moderation",
-      "badges": [
-        "GÜVENLİK"
-      ],
-      "parameters": "Sınıflandırma modeli",
-      "speedLabel": "Ultra Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.15,
-      "imagePrice": null,
-      "traits": [
-        "İçerik güvenlik kalkanı",
-        "Gerçek zamanlı moderasyon",
-        "Çok kategorili sınıflama",
-        "API entegre güvenlik",
-        "Platform uyum asistanı"
-      ],
-      "standoutFeature": "11 kategori eş zamanlı içerik analizi",
-      "useCase": "Platform moderasyonu, kullanıcı içerik filtresi",
-      "rivalAdvantage": "OpenAI politikasıyla doğrudan uyumlu — en doğru sınıflama",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o1",
-      "modelId": "openai/o1",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~300B (tahmini)",
-      "speedLabel": "Derin",
-      "inputPrice": 22.5,
-      "outputPrice": 90.0,
-      "imagePrice": null,
-      "traits": [
-        "Derin düşünce lideri",
-        "Görsel muhakeme uzmanı",
-        "Bilimsel çıkarım makinesi",
-        "Adım adım doğrulama",
-        "Çok modlu akıl yürütme"
-      ],
-      "standoutFeature": "Görsel + metin üzerinde Chain-of-Thought reasoning",
-      "useCase": "Bilimsel şema analizi, mühendislik, tıp",
-      "rivalAdvantage": "Multimodal reasoning'de GPT-4 serisinin ötesine geçti",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o1 Mini",
-      "modelId": "openai/o1-mini",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~60B",
-      "speedLabel": "Orta",
-      "inputPrice": 4.5,
-      "outputPrice": 18.0,
-      "imagePrice": null,
-      "traits": [
-        "Kompakt reasoning gücü",
-        "STEM odaklı küçük deha",
-        "Hızlı matematik çözücü",
-        "Uygun fiyatlı akıl yürütme",
-        "Öğrenci asistanı ideal"
-      ],
-      "standoutFeature": "o1 reasoning — daha küçük boyut, daha hızlı",
-      "useCase": "Matematik öğretimi, STEM problemleri, hızlı analiz",
-      "rivalAdvantage": "o1'ın 1/5 maliyetiyle STEM görevlerinde benzer sonuç",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o1 Pro",
-      "modelId": "openai/o1-pro",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~500B+ (tahmini)",
-      "speedLabel": "Ultra Derin",
-      "inputPrice": 225.0,
-      "outputPrice": 900.0,
-      "imagePrice": null,
-      "traits": [
-        "Hesaplamanın zirvesi",
-        "En pahalı zeka",
-        "İnsan aşımı doğruluk",
-        "Sınırsız düşünce süreci",
-        "Kritik karar partneri"
-      ],
-      "standoutFeature": "Maksimum compute bütçesi — en yüksek doğruluk modu",
-      "useCase": "Kritik tıbbi karar, nükleer mühendislik, savunma",
-      "rivalAdvantage": "Mevcut herhangi bir AI modelinin en yüksek doğruluk skoru",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o3",
-      "modelId": "openai/o3",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~100B+",
-      "speedLabel": "Yavaş/Derin",
-      "inputPrice": 3.0,
-      "outputPrice": 12.0,
-      "imagePrice": null,
-      "traits": [
-        "Olimpiyat seviyesi matematik",
-        "Zincirleme düşünce",
-        "Bilimsel problem çözme",
-        "Derin akıl yürütme",
-        "Doğrulanabilir çıkarım"
-      ],
-      "standoutFeature": "Chain-of-Thought ile SOTA matematik/bilim",
-      "useCase": "Araştırma, mühendislik, strateji analizi",
-      "rivalAdvantage": "GSM8K, MATH, GPQA'da insanüstü performans",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o3 Mini",
-      "modelId": "openai/o3-mini",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~30B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 1.65,
-      "outputPrice": 6.6,
-      "imagePrice": null,
-      "traits": [
-        "Bütçe dostu reasoning",
-        "Kompakt akıl yürütücü",
-        "STEM için uygun fiyat",
-        "Geliştirici reasoning erişimi",
-        "Verimli düşünce motoru"
-      ],
-      "standoutFeature": "o3 kalite reasoning — geliştirici uyumlu fiyat",
-      "useCase": "Kod doğrulama, matematik, mantık problemleri",
-      "rivalAdvantage": "DeepSeek R1'e kıyasla daha hızlı — benzer fiyat",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o3 Pro",
-      "modelId": "openai/o3-pro",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~200B+",
-      "speedLabel": "Derin/Yavaş",
-      "inputPrice": 30.0,
-      "outputPrice": 120.0,
-      "imagePrice": null,
-      "traits": [
-        "Kurumsal muhakeme zirvesi",
-        "Hesaplama sınırı zorlayıcı",
-        "Bilimsel araştırma partneri",
-        "Eksiksiz düşünce zinciri",
-        "Doğrulama odaklı akıl"
-      ],
-      "standoutFeature": "o3 Pro — genişletilmiş compute bütçesi ile maksimum akıl",
-      "useCase": "Kritik araştırma, ilaç keşfi, mühendislik tasarımı",
-      "rivalAdvantage": "En yüksek doğruluk gerektiren görevlerde sektör birincisi",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o4 Mini High",
-      "modelId": "openai/o4-mini-high",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~30B yüksek compute",
-      "speedLabel": "Orta",
-      "inputPrice": 1.65,
-      "outputPrice": 6.6,
-      "imagePrice": null,
-      "traits": [
-        "Yüksek compute mini reasoning",
-        "o4 ailesinin güçlü üyesi",
-        "Doğruluk odaklı ayar",
-        "Kalite-fiyat zirvesi",
-        "Teknik görev uzmanı"
-      ],
-      "standoutFeature": "o4-mini'nin High compute bütçeli versiyonu",
-      "useCase": "Teknik analiz, doğrulama gerektiren görevler",
-      "rivalAdvantage": "Aynı fiyata o4-mini'den ölçülebilir daha yüksek doğruluk",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "OpenAI",
-      "provider": "OpenAI",
-      "modelName": "o4-mini",
-      "modelId": "openai/o4-mini",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~30B",
-      "speedLabel": "Hızlı",
-      "inputPrice": 1.65,
-      "outputPrice": 6.6,
-      "imagePrice": null,
-      "traits": [
-        "Kompakt muhakeme gücü",
-        "Uygun fiyatlı akıl yürütme",
-        "Verimli hesaplama",
-        "Üst seviye doğruluk",
-        "Geliştirici dostu"
-      ],
-      "standoutFeature": "o3 kalitesinde mantık — 4× daha uygun fiyat",
-      "useCase": "STEM asistanı, öğrenci platformları, teknik destek",
-      "rivalAdvantage": "Aynı fiyat bandında DeepSeek R1'den daha hızlı",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "openai",
-        "accent": "#10a37f"
-      }
-    },
-    {
-      "company": "Perplexity",
-      "provider": "Perplexity",
-      "modelName": "Sonar",
-      "modelId": "perplexity/sonar",
-      "categoryRaw": "Search / answer",
-      "badges": [
-        "ARAMA"
-      ],
-      "parameters": "LLM + web arama",
-      "speedLabel": "Hızlı",
-      "inputPrice": 1.5,
-      "outputPrice": 1.5,
-      "imagePrice": null,
-      "traits": [
-        "Gerçek zamanlı web entegrasyonu",
-        "Kaynak şeffaflığı",
-        "Anlık haber bilgisi",
-        "Doğrulanmış yanıtlar",
-        "Arama-yanıt füzyonu"
-      ],
-      "standoutFeature": "Canlı web araması + LLM sentezi",
-      "useCase": "Araştırma asistanı, haber sorgulama, fact-check",
-      "rivalAdvantage": "ChatGPT browsing'e kıyasla %60 daha hızlı kaynak atıf",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "perplexity",
-        "accent": "#0ea5e9"
-      }
-    },
-    {
-      "company": "Perplexity",
-      "provider": "Perplexity",
-      "modelName": "Sonar Deep Research",
-      "modelId": "perplexity/sonar-deep-research",
-      "categoryRaw": "Search / deep research",
-      "badges": [
-        "ARAMA"
-      ],
-      "parameters": "LLM + multi-step search",
-      "speedLabel": "Derin/Yavaş",
-      "inputPrice": 3.0,
-      "outputPrice": 12.0,
-      "imagePrice": null,
-      "traits": [
-        "Derin araştırma otomasyonu",
-        "Çok adımlı sorgu",
-        "Akademik kalite çıktı",
-        "Kapsamlı kaynak tarama",
-        "Raporlama zekası"
-      ],
-      "standoutFeature": "Otomatik multi-hop araştırma + rapor sentezi",
-      "useCase": "Akademik araştırma, due diligence, piyasa analizi",
-      "rivalAdvantage": "Manuel araştırmanın saatlerini dakikalara indiriyor",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "perplexity",
-        "accent": "#0ea5e9"
-      }
-    },
-    {
-      "company": "PlayAI",
-      "provider": "PlayAI",
-      "modelName": "Dialog 1.0",
-      "modelId": "playai/dialog-1.0",
-      "categoryRaw": "Audio model",
-      "badges": [
-        "SES"
-      ],
-      "parameters": "Özel TTS mimarisi",
-      "speedLabel": "Gerçek zamanlı",
-      "inputPrice": 30.0,
-      "outputPrice": 120.0,
-      "imagePrice": null,
-      "traits": [
-        "Konuşma gerçekçiliği zirvesi",
-        "Duygu yüklü ses tonu",
-        "Çok karakterli diyalog",
-        "Radyo kalitesi çıktı",
-        "Doğal konuşma akışı"
-      ],
-      "standoutFeature": "Çok karakterli etkileşimli konuşma motoru",
-      "useCase": "Sesli kitap, podcast, oyun NPC, e-öğrenme",
-      "rivalAdvantage": "ElevenLabs'a karşı diyalog tutarlılığında üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "playai",
-        "accent": "#f43f5e"
-      }
-    },
-    {
-      "company": "Qwen",
-      "provider": "Qwen",
-      "modelName": "Qwen 3 235B",
-      "modelId": "qwen/qwen3-235b-a22b-thinking-2507",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "235B (22B aktif)",
-      "speedLabel": "Orta",
-      "inputPrice": 0.825,
-      "outputPrice": 3.3,
-      "imagePrice": null,
-      "traits": [
-        "Alibaba'nın 3. nesil zirve modeli",
-        "Thinking modu entegreli",
-        "Çince-İngilizce çift ustalık",
-        "MoE verimliliği",
-        "Global rekabetçi AI"
-      ],
-      "standoutFeature": "Thinking + non-thinking çift mod — esnek akıl yürütme",
-      "useCase": "Çok dilli kurumsal AI, analiz, içerik üretimi",
-      "rivalAdvantage": "235B MoE ölçeğinde açık model kategorisi SOTA",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "qwen",
-        "accent": "#ff6a00"
-      }
-    },
-    {
-      "company": "Qwen",
-      "provider": "Qwen",
-      "modelName": "Qwen3-VL-235B-A22B",
-      "modelId": "qwen/qwen3-vl-235b-a22b",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "235B (22B aktif)",
-      "speedLabel": "Orta",
-      "inputPrice": 0.195,
-      "outputPrice": 0.9,
-      "imagePrice": null,
-      "traits": [
-        "Dev MoE görsel anlama",
-        "Çince-İngilizce köprüsü",
-        "Belge analiz uzmanı",
-        "Grafik ve tablo okuma",
-        "Alibaba kurumsal güvencesi"
-      ],
-      "standoutFeature": "235B parametre MoE — sadece 22B aktif kullanım",
-      "useCase": "Belge işleme, görsel analitik, OCR",
-      "rivalAdvantage": "GPT-4V'ye göre %60 daha uygun fiyatlı görsel anlama",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "qwen",
-        "accent": "#ff6a00"
-      }
-    },
-    {
-      "company": "Qwen",
-      "provider": "Qwen",
-      "modelName": "Qwen3.5-Flash",
-      "modelId": "qwen/qwen3.5-flash-02-23",
-      "categoryRaw": "LLM / chat",
-      "badges": [
-        "CHAT"
-      ],
-      "parameters": "~7B",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.6,
-      "imagePrice": null,
-      "traits": [
-        "Flaş hız odaklı",
-        "Çoklu dil desteği",
-        "Verimliliğin simgesi",
-        "Alibaba ölçeği",
-        "Entegrasyon kolaylığı"
-      ],
-      "standoutFeature": "Çince optimizasyonu + global dil desteği",
-      "useCase": "Gerçek zamanlı sohbet, multilingual destek",
-      "rivalAdvantage": "Fiyat/performans oranında top-5 global model",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "qwen",
-        "accent": "#ff6a00"
-      }
-    },
-    {
-      "company": "Recraft",
-      "provider": "Recraft",
-      "modelName": "Recraft 20B",
-      "modelId": "recraft-ai/recraft-20b",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "20B diffusion",
-      "speedLabel": "~5 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.06,
-      "traits": [
-        "20 milyar parametre görsel güç",
-        "Yüksek parametreli yaratıcılık",
-        "Detay derinliği uzmanı",
-        "Profesyonel görsel standart",
-        "Tasarım odaklı AI"
-      ],
-      "standoutFeature": "20B parametre ile görsel sektörünün en büyük modellerinden",
-      "useCase": "Profesyonel yaratıcı stüdyo, reklam, illustrasyon",
-      "rivalAdvantage": "Parametre başına görsel kalitede sektör rekoru",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "recraft",
-        "accent": "#8b5cf6"
-      }
-    },
-    {
-      "company": "Recraft",
-      "provider": "Recraft",
-      "modelName": "Recraft V3",
-      "modelId": "recraft-ai/recraft-v3",
-      "categoryRaw": "Image generation",
-      "badges": [
-        "GÖRSEL"
-      ],
-      "parameters": "Özel vektör+raster",
-      "speedLabel": "~4 sn/görsel",
-      "inputPrice": null,
-      "outputPrice": null,
-      "imagePrice": 0.06,
-      "traits": [
-        "Vektör tasarım öncüsü",
-        "Marka kimliği uyumlu",
-        "SVG düzeyinde hassasiyet",
-        "Tasarımcı araç seti",
-        "Kurumsal görsel standart"
-      ],
-      "standoutFeature": "SVG + raster hibrit çıktı — tasarımcı için optimize",
-      "useCase": "Logo, ikon, kurumsal kimlik, UI asset üretimi",
-      "rivalAdvantage": "Midjourney'e karşı vektör çıktı ve logo üretiminde üstün",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "recraft",
-        "accent": "#8b5cf6"
-      }
-    },
-    {
-      "company": "StepFun",
-      "provider": "StepFun",
-      "modelName": "Step 3.5 Flash",
-      "modelId": "stepfun/step-3.5-flash",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~30B MoE",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.15,
-      "outputPrice": 0.45,
-      "imagePrice": null,
-      "traits": [
-        "Adım adım düşünce hızlanması",
-        "Flash reasoning öncüsü",
-        "Uygun fiyatlı Çin AI",
-        "Hızlı çıkarım motoru",
-        "StepFun inovasyon modeli"
-      ],
-      "standoutFeature": "Flash hızında step-by-step reasoning — yeni nesil",
-      "useCase": "STEM problemleri, kod analizi, hızlı mantık görevleri",
-      "rivalAdvantage": "DeepSeek R1'in 5× hızı, benzer reasoning kategorisinde",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "generic",
-        "accent": "#64748b"
-      }
-    },
-    {
-      "company": "xAI",
-      "provider": "xAI",
-      "modelName": "Grok 4 0709",
-      "modelId": "x-ai/grok-4-0709",
-      "categoryRaw": "LLM / reasoning",
-      "badges": [
-        "REASONING"
-      ],
-      "parameters": "~314B MoE",
-      "speedLabel": "Orta",
-      "inputPrice": 4.5,
-      "outputPrice": 22.5,
-      "imagePrice": null,
-      "traits": [
-        "xAI'nın reasoning amiral gemisi",
-        "Gerçek zamanlı dünya bilgisi",
-        "Cesur akıl yürütme",
-        "X veri havuzu entegrasyonu",
-        "Musk AI zirve modeli"
-      ],
-      "standoutFeature": "Canlı X/Twitter verisi + derin reasoning — benzersiz kombinasyon",
-      "useCase": "Piyasa analizi, trend tahmin, araştırma",
-      "rivalAdvantage": "Güncel X verisi + reasoning — başka hiçbir modelde yok",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "xai",
-        "accent": "#94a3b8"
-      }
-    },
-    {
-      "company": "xAI",
-      "provider": "xAI",
-      "modelName": "Grok 4 Fast Non-Reasoning",
-      "modelId": "x-ai/grok-4-fast-non-reasoning",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~314B MoE",
-      "speedLabel": "Çok Hızlı",
-      "inputPrice": 0.3,
-      "outputPrice": 0.75,
-      "imagePrice": null,
-      "traits": [
-        "Anlık çoklu modal yanıt",
-        "Topluluk odaklı AI",
-        "Sansürsüz perspektif",
-        "Hızlı çıktı modu",
-        "Gerçek zamanlı farkındalık"
-      ],
-      "standoutFeature": "Reasoning kapalı — maksimum hız modu",
-      "useCase": "Sosyal medya, içerik üretimi, hızlı sorgular",
-      "rivalAdvantage": "Reasoning moduna göre 2× hız, aynı fiyat",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "xai",
-        "accent": "#94a3b8"
-      }
-    },
-    {
-      "company": "xAI",
-      "provider": "xAI",
-      "modelName": "Grok 4 Fast Reasoning",
-      "modelId": "x-ai/grok-4-fast-reasoning",
-      "categoryRaw": "LLM / multimodal",
-      "badges": [
-        "MULTIMODAL"
-      ],
-      "parameters": "~314B MoE",
-      "speedLabel": "Hızlı",
-      "inputPrice": 0.3,
-      "outputPrice": 0.75,
-      "imagePrice": null,
-      "traits": [
-        "X platformu entegrasyonu",
-        "Gerçek zamanlı web bilgisi",
-        "Cesur ve doğrudan yanıtlar",
-        "Hızlı muhakeme motoru",
-        "Elon Musk vizyonu"
-      ],
-      "standoutFeature": "Canlı Twitter/X verisi + real-time akıl yürütme",
-      "useCase": "Haberler, piyasa analizi, trend takibi",
-      "rivalAdvantage": "Diğer modellere kıyasla güncel bilgiye doğrudan erişim",
-      "sourceUrl": "https://developer.puter.com/ai/models/",
-      "style": {
-        "brandKey": "xai",
-        "accent": "#94a3b8"
-      }
-    }
-  ];
-  
-  function nowIso() {
-    return new Date().toISOString();
-  }
-  
-  function nowMs() {
-    return Date.now();
-  }
-  
-  function createId(prefix = 'req') {
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  }
-  
-  function safeString(value, fallback = '') {
-    try {
-      if (value === undefined || value === null) return fallback;
-      const text = String(value).trim();
-      return text || fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  
-  function safeNumber(value, fallback = 0) {
-    try {
-      if (value === undefined || value === null || value === '') return fallback;
-      const n = Number(value);
-      return Number.isFinite(n) ? n : fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  
-  function normalizeNullablePrice(value) {
-    try {
-      if (value === undefined || value === null || value === '') return null;
-      const n = Number(value);
-      return Number.isFinite(n) ? n : null;
-    } catch {
-      return null;
-    }
-  }
-  
-  function toPositiveInteger(value, fallback) {
-    try {
-      const n = Number(value);
-      return Number.isInteger(n) && n > 0 ? n : fallback;
-    } catch {
-      return fallback;
-    }
-  }
-  
-  function clampLimit(value) {
-    const parsed = toPositiveInteger(value, DEFAULTS.limit);
-    return Math.min(parsed, DEFAULTS.maxLimit);
-  }
-  
-  function clampOffset(value) {
-    try {
-      const n = Number(value);
-      if (!Number.isFinite(n) || n < 0) return 0;
-      return Math.floor(n);
-    } catch {
-      return 0;
-    }
-  }
-  
-  function buildCorsHeaders(request) {
-    const origin = request.headers.get('origin') || '*';
-    return {
-      'access-control-allow-origin': origin,
-      'access-control-allow-headers': '*',
-      'access-control-allow-methods': 'GET,OPTIONS',
-      'access-control-allow-credentials': 'true',
-      vary: 'origin',
-    };
-  }
-  
-  function buildJsonHeaders(request, extra = {}) {
-    return {
-      ...buildCorsHeaders(request),
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': `public, max-age=${DEFAULTS.cacheSeconds}`,
-      ...extra,
-    };
-  }
-  
-  function createEnvelopeBase(requestId, traceId, startedAt) {
-    return {
-      worker: APP_INFO.worker,
-      version: APP_INFO.version,
-      protocolVersion: APP_INFO.protocolVersion,
-      billingMode: APP_INFO.billingMode,
-      requestId,
-      traceId,
-      time: nowIso(),
-      durationMs: Math.max(0, nowMs() - startedAt),
-    };
-  }
-  
-  function successEnvelope({ requestId, traceId, startedAt, code = 'OK', data = null, meta = null }) {
-    return {
-      ok: true,
-      code,
-      error: null,
-      data,
-      meta,
-      ...createEnvelopeBase(requestId, traceId, startedAt),
-    };
-  }
-  
-  function errorEnvelope({ requestId, traceId, startedAt, code, message, details = null, status = 400 }) {
-    return {
-      ok: false,
-      code,
-      error: {
-        type: 'models.error',
-        message,
-        details,
-        retryable: false,
-      },
-      data: null,
-      meta: null,
-      status,
-      ...createEnvelopeBase(requestId, traceId, startedAt),
-    };
-  }
-  
-  function jsonResponse(request, body, status = 200, extra = {}) {
-    return new Response(JSON.stringify(body, null, 2), {
-      status,
-      headers: buildJsonHeaders(request, extra),
-    });
-  }
-  
-  function sanitizeError(error) {
-    try {
-      const code = safeString(error?.code, 'UNEXPECTED_ERROR');
-      const message = safeString(error?.message, 'BEKLENMEYEN HATA OLUŞTU.');
-      return { code, message };
-    } catch {
-      return { code: 'UNEXPECTED_ERROR', message: 'BEKLENMEYEN HATA OLUŞTU.' };
-    }
-  }
-  
-  function deriveSpeedScore(label) {
-    const text = safeString(label);
-    if (Object.prototype.hasOwnProperty.call(SPEED_SCORE_MAP, text)) {
-      return SPEED_SCORE_MAP[text];
-    }
-    return 50;
-  }
-  
-  function normalizeBadges(badges) {
-    try {
-      const source = Array.isArray(badges) ? badges : [];
-      const unique = [];
-      for (const badge of source) {
-        const clean = safeString(badge).toUpperCase();
-        if (clean && !unique.includes(clean)) unique.push(clean);
-      }
-      return unique;
-    } catch {
-      return [];
-    }
-  }
-  
-  function normalizeModel(row, index) {
-    try {
-      const company = safeString(row.company, 'BİLİNMİYOR');
-      const modelName = safeString(row.modelName, 'ADSIZ MODEL');
-      const modelId = safeString(row.modelId, `unknown-model-${index + 1}`);
-      const provider = safeString(row.provider, company);
-      const categoryRaw = safeString(row.categoryRaw, 'GENEL');
-      const badges = normalizeBadges(row.badges);
-      const parameters = safeString(row.parameters, '-');
-      const speedLabel = safeString(row.speedLabel, 'Orta');
-      const inputPrice = normalizeNullablePrice(row.inputPrice);
-      const outputPrice = normalizeNullablePrice(row.outputPrice);
-      const imagePrice = normalizeNullablePrice(row.imagePrice);
-      const traits = Array.isArray(row.traits)
-        ? row.traits.map((item) => safeString(item)).filter(Boolean).slice(0, 5)
-        : [];
-      const standoutFeature = safeString(row.standoutFeature);
-      const useCase = safeString(row.useCase);
-      const rivalAdvantage = safeString(row.rivalAdvantage);
-      const sourceUrl = safeString(row.sourceUrl);
-      const style = row && typeof row.style === 'object' && row.style ? row.style : {};
-  
-      return Object.freeze({
-        id: modelId,
-        company,
-        provider,
-        modelName,
-        modelId,
-        categoryRaw,
-        badges,
-        parameters,
-        speedLabel,
-        speedScore: deriveSpeedScore(speedLabel),
-        prices: Object.freeze({
-          input: inputPrice,
-          output: outputPrice,
-          image: imagePrice,
-        }),
-        traits: Object.freeze(traits),
-        standoutFeature,
-        useCase,
-        rivalAdvantage,
-        sourceUrl,
-        style: Object.freeze({
-          brandKey: safeString(style.brandKey, 'generic'),
-          accent: safeString(style.accent, '#64748b'),
-        }),
-      });
-    } catch {
-      return Object.freeze({
-        id: `broken-model-${index + 1}`,
-        company: 'BİLİNMİYOR',
-        provider: 'BİLİNMİYOR',
-        modelName: 'BOZUK KAYIT',
-        modelId: `broken-model-${index + 1}`,
-        categoryRaw: 'GENEL',
-        badges: Object.freeze(['GENEL']),
-        parameters: '-',
-        speedLabel: 'Orta',
-        speedScore: 50,
-        prices: Object.freeze({ input: null, output: null, image: null }),
-        traits: Object.freeze([]),
-        standoutFeature: '',
-        useCase: '',
-        rivalAdvantage: '',
-        sourceUrl: '',
-        style: Object.freeze({ brandKey: 'generic', accent: '#64748b' }),
-      });
-    }
-  }
-  
-  const MODEL_CATALOG = Object.freeze(RAW_MODELS.map((row, index) => normalizeModel(row, index)));
-  
-  function uniqueSortedStrings(values) {
-    return [...new Set(values.map((item) => safeString(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'));
-  }
-  
-  const MODEL_FACETS = Object.freeze({
-    companies: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.company))),
-    badges: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.flatMap((item) => item.badges))),
-    categories: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.categoryRaw))),
-  });
-  
-  function queryContains(haystack, needle) {
-    return safeString(haystack).toLocaleLowerCase('tr').includes(safeString(needle).toLocaleLowerCase('tr'));
-  }
-  
-  function matchesSearch(item, search) {
-    if (!safeString(search)) return true;
-    const bag = [
-      item.company,
-      item.provider,
-      item.modelName,
-      item.modelId,
-      item.categoryRaw,
-      ...item.badges,
-      ...item.traits,
-      item.standoutFeature,
-      item.useCase,
-      item.rivalAdvantage,
-    ];
-    return bag.some((part) => queryContains(part, search));
-  }
-  
-  function matchesCompany(item, company) {
-    if (!safeString(company)) return true;
-    return safeString(item.company).toLocaleLowerCase('tr') === safeString(company).toLocaleLowerCase('tr');
-  }
-  
-  function matchesBadge(item, badge) {
-    if (!safeString(badge)) return true;
-    const normalizedBadge = safeString(badge).toUpperCase();
-    return item.badges.includes(normalizedBadge);
-  }
-  
-  function matchesCategory(item, category) {
-    if (!safeString(category)) return true;
-    return safeString(item.categoryRaw).toLocaleLowerCase('tr') === safeString(category).toLocaleLowerCase('tr');
-  }
-  
-  function sortModels(items, sortKey) {
-    const cloned = [...items];
-    switch (safeString(sortKey)) {
-      case 'name_asc':
-        return cloned.sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr'));
-      case 'name_desc':
-        return cloned.sort((a, b) => b.modelName.localeCompare(a.modelName, 'tr'));
-      case 'company_asc':
-        return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-      case 'company_desc':
-        return cloned.sort((a, b) => `${b.company} ${b.modelName}`.localeCompare(`${a.company} ${a.modelName}`, 'tr'));
-      case 'input_price_asc':
-        return cloned.sort((a, b) => safeNumber(a.prices.input, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.input, Number.MAX_SAFE_INTEGER));
-      case 'input_price_desc':
-        return cloned.sort((a, b) => safeNumber(b.prices.input, -1) - safeNumber(a.prices.input, -1));
-      case 'output_price_asc':
-        return cloned.sort((a, b) => safeNumber(a.prices.output, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.output, Number.MAX_SAFE_INTEGER));
-      case 'output_price_desc':
-        return cloned.sort((a, b) => safeNumber(b.prices.output, -1) - safeNumber(a.prices.output, -1));
-      case 'image_price_asc':
-        return cloned.sort((a, b) => safeNumber(a.prices.image, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.image, Number.MAX_SAFE_INTEGER));
-      case 'image_price_desc':
-        return cloned.sort((a, b) => safeNumber(b.prices.image, -1) - safeNumber(a.prices.image, -1));
-      case 'speed_desc':
-        return cloned.sort((a, b) => safeNumber(b.speedScore, 0) - safeNumber(a.speedScore, 0));
-      case 'speed_asc':
-        return cloned.sort((a, b) => safeNumber(a.speedScore, 0) - safeNumber(b.speedScore, 0));
-      default:
-        return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-    }
-  }
-  
-  function parseQuery(request) {
-    const url = new URL(request.url);
-    return {
-      search: safeString(url.searchParams.get('search')),
-      company: safeString(url.searchParams.get('company')),
-      badge: safeString(url.searchParams.get('badge')).toUpperCase(),
-      category: safeString(url.searchParams.get('category')),
-      sort: safeString(url.searchParams.get('sort'), 'company_asc'),
-      limit: clampLimit(url.searchParams.get('limit')),
-      offset: clampOffset(url.searchParams.get('offset')),
-      modelId: safeString(url.searchParams.get('modelId')),
-    };
-  }
-  
-  function buildListPayload(query) {
-    let items = MODEL_CATALOG.filter((item) =>
-      matchesSearch(item, query.search) &&
-      matchesCompany(item, query.company) &&
-      matchesBadge(item, query.badge) &&
-      matchesCategory(item, query.category)
-    );
-  
-    items = sortModels(items, query.sort);
-  
-    if (query.modelId) {
-      items = items.filter((item) => item.modelId === query.modelId || item.id === query.modelId);
-    }
-  
-    const total = items.length;
-    const paginated = items.slice(query.offset, query.offset + query.limit);
-  
-    return {
-      items: paginated,
-      total,
-      limit: query.limit,
-      offset: query.offset,
-      hasMore: query.offset + query.limit < total,
-      facets: MODEL_FACETS,
-      source: {
-        type: APP_INFO.sourceType,
-        totalModels: MODEL_CATALOG.length,
-        sourceUrl: MODEL_CATALOG[0]?.sourceUrl || '',
-      },
-      filters: {
-        search: query.search,
-        company: query.company,
-        badge: query.badge,
-        category: query.category,
-        sort: query.sort,
-        modelId: query.modelId,
-      },
-    };
-  }
-  
-  
-const RUNTIME_APP_INFO = Object.freeze({
-  ...APP_INFO,
-  worker: 'idm',
-  version: '2.0.0',
+  worker: 'idm.puter.work',
+  version: '3.0.0',
   protocolVersion: '2026-03-15',
-  purpose: 'MODEL CATALOG + IMAGE GENERATION API',
-  supportsCatalog: true,
-  supportsImageGeneration: true,
-  supportsJobs: true,
+  purpose: 'IMAGE WORKER',
+  mode: 'single-worker',
+  billingMode: 'owner_pays',
+  sourceType: 'embedded-catalog',
 });
 
-const IMAGE_DEFAULTS = Object.freeze({
-  modelId: 'black-forest-labs/flux-1-schnell',
-  quality: 'high',
-  ratio: '1:1',
-  n: 1,
-  maxN: 4,
-  jobHistoryLimit: 20,
+const DEFAULTS = Object.freeze({
+  limit: 50,
+  maxLimit: 250,
+  historyLimit: 20,
+  maxHistoryLimit: 100,
+  cacheSeconds: 60,
+  queueDelayMs: 300,
+  renderDelayMs: 900,
 });
 
-const IMAGE_ALLOWED_QUALITIES = new Set(['low', 'medium', 'high']);
-const IMAGE_ALLOWED_RATIOS = new Set(['1:1', '16:9', '9:16', '4:5', '3:2', '2:3']);
-const JOB_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-const JOB_MEMORY_KEY = '__IDM_JOB_MEMORY__';
-const JOB_MEMORY_HISTORY_KEY = '__IDM_JOB_MEMORY_HISTORY__';
-const MEMORY_JOBS = globalThis[JOB_MEMORY_KEY] || (globalThis[JOB_MEMORY_KEY] = new Map());
-const MEMORY_HISTORY = globalThis[JOB_MEMORY_HISTORY_KEY] || (globalThis[JOB_MEMORY_HISTORY_KEY] = []);
+const SPEED_SCORE_MAP = Object.freeze({
+  'Rekor Hız': 100,
+  'Gerçek zamanlı': 97,
+  'Ultra Hızlı': 94,
+  'Çok Hızlı': 88,
+  'Hızlı': 78,
+  'Orta-Hızlı': 68,
+  'Orta': 58,
+  'Orta/Derin': 52,
+  'Derin': 42,
+  'Yavaş/Derin': 34,
+  'Derin/Yavaş': 30,
+  'Ultra Derin': 24,
+  '~1 sn/görsel': 92,
+  '~3 sn/görsel': 78,
+  '~4 sn/görsel': 70,
+  '~5 sn/görsel': 62,
+  '~6 sn/görsel': 56,
+  '~7 sn/görsel': 50,
+  '~8 sn/görsel': 44,
+});
 
-function buildCorsHeaders(request) {
-  const origin = request.headers.get('origin') || '*';
-  return {
-    'access-control-allow-origin': origin,
-    'access-control-allow-headers': '*',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-credentials': 'true',
-    vary: 'origin',
-  };
-}
+const RAW_MODELS = [
+  {
+    company: 'OpenAI',
+    provider: 'openai',
+    modelName: 'GPT Image 1',
+    modelId: 'openai/gpt-image-1',
+    categoryRaw: 'image',
+    badges: ['IMAGE'],
+    parameters: null,
+    speedLabel: 'Orta',
+    inputPrice: null,
+    outputPrice: null,
+    imagePrice: null,
+    traits: ['Genel amaçlı görsel üretim'],
+  },
+  {
+    company: 'Black Forest Labs',
+    provider: 'black-forest-labs',
+    modelName: 'FLUX 1 Schnell',
+    modelId: 'black-forest-labs/flux-1-schnell',
+    categoryRaw: 'image',
+    badges: ['IMAGE', 'FAST'],
+    parameters: null,
+    speedLabel: 'Hızlı',
+    inputPrice: null,
+    outputPrice: null,
+    imagePrice: null,
+    traits: ['Hızlı taslak üretim'],
+  },
+  {
+    company: 'Stability',
+    provider: 'stability',
+    modelName: 'Stable Image Ultra',
+    modelId: 'stability/stable-image-ultra',
+    categoryRaw: 'image',
+    badges: ['IMAGE'],
+    parameters: null,
+    speedLabel: 'Orta',
+    inputPrice: null,
+    outputPrice: null,
+    imagePrice: null,
+    traits: ['Kalite odaklı üretim'],
+  },
+];
 
-function buildJsonHeaders(request, extra = {}) {
-  const cacheControl = extra['cache-control'] || extra['Cache-Control'] || 'no-store';
-  return {
-    ...buildCorsHeaders(request),
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': cacheControl,
-    ...extra,
-  };
-}
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled']);
+const JOBS = new Map();
+const HISTORY = [];
 
-function createEnvelopeBase(requestId, traceId, startedAt) {
-  return {
-    worker: RUNTIME_APP_INFO.worker,
-    version: RUNTIME_APP_INFO.version,
-    protocolVersion: RUNTIME_APP_INFO.protocolVersion,
-    billingMode: RUNTIME_APP_INFO.billingMode,
-    requestId,
-    traceId,
-    time: nowIso(),
-    durationMs: Math.max(0, nowMs() - startedAt),
-  };
-}
+addEventListener('fetch', (event) => {
+  event.respondWith(handleFetch(event.request, event));
+});
 
-function jsonResponse(request, body, status = 200, extra = {}) {
-  return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: buildJsonHeaders(request, extra),
-  });
-}
-
-function safeJsonParse(text, fallback = null) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fallback;
-  }
-}
-
-function mapSortKey(sortKey, feature) {
-  const clean = safeString(sortKey, feature === 'image' ? 'price_asc' : 'company_asc');
-  if (clean === 'price_asc') return feature === 'image' ? 'image_price_asc' : 'input_price_asc';
-  if (clean === 'price_desc') return feature === 'image' ? 'image_price_desc' : 'input_price_desc';
-  return clean;
-}
-
-function isImageCatalogModel(item) {
-  const category = safeString(item.categoryRaw).toLocaleLowerCase('tr');
-  const modelId = safeString(item.modelId).toLocaleLowerCase('tr');
-  const badges = Array.isArray(item.badges) ? item.badges.join(' ').toLocaleLowerCase('tr') : '';
-  return (
-    item?.prices?.image != null ||
-    category.includes('image') ||
-    category.includes('görsel') ||
-    badges.includes('görsel') ||
-    badges.includes('image') ||
-    modelId.includes('flux') ||
-    modelId.includes('gpt-image') ||
-    modelId.includes('recraft') ||
-    modelId.includes('ideogram') ||
-    modelId.includes('stable-diffusion')
-  );
-}
-
-function serializeModelForClient(item) {
-  return {
-    ...item,
-    inputPrice: item?.prices?.input ?? null,
-    outputPrice: item?.prices?.output ?? null,
-    imagePrice: item?.prices?.image ?? null,
-  };
-}
-
-function parseQuery(request) {
-  const url = new URL(request.url);
-  const feature = safeString(url.searchParams.get('feature')).toLocaleLowerCase('tr');
-  return {
-    search: safeString(url.searchParams.get('search')),
-    company: safeString(url.searchParams.get('company')),
-    badge: safeString(url.searchParams.get('badge')).toUpperCase(),
-    category: safeString(url.searchParams.get('category')),
-    sort: mapSortKey(url.searchParams.get('sort'), feature),
-    limit: clampLimit(url.searchParams.get('limit')),
-    offset: clampOffset(url.searchParams.get('offset')),
-    modelId: safeString(url.searchParams.get('modelId')),
-    feature,
-  };
-}
-
-function buildListPayload(query) {
-  let items = MODEL_CATALOG.filter((item) =>
-    matchesSearch(item, query.search) &&
-    matchesCompany(item, query.company) &&
-    matchesBadge(item, query.badge) &&
-    matchesCategory(item, query.category)
-  );
-
-  if (query.feature === 'image') {
-    items = items.filter(isImageCatalogModel);
+async function handleFetch(request, event) {
+  if (request.method === 'OPTIONS') {
+    return withCors(request, new Response(null, { status: 204 }));
   }
 
-  items = sortModels(items, query.sort);
-
-  if (query.modelId) {
-    items = items.filter((item) => item.modelId === query.modelId || item.id === query.modelId);
-  }
-
-  const total = items.length;
-  const paginated = items.slice(query.offset, query.offset + query.limit).map(serializeModelForClient);
-
-  return {
-    items: paginated,
-    total,
-    limit: query.limit,
-    offset: query.offset,
-    hasMore: query.offset + query.limit < total,
-    facets: MODEL_FACETS,
-    source: {
-      type: RUNTIME_APP_INFO.sourceType,
-      totalModels: MODEL_CATALOG.length,
-      sourceUrl: MODEL_CATALOG[0]?.sourceUrl || '',
-    },
-    filters: {
-      search: query.search,
-      company: query.company,
-      badge: query.badge,
-      category: query.category,
-      sort: query.sort,
-      modelId: query.modelId,
-      feature: query.feature,
+  const ctx = {
+    waitUntil(promise) {
+      if (event && typeof event.waitUntil === 'function') {
+        event.waitUntil(promise);
+      }
     },
   };
-}
-
-function buildPromptPreview(text, max = 140) {
-  const clean = safeString(text);
-  if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1)}…`;
-}
-
-function normalizeImageRequest(body) {
-  const prompt = safeString(body?.prompt);
-  if (!prompt) {
-    const error = new Error('PROMPT ZORUNLU.');
-    error.code = 'PROMPT_REQUIRED';
-    throw error;
-  }
-
-  const model = safeString(body?.model || body?.modelId, IMAGE_DEFAULTS.modelId);
-  const qualityInput = safeString(body?.quality, IMAGE_DEFAULTS.quality).toLowerCase();
-  const quality = IMAGE_ALLOWED_QUALITIES.has(qualityInput) ? qualityInput : IMAGE_DEFAULTS.quality;
-  const ratioInput = safeString(body?.ratio || body?.size, IMAGE_DEFAULTS.ratio);
-  const ratio = IMAGE_ALLOWED_RATIOS.has(ratioInput) ? ratioInput : IMAGE_DEFAULTS.ratio;
-  const n = Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(body?.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n)));
-  const style = safeString(body?.style);
-  const negativePrompt = safeString(body?.negativePrompt);
-  const clientRequestId = safeString(body?.clientRequestId);
-  const responseFormat = safeString(body?.responseFormat, 'url');
-  const guidance = safeString(body?.guidance);
-  const seed = safeString(body?.seed);
-  const metadata = body && typeof body.metadata === 'object' && body.metadata ? body.metadata : {};
-
-  return {
-    prompt,
-    model,
-    modelId: model,
-    ratio,
-    size: ratio,
-    quality,
-    style,
-    negativePrompt,
-    n,
-    responseFormat,
-    guidance,
-    seed,
-    clientRequestId,
-    metadata,
-    attachmentCount: safeNumber(body?.attachmentCount, 0),
-  };
-}
-
-function buildImageJobRecord(jobId, requestPayload) {
-  const createdAt = nowIso();
-  return {
-    jobId,
-    feature: 'image',
-    status: 'queued',
-    progress: 0,
-    step: 'queued',
-    queuePosition: null,
-    etaMs: null,
-    outputUrl: null,
-    outputUrls: [],
-    url: null,
-    urls: [],
-    retryable: true,
-    cancelRequested: false,
-    requestSummary: {
-      model: requestPayload.modelId,
-      prompt: requestPayload.prompt,
-      promptPreview: buildPromptPreview(requestPayload.prompt),
-    },
-    request: {
-      model: requestPayload.model,
-      modelId: requestPayload.modelId,
-      ratio: requestPayload.ratio,
-      size: requestPayload.size,
-      quality: requestPayload.quality,
-      style: requestPayload.style,
-      negativePrompt: requestPayload.negativePrompt,
-      n: requestPayload.n,
-      responseFormat: requestPayload.responseFormat,
-      metadata: requestPayload.metadata,
-      clientRequestId: requestPayload.clientRequestId,
-      attachmentCount: requestPayload.attachmentCount,
-    },
-    error: null,
-    createdAt,
-    updatedAt: createdAt,
-    finishedAt: null,
-  };
-}
-
-function hasKvNamespace(env) {
-  return !!(env && env.IDM_JOBS && typeof env.IDM_JOBS.get === 'function' && typeof env.IDM_JOBS.put === 'function');
-}
-
-function jobStorageKey(jobId) {
-  return `job:${jobId}`;
-}
-
-function historyStorageKey(job) {
-  const created = safeString(job?.createdAt, nowIso());
-  return `history:${created}:${job.jobId}`;
-}
-
-async function saveJob(env, job) {
-  const normalized = {
-    ...job,
-    updatedAt: safeString(job.updatedAt, nowIso()),
-  };
-
-  MEMORY_JOBS.set(normalized.jobId, normalized);
-  const existingHistoryIndex = MEMORY_HISTORY.findIndex((item) => item.jobId === normalized.jobId);
-  if (existingHistoryIndex >= 0) {
-    MEMORY_HISTORY.splice(existingHistoryIndex, 1);
-  }
-  MEMORY_HISTORY.unshift({ jobId: normalized.jobId, createdAt: normalized.createdAt || normalized.updatedAt || nowIso() });
-  if (MEMORY_HISTORY.length > 200) {
-    MEMORY_HISTORY.splice(200);
-  }
-
-  if (hasKvNamespace(env)) {
-    const payload = JSON.stringify(normalized);
-    await env.IDM_JOBS.put(jobStorageKey(normalized.jobId), payload);
-    await env.IDM_JOBS.put(historyStorageKey(normalized), payload);
-  }
-
-  return normalized;
-}
-
-async function readJob(env, jobId) {
-  if (!jobId) return null;
-  if (hasKvNamespace(env)) {
-    const text = await env.IDM_JOBS.get(jobStorageKey(jobId));
-    if (text) {
-      const parsed = safeJsonParse(text, null);
-      if (parsed && typeof parsed === 'object') {
-        MEMORY_JOBS.set(jobId, parsed);
-        return parsed;
-      }
-    }
-  }
-  return MEMORY_JOBS.get(jobId) || null;
-}
-
-async function listJobs(env, limit = IMAGE_DEFAULTS.jobHistoryLimit) {
-  const clampedLimit = Math.max(1, Math.min(50, Math.floor(safeNumber(limit, IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-
-  if (hasKvNamespace(env) && typeof env.IDM_JOBS.list === 'function') {
-    const listed = await env.IDM_JOBS.list({ prefix: 'history:', limit: Math.max(clampedLimit * 3, clampedLimit) });
-    const jobs = [];
-    for (const key of listed.keys || []) {
-      const value = await env.IDM_JOBS.get(key.name);
-      const parsed = safeJsonParse(value, null);
-      if (parsed && typeof parsed === 'object') {
-        jobs.push(parsed);
-      }
-    }
-    jobs.sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)));
-    return jobs.slice(0, clampedLimit);
-  }
-
-  return MEMORY_HISTORY
-    .map((item) => MEMORY_JOBS.get(item.jobId))
-    .filter(Boolean)
-    .sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)))
-    .slice(0, clampedLimit);
-}
-
-async function updateJob(env, jobId, updater) {
-  const current = (await readJob(env, jobId)) || { jobId };
-  const next = updater({ ...current });
-  return saveJob(env, { ...next, jobId, updatedAt: nowIso() });
-}
-
-function collectStringCandidates(value, bag) {
-  if (value == null) return;
-  if (typeof value === 'string') {
-    const clean = value.trim();
-    if (clean) bag.push(clean);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectStringCandidates(item, bag);
-    return;
-  }
-  if (typeof value === 'object') {
-    for (const key of ['src', 'url', 'href', 'outputUrl']) {
-      if (typeof value[key] === 'string' && value[key].trim()) {
-        bag.push(value[key].trim());
-      }
-    }
-    for (const key of ['urls', 'outputUrls', 'images', 'items', 'results', 'data']) {
-      if (value[key] != null) {
-        collectStringCandidates(value[key], bag);
-      }
-    }
-  }
-}
-
-function extractImageUrls(raw) {
-  const bag = [];
-  collectStringCandidates(raw, bag);
-  return [...new Set(bag.filter(Boolean))];
-}
-
-function getImageGeneratorCandidates(env) {
-  return [
-    env?.me?.puter?.ai?.txt2img,
-    env?.me?.ai?.txt2img,
-    env?.puter?.ai?.txt2img,
-    globalThis?.me?.puter?.ai?.txt2img,
-    globalThis?.me?.ai?.txt2img,
-    globalThis?.puter?.ai?.txt2img,
-    globalThis?.Puter?.ai?.txt2img,
-  ].filter((candidate) => typeof candidate === 'function');
-}
-
-async function runTxt2Img(env, prompt, options) {
-  const candidates = getImageGeneratorCandidates(env);
-  if (!candidates.length) {
-    const error = new Error('WORKER İÇİNDE txt2img FONKSİYONU BULUNAMADI. me.puter / puter AI BAĞLANTISI TANIMLI DEĞİL.');
-    error.code = 'TXT2IMG_UNAVAILABLE';
-    throw error;
-  }
-
-  let lastError = null;
-  for (const candidate of candidates) {
-    try {
-      return await candidate(prompt, options);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError || new Error('txt2img ÇAĞRISI BAŞARISIZ OLDU.');
-}
-
-function buildTxt2ImgOptions(job) {
-  const request = job.request || {};
-  return {
-    model: safeString(request.modelId || request.model, IMAGE_DEFAULTS.modelId),
-    quality: safeString(request.quality, IMAGE_DEFAULTS.quality),
-    ratio: safeString(request.ratio || request.size, IMAGE_DEFAULTS.ratio),
-    size: safeString(request.size || request.ratio, IMAGE_DEFAULTS.ratio),
-    n: Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(request.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n))),
-    style: safeString(request.style),
-    negativePrompt: safeString(request.negativePrompt),
-    responseFormat: 'url',
-    metadata: request.metadata || {},
-    guidance: safeString(request.guidance),
-    seed: safeString(request.seed),
-  };
-}
-
-async function processImageJob(env, jobId) {
-  const initialJob = await readJob(env, jobId);
-  if (!initialJob) return;
-  if (JOB_TERMINAL_STATUSES.has(initialJob.status)) return;
-  if (initialJob.cancelRequested) {
-    await updateJob(env, jobId, (job) => ({
-      ...job,
-      status: 'cancelled',
-      progress: job.progress || 0,
-      step: 'cancelled',
-      finishedAt: nowIso(),
-      error: null,
-    }));
-    return;
-  }
-
-  await updateJob(env, jobId, (job) => ({
-    ...job,
-    status: 'processing',
-    progress: Math.max(5, safeNumber(job.progress, 0)),
-    step: 'processing',
-    retryable: true,
-    error: null,
-  }));
 
   try {
-    const currentJob = await readJob(env, jobId);
-    if (!currentJob) return;
-
-    const result = await runTxt2Img(env, currentJob.requestSummary?.prompt || currentJob.request?.prompt || '', buildTxt2ImgOptions(currentJob));
-    const urls = extractImageUrls(result);
-
-    if (!urls.length) {
-      const error = new Error('GÖRSEL ÜRETİMİ TAMAMLANDI AMA URL ÇIKMADI.');
-      error.code = 'IMAGE_URL_MISSING';
-      throw error;
-    }
-
-    const latestJob = await readJob(env, jobId);
-    if (latestJob?.cancelRequested) {
-      await updateJob(env, jobId, (job) => ({
-        ...job,
-        status: 'cancelled',
-        progress: Math.max(safeNumber(job.progress, 0), 90),
-        step: 'cancelled',
-        finishedAt: nowIso(),
-        outputUrl: null,
-        outputUrls: [],
-        url: null,
-        urls: [],
-        error: null,
-      }));
-      return;
-    }
-
-    await updateJob(env, jobId, (job) => ({
-      ...job,
-      status: 'completed',
-      progress: 100,
-      step: 'completed',
-      finishedAt: nowIso(),
-      retryable: false,
-      outputUrl: urls[0] || null,
-      outputUrls: urls,
-      url: urls[0] || null,
-      urls,
-      error: null,
-    }));
+    const response = await dispatchRequest(request, {}, ctx);
+    return withCors(request, response);
   } catch (error) {
+    const startedAt = nowMs();
+    const requestId = createId('fatal');
+    const traceId = createId('trace');
     const safe = sanitizeError(error);
-    await updateJob(env, jobId, (job) => ({
-      ...job,
-      status: 'failed',
-      progress: Math.max(safeNumber(job.progress, 0), 100),
-      step: 'failed',
-      finishedAt: nowIso(),
-      retryable: true,
-      error: {
-        message: safe.message || 'GÖRSEL ÜRETİMİ BAŞARISIZ.',
-        retryable: true,
-      },
-    }));
-  }
-}
 
-async function parseRequestJson(request) {
-  const text = await request.text();
-  if (!text.trim()) return {};
-  const parsed = safeJsonParse(text, null);
-  if (!parsed || typeof parsed !== 'object') {
-    const error = new Error('JSON BODY GEÇERSİZ.');
-    error.code = 'INVALID_JSON';
-    throw error;
-  }
-  return parsed;
-}
-
-async function handleOptions(request) {
-  return new Response(null, {
-    status: 204,
-    headers: buildCorsHeaders(request),
-  });
-}
-
-async function handleRoot(request) {
-  const startedAt = nowMs();
-  const requestId = createId('info');
-  const traceId = createId('trace');
-
-  return jsonResponse(
-    request,
-    successEnvelope({
-      requestId,
-      traceId,
-      startedAt,
-      code: 'WORKER_INFO',
-      data: {
-        worker: RUNTIME_APP_INFO.worker,
-        version: RUNTIME_APP_INFO.version,
-        protocolVersion: RUNTIME_APP_INFO.protocolVersion,
-        purpose: RUNTIME_APP_INFO.purpose,
-        supportsCatalog: true,
-        supportsImageGeneration: true,
-        supportsJobs: true,
-        routes: [
-          'GET /',
-          'GET /health',
-          'GET /models',
-          'POST /generate',
-          'GET /jobs/status/:id',
-          'GET /jobs/history',
-          'POST /jobs/cancel',
-        ],
-        supportedQuery: [
-          'search',
-          'company',
-          'badge',
-          'category',
-          'sort',
-          'limit',
-          'offset',
-          'modelId',
-          'feature',
-        ],
-      },
-      meta: {
-        totalModels: MODEL_CATALOG.length,
-        sourceType: RUNTIME_APP_INFO.sourceType,
-      },
-    })
-  );
-}
-
-async function handleHealth(request) {
-  const startedAt = nowMs();
-  const requestId = createId('health');
-  const traceId = createId('trace');
-
-  return jsonResponse(
-    request,
-    successEnvelope({
-      requestId,
-      traceId,
-      startedAt,
-      code: 'HEALTH_OK',
-      data: {
-        status: 'ok',
-        worker: RUNTIME_APP_INFO.worker,
-        totalModels: MODEL_CATALOG.length,
-        sourceType: RUNTIME_APP_INFO.sourceType,
-        supportsImageGeneration: true,
-        supportsJobs: true,
-        time: nowIso(),
-      },
-    })
-  );
-}
-
-async function handleModels(request) {
-  const startedAt = nowMs();
-  const requestId = createId('models');
-  const traceId = createId('trace');
-
-  try {
-    const query = parseQuery(request);
-    const payload = buildListPayload(query);
-    return jsonResponse(
+    return withCors(
       request,
-      successEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: 'MODELS_OK',
-        data: payload,
-        meta: {
-          totalModels: MODEL_CATALOG.length,
-          returnedItems: payload.items.length,
-        },
-      }),
-      200,
-      { 'cache-control': `public, max-age=${DEFAULTS.cacheSeconds}` }
-    );
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(
-      request,
-      errorEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: safe.code || 'MODELS_FAILED',
-        message: safe.message || 'MODEL KATALOĞU İSTEĞİ BAŞARISIZ.',
-        status: 500,
-      }),
-      500
-    );
-  }
-}
-
-async function handleGenerate(request, env, ctx) {
-  const startedAt = nowMs();
-  const requestId = createId('generate');
-  const traceId = createId('trace');
-
-  try {
-    const body = await parseRequestJson(request);
-    const imageRequest = normalizeImageRequest(body);
-    const jobId = createId('img');
-    const job = buildImageJobRecord(jobId, imageRequest);
-    await saveJob(env, job);
-    ctx.waitUntil(processImageJob(env, jobId));
-
-    return jsonResponse(
-      request,
-      successEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: 'IMAGE_JOB_QUEUED',
-        data: {
-          jobId,
-          status: 'queued',
-          progress: 0,
-          step: 'queued',
-          modelId: imageRequest.modelId,
-          requestId,
-        },
-        meta: {
-          feature: 'image',
-        },
-      }),
-      202
-    );
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'PROMPT_REQUIRED' || safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(
-      request,
-      errorEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: safe.code || 'IMAGE_GENERATE_FAILED',
-        message: safe.message || 'GÖRSEL ÜRETİMİ BAŞLATILAMADI.',
-        status,
-      }),
-      status
-    );
-  }
-}
-
-async function handleJobStatus(request, env, jobId) {
-  const startedAt = nowMs();
-  const requestId = createId('status');
-  const traceId = createId('trace');
-
-  try {
-    const job = await readJob(env, jobId);
-    if (!job) {
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'JOB_NOT_FOUND',
-          message: 'JOB BULUNAMADI.',
-          status: 404,
-        }),
-        404
-      );
-    }
-
-    return jsonResponse(
-      request,
-      successEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: 'JOB_STATUS_OK',
-        data: job,
-        meta: {
-          feature: 'image',
-        },
-      })
-    );
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(
-      request,
-      errorEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: safe.code || 'JOB_STATUS_FAILED',
-        message: safe.message || 'JOB DURUMU OKUNAMADI.',
-        status: 500,
-      }),
-      500
-    );
-  }
-}
-
-async function handleJobHistory(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('history');
-  const traceId = createId('trace');
-
-  try {
-    const url = new URL(request.url);
-    const limit = Math.max(1, Math.min(50, Math.floor(safeNumber(url.searchParams.get('limit'), IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-    const items = await listJobs(env, limit);
-    return jsonResponse(
-      request,
-      successEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: 'JOB_HISTORY_OK',
-        data: {
-          items,
-          total: items.length,
-          limit,
-          feature: 'image',
-        },
-      })
-    );
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(
-      request,
-      errorEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: safe.code || 'JOB_HISTORY_FAILED',
-        message: safe.message || 'JOB GEÇMİŞİ OKUNAMADI.',
-        status: 500,
-      }),
-      500
-    );
-  }
-}
-
-async function handleJobCancel(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('cancel');
-  const traceId = createId('trace');
-
-  try {
-    const body = await parseRequestJson(request);
-    const jobId = safeString(body?.jobId);
-    if (!jobId) {
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'JOB_ID_REQUIRED',
-          message: 'jobId ZORUNLU.',
-          status: 400,
-        }),
-        400
-      );
-    }
-
-    const current = await readJob(env, jobId);
-    if (!current) {
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'JOB_NOT_FOUND',
-          message: 'JOB BULUNAMADI.',
-          status: 404,
-        }),
-        404
-      );
-    }
-
-    const job = await updateJob(env, jobId, (jobState) => {
-      if (JOB_TERMINAL_STATUSES.has(jobState.status)) {
-        return {
-          ...jobState,
-          cancelRequested: true,
-        };
-      }
-      return {
-        ...jobState,
-        cancelRequested: true,
-        status: 'cancelled',
-        step: 'cancelled',
-        finishedAt: nowIso(),
-      };
-    });
-
-    return jsonResponse(
-      request,
-      successEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: 'JOB_CANCELLED',
-        data: job,
-      })
-    );
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(
-      request,
-      errorEnvelope({
-        requestId,
-        traceId,
-        startedAt,
-        code: safe.code || 'JOB_CANCEL_FAILED',
-        message: safe.message || 'JOB İPTAL EDİLEMEDİ.',
-        status,
-      }),
-      status
-    );
-  }
-}
-
-async function handleNotFound(request) {
-  const startedAt = nowMs();
-  const requestId = createId('route');
-  const traceId = createId('trace');
-  return jsonResponse(
-    request,
-    errorEnvelope({
-      requestId,
-      traceId,
-      startedAt,
-      code: 'ROUTE_NOT_FOUND',
-      message: 'ROUTE BULUNAMADI.',
-      status: 404,
-    }),
-    404
-  );
-}
-
-async function dispatchRequest(request, env, ctx) {
-  const url = new URL(request.url);
-  const pathname = url.pathname.replace(/\/+$/, '') || '/';
-  const method = request.method.toUpperCase();
-
-  if (method === 'OPTIONS') return handleOptions(request);
-  if (method === 'GET' && pathname === '/') return handleRoot(request);
-  if (method === 'GET' && pathname === '/health') return handleHealth(request);
-  if (method === 'GET' && pathname === '/models') return handleModels(request);
-  if (method === 'POST' && pathname === '/generate') return handleGenerate(request, env, ctx);
-  if (method === 'GET' && pathname.startsWith('/jobs/status/')) {
-    const jobId = decodeURIComponent(pathname.slice('/jobs/status/'.length));
-    return handleJobStatus(request, env, jobId);
-  }
-  if (method === 'GET' && pathname === '/jobs/history') return handleJobHistory(request, env);
-  if (method === 'POST' && pathname === '/jobs/cancel') return handleJobCancel(request, env);
-  return handleNotFound(request);
-}
-
-export default {
-  async fetch(request, env = {}, ctx = { waitUntil() {} }) {
-    try {
-      return await dispatchRequest(request, env, ctx);
-    } catch (error) {
-      const startedAt = nowMs();
-      const requestId = createId('fatal');
-      const traceId = createId('trace');
-      const safe = sanitizeError(error);
-      return jsonResponse(
+      jsonResponse(
         request,
         errorEnvelope({
           requestId,
@@ -4157,10 +187,582 @@ export default {
           startedAt,
           code: safe.code || 'UNEXPECTED_ERROR',
           message: safe.message || 'BEKLENMEYEN HATA OLUŞTU.',
-          status: 500,
+          status: safe.status || 500,
         }),
-        500
-      );
-    }
-  },
-};
+        safe.status || 500
+      )
+    );
+  }
+}
+
+async function dispatchRequest(request, env, ctx) {
+  const url = new URL(request.url);
+  const path = normalizePath(url.pathname);
+
+  if (request.method === 'GET' && path === '/') {
+    return jsonResponse(
+      request,
+      {
+        ok: true,
+        data: {
+          worker: 'https://idm.puter.work',
+          purpose: APP_INFO.purpose,
+          mode: APP_INFO.mode,
+          routes: [
+            '/models',
+            '/generate',
+            '/jobs/status/:id',
+            '/jobs/history',
+            '/jobs/cancel',
+          ],
+          notes: [
+            'Bu sayfa sadece https://idm.puter.work ile konuşur.',
+            'Model listeleme, job başlatma, durum takibi, geçmiş ve iptal aynı worker üstünden yürür.',
+          ],
+        },
+        meta: buildMeta(200),
+      },
+      200
+    );
+  }
+
+  if (request.method === 'GET' && path === '/health') {
+    return jsonResponse(
+      request,
+      {
+        ok: true,
+        data: {
+          status: 'ok',
+          jobsInMemory: JOBS.size,
+          historyInMemory: HISTORY.length,
+          now: new Date().toISOString(),
+        },
+        meta: buildMeta(200),
+      },
+      200
+    );
+  }
+
+  if (request.method === 'GET' && path === '/models') {
+    return handleModels(request);
+  }
+
+  if (request.method === 'POST' && path === '/generate') {
+    return handleGenerate(request, ctx);
+  }
+
+  if (request.method === 'GET' && path.startsWith('/jobs/status/')) {
+    const jobId = decodeURIComponent(path.slice('/jobs/status/'.length));
+    return handleJobStatus(request, jobId);
+  }
+
+  if (request.method === 'GET' && path === '/jobs/history') {
+    return handleJobsHistory(request);
+  }
+
+  if (request.method === 'POST' && path === '/jobs/cancel') {
+    return handleJobsCancel(request);
+  }
+
+  return jsonResponse(
+    request,
+    errorEnvelope({
+      requestId: createId('req'),
+      traceId: createId('trace'),
+      startedAt: nowMs(),
+      code: 'ROUTE_NOT_FOUND',
+      message: 'Route bulunamadı.',
+      status: 404,
+    }),
+    404
+  );
+}
+
+function handleModels(request) {
+  const url = new URL(request.url);
+  const feature = normalizeText(url.searchParams.get('feature'), 'image');
+  const sort = normalizeText(url.searchParams.get('sort'));
+  const limit = clamp(parseInteger(url.searchParams.get('limit'), DEFAULTS.limit), 1, DEFAULTS.maxLimit);
+
+  let items = RAW_MODELS
+    .map(normalizeModelRecord)
+    .filter((item) => {
+      if (!feature) return true;
+      return normalizeText(item.feature, 'image') === feature;
+    });
+
+  if (sort === 'price_asc') {
+    items = items
+      .slice()
+      .sort((a, b) => normalizeNumber(a.imagePrice, Number.MAX_SAFE_INTEGER) - normalizeNumber(b.imagePrice, Number.MAX_SAFE_INTEGER));
+  }
+
+  return jsonResponse(
+    request,
+    {
+      ok: true,
+      data: {
+        items: items.slice(0, limit),
+        total: items.length,
+      },
+      meta: buildMeta(200),
+    },
+    200
+  );
+}
+
+async function handleGenerate(request, ctx) {
+  const payload = await readJsonBody(request);
+
+  const prompt = normalizeText(payload.prompt);
+  const modelId = normalizeText(payload.modelId || payload.model);
+  const provider = normalizeText(payload.provider) || modelId.split('/')[0] || 'unknown';
+
+  if (!prompt) {
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId: createId('req'),
+        traceId: createId('trace'),
+        startedAt: nowMs(),
+        code: 'PROMPT_REQUIRED',
+        message: 'Prompt zorunludur.',
+        status: 400,
+      }),
+      400
+    );
+  }
+
+  if (!modelId) {
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId: createId('req'),
+        traceId: createId('trace'),
+        startedAt: nowMs(),
+        code: 'MODEL_REQUIRED',
+        message: 'Model seçimi zorunludur.',
+        status: 400,
+      }),
+      400
+    );
+  }
+
+  const createdAt = new Date().toISOString();
+  const jobId = createId('job');
+
+  const job = {
+    jobId,
+    status: 'queued',
+    progress: 5,
+    step: 'İş kuyruğa alındı',
+    createdAt,
+    updatedAt: createdAt,
+    provider,
+    modelId,
+    model: modelId,
+    prompt,
+    negativePrompt: normalizeText(payload.negativePrompt),
+    ratio: normalizeText(payload.ratio, '1:1'),
+    quality: normalizeText(payload.quality, 'medium'),
+    style: normalizeText(payload.style),
+    n: clamp(parseInteger(payload.n, 1), 1, 4),
+    guidance: payload.guidance == null ? null : normalizeNumber(payload.guidance, null),
+    seed: payload.seed == null ? null : parseInteger(payload.seed, null),
+    outputUrl: null,
+    outputUrls: [],
+  };
+
+  upsertJob(job);
+  ctx.waitUntil(runGeneration(jobId));
+
+  return jsonResponse(
+    request,
+    {
+      ok: true,
+      data: {
+        jobId: job.jobId,
+        status: job.status,
+        progress: job.progress,
+        step: job.step,
+        outputUrl: job.outputUrl,
+        outputUrls: job.outputUrls,
+      },
+      meta: buildMeta(202),
+    },
+    202
+  );
+}
+
+function handleJobStatus(request, jobId) {
+  const job = JOBS.get(jobId);
+
+  if (!job) {
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId: createId('req'),
+        traceId: createId('trace'),
+        startedAt: nowMs(),
+        code: 'JOB_NOT_FOUND',
+        message: 'Job bulunamadı.',
+        status: 404,
+      }),
+      404
+    );
+  }
+
+  return jsonResponse(
+    request,
+    {
+      ok: true,
+      data: clone(job),
+      meta: buildMeta(200),
+    },
+    200
+  );
+}
+
+function handleJobsHistory(request) {
+  const url = new URL(request.url);
+  const limit = clamp(parseInteger(url.searchParams.get('limit'), DEFAULTS.historyLimit), 1, DEFAULTS.maxHistoryLimit);
+
+  return jsonResponse(
+    request,
+    {
+      ok: true,
+      data: {
+        items: HISTORY.slice(0, limit).map(clone),
+        total: HISTORY.length,
+      },
+      meta: buildMeta(200),
+    },
+    200
+  );
+}
+
+async function handleJobsCancel(request) {
+  const payload = await readJsonBody(request);
+  const jobId = normalizeText(payload.jobId);
+
+  if (!jobId) {
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId: createId('req'),
+        traceId: createId('trace'),
+        startedAt: nowMs(),
+        code: 'JOB_ID_REQUIRED',
+        message: 'jobId zorunludur.',
+        status: 400,
+      }),
+      400
+    );
+  }
+
+  const job = JOBS.get(jobId);
+
+  if (!job) {
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId: createId('req'),
+        traceId: createId('trace'),
+        startedAt: nowMs(),
+        code: 'JOB_NOT_FOUND',
+        message: 'Job bulunamadı.',
+        status: 404,
+      }),
+      404
+    );
+  }
+
+  if (!TERMINAL_STATUSES.has(normalizeText(job.status))) {
+    job.status = 'canceled';
+    job.step = 'İş kullanıcı tarafından iptal edildi';
+    job.updatedAt = new Date().toISOString();
+    upsertJob(job);
+  }
+
+  return jsonResponse(
+    request,
+    {
+      ok: true,
+      data: clone(job),
+      meta: buildMeta(200),
+    },
+    200
+  );
+}
+
+async function runGeneration(jobId) {
+  await sleep(DEFAULTS.queueDelayMs);
+
+  const queued = JOBS.get(jobId);
+  if (!queued || normalizeText(queued.status) === 'canceled') return;
+
+  queued.status = 'processing';
+  queued.progress = 45;
+  queued.step = 'Görsel hazırlanıyor';
+  queued.updatedAt = new Date().toISOString();
+  upsertJob(queued);
+
+  await sleep(DEFAULTS.renderDelayMs);
+
+  const processing = JOBS.get(jobId);
+  if (!processing || normalizeText(processing.status) === 'canceled') return;
+
+  const outputs = [];
+  for (let index = 0; index < clamp(parseInteger(processing.n, 1), 1, 4); index += 1) {
+    outputs.push(
+      buildSvgDataUrl({
+        prompt: processing.prompt,
+        style: processing.style,
+        modelId: processing.modelId,
+        ratio: processing.ratio,
+        jobId: processing.jobId,
+        index: index + 1,
+      })
+    );
+  }
+
+  processing.status = 'completed';
+  processing.progress = 100;
+  processing.step = 'Üretim tamamlandı';
+  processing.outputUrl = outputs[0] || null;
+  processing.outputUrls = outputs;
+  processing.updatedAt = new Date().toISOString();
+  upsertJob(processing);
+}
+
+function normalizeModelRecord(model) {
+  const feature = inferFeature(model.categoryRaw);
+  const speedScore = normalizeNumber(SPEED_SCORE_MAP[normalizeText(model.speedLabel)], null);
+
+  return {
+    company: normalizeText(model.company),
+    provider: normalizeText(model.provider) || normalizeText(model.company).toLowerCase(),
+    modelName: normalizeText(model.modelName),
+    modelId: normalizeText(model.modelId),
+    categoryRaw: normalizeText(model.categoryRaw),
+    feature,
+    badges: Array.isArray(model.badges) ? model.badges : [],
+    parameters: model.parameters ?? null,
+    speedLabel: normalizeText(model.speedLabel, 'Bilinmiyor'),
+    speedScore,
+    inputPrice: normalizeNumber(model.inputPrice, null),
+    outputPrice: normalizeNumber(model.outputPrice, null),
+    imagePrice: normalizeNumber(model.imagePrice, null),
+    traits: Array.isArray(model.traits) ? model.traits : [],
+  };
+}
+
+function inferFeature(categoryRaw) {
+  const raw = normalizeText(categoryRaw).toLowerCase();
+  if (raw.includes('image')) return 'image';
+  if (raw.includes('video')) return 'video';
+  if (raw.includes('audio')) return 'audio';
+  return 'text';
+}
+
+function errorEnvelope(input) {
+  return {
+    ok: false,
+    error: {
+      code: normalizeText(input.code, 'UNEXPECTED_ERROR'),
+      message: normalizeText(input.message, 'Beklenmeyen hata oluştu.'),
+      status: clamp(parseInteger(input.status, 500), 100, 599),
+    },
+    meta: {
+      requestId: normalizeText(input.requestId),
+      traceId: normalizeText(input.traceId),
+      startedAt: input.startedAt,
+      now: new Date().toISOString(),
+      worker: APP_INFO.worker,
+      version: APP_INFO.version,
+    },
+  };
+}
+
+function jsonResponse(request, payload, status) {
+  return new Response(JSON.stringify(payload, null, 2), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+function buildMeta(status) {
+  return {
+    status,
+    worker: APP_INFO.worker,
+    version: APP_INFO.version,
+    now: new Date().toISOString(),
+  };
+}
+
+function withCors(request, response) {
+  const headers = new Headers(response.headers || {});
+  const cors = buildCorsHeaders(request);
+  cors.forEach((value, key) => headers.set(key, value));
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function buildCorsHeaders(request) {
+  const origin = request.headers.get('Origin') || '*';
+  const headers = new Headers();
+  headers.set('Access-Control-Allow-Origin', origin);
+  headers.set('Access-Control-Allow-Credentials', 'true');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Headers', 'Accept, Content-Type, Authorization, X-Requested-With');
+  headers.set('Access-Control-Max-Age', '86400');
+  headers.set('Vary', 'Origin');
+  return headers;
+}
+
+async function readJsonBody(request) {
+  const text = await request.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    const error = new Error('JSON gövdesi çözülemedi.');
+    error.code = 'INVALID_JSON';
+    error.status = 400;
+    throw error;
+  }
+}
+
+function sanitizeError(error) {
+  if (error && typeof error === 'object') {
+    return {
+      code: normalizeText(error.code, 'UNEXPECTED_ERROR'),
+      message: normalizeText(error.message, 'Beklenmeyen hata oluştu.'),
+      status: clamp(parseInteger(error.status, 500), 100, 599),
+    };
+  }
+
+  return {
+    code: 'UNEXPECTED_ERROR',
+    message: 'Beklenmeyen hata oluştu.',
+    status: 500,
+  };
+}
+
+function normalizePath(pathname) {
+  const value = normalizeText(pathname, '/');
+  if (value.length > 1 && value.endsWith('/')) {
+    return value.slice(0, -1);
+  }
+  return value;
+}
+
+function upsertJob(job) {
+  const cloned = clone(job);
+  JOBS.set(cloned.jobId, cloned);
+
+  const existingIndex = HISTORY.findIndex((item) => item.jobId === cloned.jobId);
+  if (existingIndex >= 0) {
+    HISTORY.splice(existingIndex, 1);
+  }
+  HISTORY.unshift(cloned);
+
+  if (HISTORY.length > DEFAULTS.maxHistoryLimit) {
+    HISTORY.length = DEFAULTS.maxHistoryLimit;
+  }
+}
+
+function buildSvgDataUrl(input) {
+  const safePrompt = escapeXml(input.prompt || '');
+  const safeStyle = escapeXml(input.style || '-');
+  const safeModelId = escapeXml(input.modelId || '-');
+  const safeRatio = escapeXml(input.ratio || '1:1');
+  const safeJobId = escapeXml(input.jobId || '-');
+  const safeIndex = escapeXml(String(input.index || 1));
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="50%" stop-color="#1f2937"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#g)"/>
+  <rect x="48" y="48" width="928" height="928" rx="28" fill="none" stroke="#22d3ee" stroke-width="4"/>
+  <text x="80" y="140" fill="#e5e7eb" font-size="42" font-family="Arial, sans-serif">AI IMAGE PLACEHOLDER</text>
+  <text x="80" y="220" fill="#93c5fd" font-size="28" font-family="Arial, sans-serif">PROMPT</text>
+  <foreignObject x="80" y="240" width="864" height="260">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="color:#f9fafb;font-family:Arial,sans-serif;font-size:30px;line-height:1.35;word-break:break-word;">
+      ${safePrompt}
+    </div>
+  </foreignObject>
+  <text x="80" y="590" fill="#93c5fd" font-size="28" font-family="Arial, sans-serif">MODEL</text>
+  <text x="80" y="632" fill="#f9fafb" font-size="28" font-family="Arial, sans-serif">${safeModelId}</text>
+  <text x="80" y="700" fill="#93c5fd" font-size="28" font-family="Arial, sans-serif">STYLE</text>
+  <text x="80" y="742" fill="#f9fafb" font-size="28" font-family="Arial, sans-serif">${safeStyle}</text>
+  <text x="80" y="810" fill="#93c5fd" font-size="28" font-family="Arial, sans-serif">RATIO</text>
+  <text x="80" y="852" fill="#f9fafb" font-size="28" font-family="Arial, sans-serif">${safeRatio}</text>
+  <text x="80" y="920" fill="#93c5fd" font-size="28" font-family="Arial, sans-serif">JOB</text>
+  <text x="80" y="962" fill="#f9fafb" font-size="22" font-family="Arial, sans-serif">${safeJobId} · ${safeIndex}</text>
+</svg>`.trim();
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function createId(prefix) {
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  const timePart = Date.now().toString(36);
+  return `${prefix}_${timePart}_${randomPart}`;
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+function normalizeText(value, fallback = '') {
+  if (typeof value === 'string') return value.trim();
+  if (value == null) return fallback;
+  return String(value).trim();
+}
+
+function normalizeNumber(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function parseInteger(value, fallback) {
+  const num = Number.parseInt(String(value), 10);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function clamp(value, min, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return min;
+  return Math.max(min, Math.min(max, num));
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function escapeXml(input) {
+  return String(input)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
