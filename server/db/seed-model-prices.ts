@@ -2,6 +2,20 @@
 // BUNU kv.ts'NİN İÇİNE YAPIŞTIRMA.
 // kv.ts adapter kalsın.
 // Bu dosyayı projene ayrı ekle ve fiyatları KV'ye seed et.
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, MODEL FİYAT VERİSİNİ KV'YE SEED ETMEK İÇİN AYRILMIŞ BİR YARDIMCI DOSYADIR.
+2) DOSYANIN EN BAŞINDAKİ NOT, BU KODUN kv.ts İÇİNE GÖMÜLMEMESİ GEREKTİĞİNİ AÇIKÇA SÖYLER.
+3) YANİ ADAPTER KATIYLA SEED MANTIĞI BİLİNÇLİ OLARAK AYRILMIŞTIR.
+4) BU AYRIM, KV DOSYASININ DAHA TEMİZ VE TEK SORUMLULUKLU KALMASINI SAĞLAR.
+5) DOSYA ADI, MODEL PRICE SEED İŞİNİN BURADA TOPLANDIĞINI GÖSTERİR.
+6) server/app.ts İÇİNDE ensureModelsSeeded() ÇAĞRISIYLA BAŞLATILDIĞI İÇİN BU DOSYA BOOT SIRASINDA DEVREYE GİREBİLİR.
+7) YAPISAL OLARAK BU DOSYA, SİSTEMİN “İLK VERİ YÜKLEME” KATMANINA AİTTİR.
+8) KOD GÖVDE GÖRÜNÜMÜ ÇOK KISA OLSA DA DOSYANIN ROLÜ MİMARİK OLARAK BÜYÜKTÜR.
+9) BU DOSYA OLMADAN MODEL FİYAT KATALOĞU EKSİK BAŞLAYABİLİR.
+10) KISACA: BU DOSYA, MODEL VE FİYAT BAŞLANGIÇ VERİSİNİ KV DEPOSUNA HAZIRLAYAN AYRI SEED KATMANIDIR.
+█████████████████████████████████████████████
+*/
 
 import { kv } from "./kv";
 import { calculateSaleCredits } from '../services/pricingService.js';
