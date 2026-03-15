@@ -13,6 +13,18 @@ type WorkerEnvelope<T> = {
   } | null;
   meta?: Record<string, JsonValue> | null;
   status?: number;
+  routes?: string[];
+  worker?: string;
+  version?: string;
+};
+
+type WorkerInfoPayload = {
+  worker?: string;
+  version?: string;
+  protocolVersion?: string;
+  purpose?: string;
+  routes?: string[];
+  supportedQuery?: string[];
 };
 
 type ModelItem = {
@@ -92,6 +104,7 @@ type HistoryPayload = {
 
 type GeneratePayload = {
   jobId?: string;
+  id?: string;
   status?: string;
   progress?: number;
   step?: string;
@@ -102,6 +115,14 @@ type GeneratePayload = {
   modelId?: string;
   provider?: string;
   requestId?: string;
+  error?: {
+    message?: string;
+  } | null;
+  job?: {
+    jobId?: string;
+    id?: string;
+    status?: string;
+  } | null;
 };
 
 type FormState = {
@@ -116,11 +137,18 @@ type FormState = {
   seed: string;
 };
 
+type WorkerRequestResult<T> = {
+  status: number;
+  body: WorkerEnvelope<T> | T;
+};
+
 const WORKER_BASE_URL = 'https://idm.puter.work';
 const HISTORY_LIMIT = 5;
 const POLL_INTERVAL_MS = 1800;
+const REQUEST_TIMEOUT_MS = 25000;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const DEFAULT_MODEL_ID = 'black-forest-labs/flux-1-schnell';
+const LOCAL_JOB_PREFIX = 'local_';
 
 const RATIO_OPTIONS = [
   { value: '1:1', label: '1:1 Kare' },
@@ -172,6 +200,58 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function toTitleCase(value: string): string {
+  return value
+    .split(/[-_\s/]+/)
+    .filter(Boolean)
+    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+    .join(' ');
+}
+
+function deriveProviderFromModelId(modelId?: string, company?: string): string {
+  const companyText = normalizeText(company);
+  if (companyText) return companyText;
+  const rawModelId = normalizeText(modelId);
+  if (!rawModelId.includes('/')) return rawModelId ? toTitleCase(rawModelId) : 'Bilinmiyor';
+  return toTitleCase(rawModelId.split('/')[0]);
+}
+
+function ensureStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((item) => item.trim() !== '')));
+}
+
+function normalizeModel(raw: unknown): ModelItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const source = raw as Record<string, unknown>;
+  const modelId = normalizeText(source.modelId || source.id);
+  const company = normalizeText(source.company);
+  const provider = normalizeText(source.provider) || deriveProviderFromModelId(modelId, company);
+  const modelName = normalizeText(source.modelName) || modelId || 'Adsız model';
+
+  return {
+    id: normalizeText(source.id) || modelId,
+    modelId,
+    modelName,
+    company,
+    provider,
+    categoryRaw: normalizeText(source.categoryRaw),
+    badges: ensureStringArray(source.badges),
+    imagePrice: source.imagePrice == null ? null : normalizeNumber(source.imagePrice, 0),
+    speedLabel: normalizeText(source.speedLabel),
+    standoutFeature: normalizeText(source.standoutFeature),
+    useCase: normalizeText(source.useCase),
+    style: typeof source.style === 'object' && source.style ? {
+      accent: normalizeText((source.style as Record<string, unknown>).accent),
+      brandKey: normalizeText((source.style as Record<string, unknown>).brandKey),
+    } : undefined,
+  };
+}
+
 function isImageModel(model: ModelItem): boolean {
   const badges = Array.isArray(model.badges) ? model.badges.join(' ').toLowerCase() : '';
   const category = normalizeText(model.categoryRaw).toLowerCase();
@@ -179,7 +259,9 @@ function isImageModel(model: ModelItem): boolean {
   return (
     model.imagePrice != null ||
     category.includes('image') ||
+    category.includes('görsel') ||
     badges.includes('image') ||
+    badges.includes('görsel') ||
     modelId.includes('flux') ||
     modelId.includes('gpt-image') ||
     modelId.includes('recraft') ||
@@ -188,15 +270,66 @@ function isImageModel(model: ModelItem): boolean {
   );
 }
 
+function normalizeModelList(payload: unknown): ModelItem[] {
+  const candidates: unknown[] =
+    Array.isArray(payload)
+      ? payload
+      : Array.isArray((payload as ModelsPayload | undefined)?.items)
+        ? ((payload as ModelsPayload).items as unknown[])
+        : Array.isArray((payload as { models?: unknown[] } | undefined)?.models)
+          ? (((payload as { models?: unknown[] }).models) as unknown[])
+          : [];
+
+  return candidates
+    .map(normalizeModel)
+    .filter((item): item is ModelItem => item !== null)
+    .filter((item: ModelItem) => Boolean(normalizeText(item.modelId || item.id)));
+}
+
+function extractImageUrls(value: unknown): string[] {
+  if (!value) return [];
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  if (Array.isArray(value)) {
+    return uniqueStrings(
+      value.flatMap((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (entry && typeof entry === 'object') {
+          const record = entry as Record<string, unknown>;
+          return [
+            normalizeText(record.url),
+            normalizeText(record.outputUrl),
+            normalizeText(record.src),
+            normalizeText(record.href),
+          ].filter(Boolean);
+        }
+        return [] as string[];
+      }),
+    );
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return uniqueStrings([
+      normalizeText(record.url),
+      normalizeText(record.outputUrl),
+      ...extractImageUrls(record.urls),
+      ...extractImageUrls(record.outputUrls),
+      ...extractImageUrls(record.images),
+      ...extractImageUrls(record.outputs),
+      ...extractImageUrls(record.results),
+      ...extractImageUrls(record.data),
+    ]);
+  }
+  return [];
+}
+
 function pickJobImages(job: JobRecord | null): string[] {
   if (!job) return [];
-  const items = [
-    ...(Array.isArray(job.outputUrls) ? job.outputUrls : []),
-    ...(Array.isArray(job.urls) ? job.urls : []),
-    job.outputUrl,
-    job.url,
-  ];
-  return Array.from(new Set(items.filter((item): item is string => typeof item === 'string' && item.trim() !== '')));
+  return uniqueStrings([
+    ...ensureStringArray(job.outputUrls),
+    ...ensureStringArray(job.urls),
+    normalizeText(job.outputUrl),
+    normalizeText(job.url),
+  ]);
 }
 
 function formatDateTime(value?: string | null): string {
@@ -266,43 +399,29 @@ async function readJson<T>(response: Response): Promise<WorkerEnvelope<T> | T> {
   }
 }
 
-async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
-  try {
-    const response = await fetch(`${WORKER_BASE_URL}${path}`, {
-      ...init,
-      credentials: 'include',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(init?.headers || {}),
-      },
-    });
+function isEnvelope<T>(body: WorkerEnvelope<T> | T): body is WorkerEnvelope<T> {
+  return Boolean(body) && typeof body === 'object' && ('ok' in (body as object) || 'data' in (body as object) || 'error' in (body as object));
+}
 
-    const body = await readJson<T>(response);
-    const envelope = body as WorkerEnvelope<T>;
-
-    if (!response.ok || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
-      const rawMessage = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
-      const message = normalizeWorkerErrorMessage(rawMessage, response.status);
-
-      if (shouldFallbackToApi(message, response.status)) {
-        return requestApiFallback<T>(path, init);
-      }
-
-      throw new Error(message);
-    }
-
-    if (typeof envelope?.ok === 'boolean') {
-      return (envelope.data as T) ?? ({} as T);
-    }
-
-    return body as T;
-  } catch (networkError) {
-    if (networkError instanceof Error && shouldFallbackToApi(networkError.message, 0)) {
-      return requestApiFallback<T>(path, init);
-    }
-    throw networkError;
+function normalizeWorkerErrorMessage(message: string, status: number): string {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("reading 'puter'") ||
+    lower.includes('reading "puter"') ||
+    (lower.includes('undefined') && lower.includes('puter'))
+  ) {
+    return 'Worker oturum doğrulaması başarısız. Lütfen yeniden giriş yapıp tekrar dene.';
   }
+  if (lower.includes('failed to fetch') || lower.includes('networkerror')) {
+    return 'Worker ağına erişilemedi. Lütfen bağlantını kontrol edip tekrar dene.';
+  }
+  if (status === 404) {
+    return 'Worker bu uç için 404 döndü. Canlı worker sözleşmesi güncel değil veya ilgili uç devrede değil.';
+  }
+  if (status === 405) {
+    return 'Worker bu istek yöntemini kabul etmedi. İstek sözleşmesi ile worker uygulaması uyuşmuyor.';
+  }
+  return message || `İstek başarısız oldu (${status}).`;
 }
 
 function shouldFallbackToApi(message: string, status: number): boolean {
@@ -313,6 +432,63 @@ function shouldFallbackToApi(message: string, status: number): boolean {
     lower.includes('failed to fetch') ||
     lower.includes('oturum doğrulaması başarısız')
   );
+}
+
+async function requestWorkerRaw<T>(path: string, init?: RequestInit): Promise<WorkerRequestResult<T>> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${WORKER_BASE_URL}${path}`, {
+      ...init,
+      credentials: 'include',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(init?.headers || {}),
+      },
+    });
+
+    const body = await readJson<T>(response);
+    return { status: response.status, body };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Worker zaman aşımına uğradı. Lütfen tekrar dene.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    const { status, body } = await requestWorkerRaw<T>(path, init);
+    const envelope = isEnvelope<T>(body) ? body : null;
+
+    if (status >= 400 || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
+      const rawMessage = normalizeText(envelope?.error?.message) || `İstek başarısız oldu (${status}).`;
+      const message = normalizeWorkerErrorMessage(rawMessage, status);
+
+      if (shouldFallbackToApi(message, status)) {
+        return requestApiFallback<T>(path, init);
+      }
+
+      throw new Error(message);
+    }
+
+    if (envelope && 'data' in envelope && typeof envelope.data !== 'undefined') {
+      return envelope.data as T;
+    }
+
+    return body as T;
+  } catch (networkError) {
+    if (networkError instanceof Error && shouldFallbackToApi(networkError.message, 0)) {
+      return requestApiFallback<T>(path, init);
+    }
+    throw networkError;
+  }
 }
 
 async function requestApiFallback<T>(path: string, init?: RequestInit): Promise<T> {
@@ -358,16 +534,129 @@ async function requestApiFallback<T>(path: string, init?: RequestInit): Promise<
   throw new Error('API fallback bu istek için tanımlı değil.');
 }
 
+function normalizeJobRecord(raw: unknown): JobRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const source = raw as Record<string, unknown>;
+  const nestedJob = source.job && typeof source.job === 'object' ? (source.job as Record<string, unknown>) : null;
+  const jobId = normalizeText(source.jobId) || normalizeText(source.id) || normalizeText(source.requestId) || normalizeText(nestedJob?.jobId) || normalizeText(nestedJob?.id);
+  const urls = uniqueStrings([
+    ...extractImageUrls(source.outputUrls),
+    ...extractImageUrls(source.urls),
+    ...extractImageUrls(source.images),
+    ...extractImageUrls(source.outputs),
+    ...extractImageUrls(source.results),
+    normalizeText(source.outputUrl),
+    normalizeText(source.url),
+  ]);
+  const status = normalizeText(source.status) || normalizeText(nestedJob?.status) || (urls.length > 0 ? 'completed' : 'queued');
+  const modelId = normalizeText(source.modelId) || normalizeText(source.model) || normalizeText((source.request as Record<string, unknown> | undefined)?.modelId) || normalizeText((source.request as Record<string, unknown> | undefined)?.model);
+  const prompt = normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.prompt) || normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.promptPreview) || normalizeText((source.request as Record<string, unknown> | undefined)?.prompt);
 
-function normalizeWorkerErrorMessage(message: string, status: number): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("reading 'puter'") || lower.includes('reading "puter"') || lower.includes('undefined') && lower.includes('puter')) {
-    return 'Worker oturum doğrulaması başarısız. Lütfen yeniden giriş yapıp tekrar dene.';
-  }
-  if (lower.includes('failed to fetch')) {
-    return 'Worker ağına erişilemedi. Lütfen bağlantını kontrol edip tekrar dene.';
-  }
-  return message || `İstek başarısız oldu (${status}).`;
+  if (!jobId && urls.length === 0) return null;
+
+  return {
+    jobId: jobId || `${LOCAL_JOB_PREFIX}${Date.now()}`,
+    feature: normalizeText(source.feature, 'image'),
+    status,
+    progress: clamp(normalizeNumber(source.progress, status === 'completed' ? 100 : 0), 0, 100),
+    step: normalizeText(source.step, status),
+    queuePosition: source.queuePosition == null ? null : normalizeNumber(source.queuePosition, 0),
+    etaMs: source.etaMs == null ? null : normalizeNumber(source.etaMs, 0),
+    outputUrl: urls[0] || null,
+    outputUrls: urls,
+    url: urls[0] || null,
+    urls,
+    retryable: Boolean(source.retryable),
+    cancelRequested: Boolean(source.cancelRequested),
+    requestSummary: {
+      model: modelId,
+      prompt,
+      promptPreview: prompt ? prompt.slice(0, 160) : '',
+    },
+    request: {
+      model: modelId,
+      modelId,
+      provider: normalizeText((source.request as Record<string, unknown> | undefined)?.provider),
+      ratio: normalizeText((source.request as Record<string, unknown> | undefined)?.ratio),
+      size: normalizeText((source.request as Record<string, unknown> | undefined)?.size),
+      quality: normalizeText((source.request as Record<string, unknown> | undefined)?.quality),
+      style: normalizeText((source.request as Record<string, unknown> | undefined)?.style),
+      negativePrompt: normalizeText((source.request as Record<string, unknown> | undefined)?.negativePrompt),
+      n: normalizeNumber((source.request as Record<string, unknown> | undefined)?.n, 1),
+    },
+    error: source.error && typeof source.error === 'object' ? {
+      message: normalizeText((source.error as Record<string, unknown>).message),
+      retryable: Boolean((source.error as Record<string, unknown>).retryable),
+    } : null,
+    createdAt: normalizeText(source.createdAt),
+    updatedAt: normalizeText(source.updatedAt),
+    finishedAt: normalizeText(source.finishedAt) || null,
+  };
+}
+
+function normalizeHistoryItems(payload: unknown): JobRecord[] {
+  const source = payload as Record<string, unknown> | null;
+  const candidates =
+    Array.isArray(payload)
+      ? payload
+      : Array.isArray(source?.items)
+        ? source?.items
+        : Array.isArray(source?.jobs)
+          ? source?.jobs
+          : Array.isArray(source?.history)
+            ? source?.history
+            : [];
+
+  return (candidates as unknown[])
+    .map(normalizeJobRecord)
+    .filter((job): job is JobRecord => Boolean(job));
+}
+
+function normalizeGenerateResult(payload: unknown, fallbackForm: FormState, prompt: string): JobRecord | null {
+  const normalized = normalizeJobRecord(payload);
+  if (!normalized) return null;
+
+  const modelId = normalizeText(normalized.request?.modelId || normalized.request?.model, fallbackForm.modelId);
+  const urls = pickJobImages(normalized);
+  const finalStatus = normalizeText(normalized.status) || (urls.length > 0 ? 'completed' : 'queued');
+  const finalJobId = normalizeText(normalized.jobId) || `${LOCAL_JOB_PREFIX}${Date.now()}`;
+
+  return {
+    ...normalized,
+    jobId: finalJobId,
+    status: finalStatus,
+    progress: clamp(normalizeNumber(normalized.progress, finalStatus === 'completed' ? 100 : 0), 0, 100),
+    step: normalizeText(normalized.step, finalStatus),
+    outputUrl: urls[0] || null,
+    outputUrls: urls,
+    url: urls[0] || null,
+    urls,
+    requestSummary: {
+      model: modelId,
+      prompt,
+      promptPreview: prompt.slice(0, 160),
+    },
+    request: {
+      ...normalized.request,
+      model: modelId,
+      modelId,
+      ratio: normalizeText(normalized.request?.ratio, fallbackForm.ratio),
+      quality: normalizeText(normalized.request?.quality, fallbackForm.quality),
+      style: normalizeText(normalized.request?.style, fallbackForm.style),
+      negativePrompt: normalizeText(normalized.request?.negativePrompt, fallbackForm.negativePrompt),
+      n: clamp(normalizeNumber(normalized.request?.n, fallbackForm.n), 1, 8),
+    },
+  };
+}
+
+function isLocalOnlyJob(jobId: string): boolean {
+  return jobId.startsWith(LOCAL_JOB_PREFIX);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function styles() {
@@ -517,6 +806,15 @@ function styles() {
       fontWeight: 600,
       cursor: 'pointer',
     } as React.CSSProperties,
+    infoBox: {
+      border: '1px solid #bfd9ff',
+      background: '#eff8ff',
+      color: '#1849a9',
+      borderRadius: '12px',
+      padding: '12px 14px',
+      fontSize: '14px',
+      lineHeight: 1.5,
+    } as React.CSSProperties,
     errorBox: {
       border: '1px solid #fecdca',
       background: '#fef3f2',
@@ -610,6 +908,7 @@ function styles() {
       display: 'grid',
       gap: '10px',
       background: '#ffffff',
+      cursor: 'pointer',
     } as React.CSSProperties,
     historyHeader: {
       display: 'flex',
@@ -642,7 +941,7 @@ function styles() {
   };
 }
 
-export default function Image(): JSX.Element {
+export default function Image(): React.ReactElement {
   const ui = useMemo(styles, []);
   const pollTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
@@ -651,6 +950,9 @@ export default function Image(): JSX.Element {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState('');
+
+  const [workerInfo, setWorkerInfo] = useState<WorkerInfoPayload | null>(null);
+  const [workerInfoError, setWorkerInfoError] = useState('');
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [history, setHistory] = useState<JobRecord[]>([]);
@@ -661,7 +963,7 @@ export default function Image(): JSX.Element {
 
   const imageModels = useMemo(() => {
     const filtered = models.filter(isImageModel);
-    return filtered.sort((a, b) => {
+    return filtered.sort((a: ModelItem, b: ModelItem) => {
       const aPreferred = normalizeText(a.modelId || a.id) === DEFAULT_MODEL_ID ? -1 : 0;
       const bPreferred = normalizeText(b.modelId || b.id) === DEFAULT_MODEL_ID ? -1 : 0;
       if (aPreferred !== bPreferred) return aPreferred - bPreferred;
@@ -670,15 +972,31 @@ export default function Image(): JSX.Element {
   }, [models]);
 
   const activeImages = useMemo(() => pickJobImages(currentJob), [currentJob]);
-  const canCancel = currentJob != null && !TERMINAL_STATUSES.has(normalizeText(currentJob.status));
+  const canCancel = currentJob != null && !TERMINAL_STATUSES.has(normalizeText(currentJob.status)) && !isLocalOnlyJob(currentJob.jobId);
   const canRetry = currentJob != null && currentJob.status === 'failed' && Boolean(lastSubmittedForm || currentJob.requestSummary?.prompt);
+  const declaredRoutes = ensureStringArray(workerInfo?.routes);
+  const declaredRouteLabel = declaredRoutes.length > 0 ? declaredRoutes.join(' · ') : '/models · /generate · /jobs/status/:id · /jobs/history · /jobs/cancel';
+  const workerContractWarning = useMemo(() => {
+    if (declaredRoutes.length === 0) return '';
+    const normalizedRoutes = declaredRoutes.map((route) => route.toLowerCase());
+    const announcesGenerate = normalizedRoutes.some((route) => route.includes('/generate'));
+    const announcesStatus = normalizedRoutes.some((route) => route.includes('/jobs/status'));
+    if (!announcesGenerate || !announcesStatus) {
+      return 'Canlı worker kök bilgisinde üretim ve job uçları ilan edilmiyor. Sayfa bu yüzden cevapları toleranslı parse ediyor ve eksik jobId durumunda history kurtarma akışına düşüyor.';
+    }
+    return '';
+  }, [declaredRoutes]);
 
   const currentModel = useMemo(() => {
-    return imageModels.find((item) => normalizeText(item.modelId || item.id) === form.modelId) || null;
+    return imageModels.find((item: ModelItem) => normalizeText(item.modelId || item.id) === form.modelId) || null;
   }, [imageModels, form.modelId]);
 
+  const currentModelProvider = useMemo(() => {
+    return currentModel ? normalizeText(currentModel.provider) || normalizeText(currentModel.company) || deriveProviderFromModelId(currentModel.modelId || currentModel.id, currentModel.company) : '—';
+  }, [currentModel]);
+
   const applyFormPatch = useCallback((patch: Partial<FormState>) => {
-    setForm((prev) => ({ ...prev, ...patch }));
+    setForm((prev: FormState) => ({ ...prev, ...patch }));
   }, []);
 
   const clearPollTimer = useCallback(() => {
@@ -688,26 +1006,50 @@ export default function Image(): JSX.Element {
     }
   }, []);
 
-  const loadHistory = useCallback(async () => {
+  const probeWorker = useCallback(async () => {
+    setWorkerInfoError('');
+    try {
+      const payload = await requestWorker<WorkerInfoPayload>('/');
+      if (!mountedRef.current) return;
+      setWorkerInfo(payload);
+    } catch (probeError) {
+      if (!mountedRef.current) return;
+      setWorkerInfoError(probeError instanceof Error ? probeError.message : 'Worker bilgisi okunamadı.');
+    }
+  }, []);
+
+  const loadHistory = useCallback(async (): Promise<JobRecord[]> => {
     setHistoryLoading(true);
     try {
       const payload = await requestWorker<HistoryPayload>(`/jobs/history?feature=image&limit=${HISTORY_LIMIT}`);
-      const items = Array.isArray(payload.items) ? payload.items : [];
+      const items = normalizeHistoryItems(payload);
       if (mountedRef.current) setHistory(items);
+      return items;
     } catch (historyError) {
       if (mountedRef.current) {
         console.error(historyError);
       }
+      return [];
     } finally {
       if (mountedRef.current) setHistoryLoading(false);
     }
   }, []);
 
   const pollJob = useCallback(async (jobId: string) => {
+    if (!jobId || isLocalOnlyJob(jobId)) {
+      setSubmitting(false);
+      return;
+    }
+
     clearPollTimer();
 
     try {
-      const job = await requestWorker<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
+      const payload = await requestWorker<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
+      const job = normalizeJobRecord(payload);
+      if (!job) {
+        throw new Error('Worker job durumu beklenmeyen biçimde döndü.');
+      }
+
       if (!mountedRef.current) return;
       setCurrentJob(job);
 
@@ -733,16 +1075,18 @@ export default function Image(): JSX.Element {
 
     try {
       const payload = await requestWorker<ModelsPayload>('/models?limit=250&sort=price_asc');
-      const items = Array.isArray(payload.items) ? payload.items : [];
+      const items = normalizeModelList(payload);
+
       if (!mountedRef.current) return;
 
       setModels(items);
 
       const filtered = items.filter(isImageModel);
-      const hasSelectedModel = filtered.some((item) => normalizeText(item.modelId || item.id) === form.modelId);
+      const hasSelectedModel = filtered.some((item: ModelItem) => normalizeText(item.modelId || item.id) === form.modelId);
+
       if (!hasSelectedModel && filtered.length > 0) {
-        const fallback = filtered.find((item) => normalizeText(item.modelId || item.id) === DEFAULT_MODEL_ID) || filtered[0];
-        setForm((prev) => ({ ...prev, modelId: normalizeText(fallback.modelId || fallback.id) }));
+        const fallback = filtered.find((item: ModelItem) => normalizeText(item.modelId || item.id) === DEFAULT_MODEL_ID) || filtered[0];
+        setForm((prev: FormState) => ({ ...prev, modelId: normalizeText(fallback.modelId || fallback.id) }));
       }
     } catch (modelsLoadError) {
       if (!mountedRef.current) return;
@@ -754,6 +1098,7 @@ export default function Image(): JSX.Element {
 
   useEffect(() => {
     mountedRef.current = true;
+    void probeWorker();
     void loadModels();
     void loadHistory();
 
@@ -761,7 +1106,7 @@ export default function Image(): JSX.Element {
       mountedRef.current = false;
       clearPollTimer();
     };
-  }, [clearPollTimer, loadHistory, loadModels]);
+  }, [clearPollTimer, loadHistory, loadModels, probeWorker]);
 
   const submit = useCallback(async (sourceForm?: FormState) => {
     const nextForm = sourceForm || form;
@@ -782,69 +1127,98 @@ export default function Image(): JSX.Element {
     clearPollTimer();
 
     try {
-      const payload = await requestWorker<GeneratePayload>('/generate', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt: trimmedPrompt,
-          modelId: nextForm.modelId,
-          model: nextForm.modelId,
-          ratio: nextForm.ratio,
-          quality: nextForm.quality,
-          style: nextForm.style.trim() || undefined,
-          negativePrompt: nextForm.negativePrompt.trim() || undefined,
-          n: clamp(nextForm.n, 1, 8),
-          responseFormat: 'url',
-          guidance: nextForm.guidance.trim() === '' ? undefined : Number(nextForm.guidance),
-          seed: nextForm.seed.trim() === '' ? undefined : Number(nextForm.seed),
-          metadata: {
-            surface: 'image.tsx',
-            workerBaseUrl: WORKER_BASE_URL,
-          },
-        }),
-      });
-
-      const jobId = normalizeText(payload.jobId);
-      if (!jobId) {
-        throw new Error('Worker jobId dönmedi.');
-      }
-
-      const immediateJob: JobRecord = {
-        jobId,
-        status: normalizeText(payload.status, 'queued'),
-        progress: normalizeNumber(payload.progress, 0),
-        step: normalizeText(payload.step, 'queued'),
-        url: payload.url || payload.outputUrl || null,
-        urls: Array.isArray(payload.urls) ? payload.urls : payload.outputUrls || [],
-        outputUrl: payload.outputUrl || payload.url || null,
-        outputUrls: Array.isArray(payload.outputUrls) ? payload.outputUrls : payload.urls || [],
-        requestSummary: {
-          model: nextForm.modelId,
-          prompt: trimmedPrompt,
-          promptPreview: trimmedPrompt.slice(0, 160),
-        },
-        request: {
-          model: nextForm.modelId,
-          modelId: nextForm.modelId,
-          ratio: nextForm.ratio,
-          quality: nextForm.quality,
-          style: nextForm.style,
-          negativePrompt: nextForm.negativePrompt,
-          n: nextForm.n,
+      const requestBody = {
+        prompt: trimmedPrompt,
+        modelId: nextForm.modelId,
+        model: nextForm.modelId,
+        provider: deriveProviderFromModelId(nextForm.modelId, currentModel?.company),
+        ratio: nextForm.ratio,
+        quality: nextForm.quality,
+        style: nextForm.style.trim() || undefined,
+        negativePrompt: nextForm.negativePrompt.trim() || undefined,
+        n: clamp(nextForm.n, 1, 8),
+        responseFormat: 'url',
+        guidance: nextForm.guidance.trim() === '' ? undefined : Number(nextForm.guidance),
+        seed: nextForm.seed.trim() === '' ? undefined : Number(nextForm.seed),
+        metadata: {
+          surface: 'image.tsx',
+          workerBaseUrl: WORKER_BASE_URL,
+          providerHint: deriveProviderFromModelId(nextForm.modelId, currentModel?.company),
         },
       };
 
+      const { body } = await requestWorkerRaw<GeneratePayload>('/generate', {
+        method: 'POST',
+        body: JSON.stringify(requestBody),
+      });
+
+      const rawPayload = isEnvelope<GeneratePayload>(body) && typeof body.data !== 'undefined' ? body.data : body;
+      let immediateJob = normalizeGenerateResult(rawPayload, nextForm, trimmedPrompt);
+
+      if (!immediateJob || (!immediateJob.jobId && pickJobImages(immediateJob).length === 0)) {
+        const message = isEnvelope<GeneratePayload>(body) ? normalizeText(body.error?.message) : '';
+        if (message) {
+          throw new Error(normalizeWorkerErrorMessage(message, 200));
+        }
+      }
+
+      if (!immediateJob) {
+        await sleep(700);
+        const recentHistory = await loadHistory();
+        const matched = recentHistory.find((item: JobRecord) => {
+          const samePrompt = normalizeText(item.requestSummary?.prompt || item.requestSummary?.promptPreview) === trimmedPrompt;
+          const sameModel = normalizeText(item.request?.modelId || item.request?.model) === nextForm.modelId;
+          return samePrompt || sameModel;
+        }) || recentHistory[0];
+
+        if (matched) {
+          immediateJob = {
+            ...matched,
+            requestSummary: {
+              model: nextForm.modelId,
+              prompt: trimmedPrompt,
+              promptPreview: trimmedPrompt.slice(0, 160),
+            },
+            request: {
+              ...matched.request,
+              model: nextForm.modelId,
+              modelId: nextForm.modelId,
+              provider: deriveProviderFromModelId(nextForm.modelId, currentModel?.company),
+              ratio: nextForm.ratio,
+              quality: nextForm.quality,
+              style: nextForm.style,
+              negativePrompt: nextForm.negativePrompt,
+              n: nextForm.n,
+            },
+          };
+        }
+      }
+
+      if (!immediateJob) {
+        throw new Error('Worker yanıt verdi ama üretim kimliği veya çıktı URL’si bulunamadı. Worker sözleşmesini doğrula.');
+      }
+
+      if (!mountedRef.current) return;
+
       setCurrentJob(immediateJob);
       setLastSubmittedForm({ ...nextForm, prompt: trimmedPrompt });
-      void loadHistory();
-      void pollJob(jobId);
+
+      if (TERMINAL_STATUSES.has(normalizeText(immediateJob.status)) || isLocalOnlyJob(immediateJob.jobId)) {
+        setSubmitting(false);
+        void loadHistory();
+        return;
+      }
+
+      void pollJob(immediateJob.jobId);
     } catch (submitError) {
       setSubmitting(false);
       setError(submitError instanceof Error ? submitError.message : 'Üretim başlatılamadı.');
     }
-  }, [clearPollTimer, form, loadHistory, pollJob]);
+  }, [clearPollTimer, currentModel?.company, form, loadHistory, pollJob]);
 
   const cancelJob = useCallback(async () => {
-    if (!currentJob?.jobId) return;
+    if (!currentJob?.jobId || isLocalOnlyJob(currentJob.jobId)) return;
+
     setError('');
 
     try {
@@ -852,9 +1226,14 @@ export default function Image(): JSX.Element {
         method: 'POST',
         body: JSON.stringify({ jobId: currentJob.jobId }),
       });
+      const normalized = normalizeJobRecord(cancelled);
+      if (!normalized) {
+        throw new Error('İptal cevabı beklenmeyen biçimde döndü.');
+      }
+
       clearPollTimer();
       if (!mountedRef.current) return;
-      setCurrentJob(cancelled);
+      setCurrentJob(normalized);
       setSubmitting(false);
       void loadHistory();
     } catch (cancelError) {
@@ -892,7 +1271,8 @@ export default function Image(): JSX.Element {
 
     const modelId = normalizeText(job.request?.modelId || job.request?.model, DEFAULT_MODEL_ID);
     const prompt = normalizeText(job.requestSummary?.prompt || job.requestSummary?.promptPreview);
-    setForm((prev) => ({
+
+    setForm((prev: FormState) => ({
       ...prev,
       prompt: prompt || prev.prompt,
       negativePrompt: normalizeText(job.request?.negativePrompt),
@@ -903,13 +1283,18 @@ export default function Image(): JSX.Element {
       n: clamp(normalizeNumber(job.request?.n, prev.n), 1, 8),
     }));
 
-    if (!TERMINAL_STATUSES.has(normalizeText(job.status))) {
+    if (!TERMINAL_STATUSES.has(normalizeText(job.status)) && !isLocalOnlyJob(job.jobId)) {
       setSubmitting(true);
       void pollJob(job.jobId);
     } else {
       setSubmitting(false);
     }
   }, [clearPollTimer, pollJob]);
+
+  const resetForm = useCallback(() => {
+    setForm(initialFormState());
+    setError('');
+  }, []);
 
   const currentStatusTone = statusTone(currentJob?.status);
 
@@ -924,9 +1309,11 @@ export default function Image(): JSX.Element {
           </p>
           <div style={ui.badgeRow}>
             <span style={ui.badge}>Worker: {WORKER_BASE_URL}</span>
-            <span style={ui.badge}>Uçlar: /models · /generate · /jobs/status/:id · /jobs/history · /jobs/cancel</span>
+            <span style={ui.badge}>Uçlar: {declaredRouteLabel}</span>
             <span style={ui.badge}>Mod: me.puter uyumlu fetch akışı</span>
           </div>
+          {workerInfoError && <div style={{ ...ui.errorBox, marginTop: '14px' }}>{workerInfoError}</div>}
+          {workerContractWarning && <div style={{ ...ui.infoBox, marginTop: '14px' }}>{workerContractWarning}</div>}
         </section>
 
         <div style={ui.grid}>
@@ -952,7 +1339,7 @@ export default function Image(): JSX.Element {
                   <textarea
                     style={ui.textarea}
                     value={form.prompt}
-                    onChange={(event) => applyFormPatch({ prompt: event.target.value })}
+                    onChange={(event: any) => applyFormPatch({ prompt: event.target.value })}
                     placeholder="Örnek: Sisli İstanbul gecesinde neon ışıklı siberpunk tramvay, sinematik kadraj, yüksek detay"
                   />
                 </label>
@@ -962,7 +1349,7 @@ export default function Image(): JSX.Element {
                   <textarea
                     style={{ ...ui.textarea, minHeight: '90px' }}
                     value={form.negativePrompt}
-                    onChange={(event) => applyFormPatch({ negativePrompt: event.target.value })}
+                    onChange={(event: any) => applyFormPatch({ negativePrompt: event.target.value })}
                     placeholder="Örnek: bulanık, düşük kalite, deforme yüz, ekstra kol"
                   />
                 </label>
@@ -973,16 +1360,17 @@ export default function Image(): JSX.Element {
                     <select
                       style={ui.input}
                       value={form.modelId}
-                      onChange={(event) => applyFormPatch({ modelId: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ modelId: event.target.value })}
                       disabled={modelsLoading}
                     >
                       {modelsLoading && <option value="">Modeller yükleniyor...</option>}
                       {!modelsLoading && imageModels.length === 0 && <option value="">Görsel modeli bulunamadı</option>}
-                      {imageModels.map((model) => {
+                      {imageModels.map((model: ModelItem) => {
                         const modelId = normalizeText(model.modelId || model.id);
+                        const provider = normalizeText(model.provider) || normalizeText(model.company) || deriveProviderFromModelId(modelId, model.company);
                         return (
                           <option key={modelId} value={modelId}>
-                            {model.modelName || modelId} {model.company ? `· ${model.company}` : ''}
+                            {model.modelName || modelId} {provider ? `· ${provider}` : ''}
                           </option>
                         );
                       })}
@@ -995,7 +1383,7 @@ export default function Image(): JSX.Element {
                     <input
                       style={ui.input}
                       value={form.style}
-                      onChange={(event) => applyFormPatch({ style: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ style: event.target.value })}
                       placeholder="Örnek: steampunk, cinematic, illustration"
                     />
                   </label>
@@ -1007,12 +1395,10 @@ export default function Image(): JSX.Element {
                     <select
                       style={ui.input}
                       value={form.ratio}
-                      onChange={(event) => applyFormPatch({ ratio: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ ratio: event.target.value })}
                     >
                       {RATIO_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
+                        <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
                   </label>
@@ -1022,12 +1408,10 @@ export default function Image(): JSX.Element {
                     <select
                       style={ui.input}
                       value={form.quality}
-                      onChange={(event) => applyFormPatch({ quality: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ quality: event.target.value })}
                     >
                       {QUALITY_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
+                        <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
                   </label>
@@ -1040,7 +1424,7 @@ export default function Image(): JSX.Element {
                       min={1}
                       max={8}
                       value={form.n}
-                      onChange={(event) => applyFormPatch({ n: clamp(normalizeNumber(event.target.value, 1), 1, 8) })}
+                      onChange={(event: any) => applyFormPatch({ n: clamp(normalizeNumber(event.target.value, 1), 1, 8) })}
                     />
                   </label>
                 </div>
@@ -1050,9 +1434,8 @@ export default function Image(): JSX.Element {
                     <span style={ui.label}>Guidance</span>
                     <input
                       style={ui.input}
-                      inputMode="decimal"
                       value={form.guidance}
-                      onChange={(event) => applyFormPatch({ guidance: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ guidance: event.target.value })}
                       placeholder="Boş bırakılabilir"
                     />
                   </label>
@@ -1061,77 +1444,34 @@ export default function Image(): JSX.Element {
                     <span style={ui.label}>Seed</span>
                     <input
                       style={ui.input}
-                      inputMode="numeric"
                       value={form.seed}
-                      onChange={(event) => applyFormPatch({ seed: event.target.value })}
+                      onChange={(event: any) => applyFormPatch({ seed: event.target.value })}
                       placeholder="Boş bırakılabilir"
                     />
                   </label>
                 </div>
 
-                {currentModel && (
-                  <div style={{ ...ui.metricCard, background: '#faf5ff', borderColor: '#e9d7fe' }}>
-                    <p style={ui.metricLabel}>Seçili model özeti</p>
-                    <p style={ui.metricValue}>{currentModel.modelName || currentModel.modelId}</p>
-                    <p style={ui.tiny}>
-                      {currentModel.company || currentModel.provider || 'Sağlayıcı bilinmiyor'}
-                      {currentModel.speedLabel ? ` · ${currentModel.speedLabel}` : ''}
-                      {typeof currentModel.imagePrice === 'number' ? ` · Görsel fiyatı: ${currentModel.imagePrice}` : ''}
-                    </p>
-                    {currentModel.standoutFeature && <p style={ui.tiny}>{currentModel.standoutFeature}</p>}
-                  </div>
-                )}
+                <div style={ui.metricCard}>
+                  <p style={ui.metricLabel}>Seçili model özeti</p>
+                  <p style={ui.metricValue}>{currentModel?.modelName || 'Model seçilmedi'}</p>
+                  <p style={ui.tiny}>Sağlayıcı: {currentModelProvider}</p>
+                  <p style={ui.tiny}>Model ID: {currentModel?.modelId || currentModel?.id || form.modelId || '—'}</p>
+                  <p style={ui.tiny}>Hız: {currentModel?.speedLabel || '—'} · Fiyat: {currentModel?.imagePrice != null ? `$${currentModel.imagePrice}` : '—'}</p>
+                </div>
 
                 {error && <div style={ui.errorBox}>{error}</div>}
 
                 <div style={ui.actions}>
-                  <button
-                    type="button"
-                    style={{
-                      ...ui.primaryButton,
-                      opacity: submitting ? 0.75 : 1,
-                      cursor: submitting ? 'wait' : 'pointer',
-                    }}
-                    onClick={() => void submit()}
-                    disabled={submitting}
-                  >
-                    {submitting ? 'Üretim sürüyor...' : 'Görsel üret'}
+                  <button type="button" style={ui.primaryButton} onClick={() => void submit()} disabled={submitting || modelsLoading}>
+                    {submitting ? 'Üretiliyor...' : 'Görsel üret'}
                   </button>
-
-                  <button
-                    type="button"
-                    style={ui.secondaryButton}
-                    onClick={() => {
-                      setForm(initialFormState());
-                      setError('');
-                    }}
-                  >
+                  <button type="button" style={ui.secondaryButton} onClick={resetForm} disabled={submitting}>
                     Formu temizle
                   </button>
-
-                  <button
-                    type="button"
-                    style={{
-                      ...ui.secondaryButton,
-                      opacity: canCancel ? 1 : 0.55,
-                      cursor: canCancel ? 'pointer' : 'not-allowed',
-                    }}
-                    onClick={() => void cancelJob()}
-                    disabled={!canCancel}
-                  >
+                  <button type="button" style={ui.secondaryButton} onClick={() => void cancelJob()} disabled={!canCancel}>
                     İptal et
                   </button>
-
-                  <button
-                    type="button"
-                    style={{
-                      ...ui.secondaryButton,
-                      opacity: canRetry ? 1 : 0.55,
-                      cursor: canRetry ? 'pointer' : 'not-allowed',
-                    }}
-                    onClick={() => void retryLast()}
-                    disabled={!canRetry}
-                  >
+                  <button type="button" style={ui.secondaryButton} onClick={() => void retryLast()} disabled={!canRetry}>
                     Tekrar dene
                   </button>
                 </div>
@@ -1139,21 +1479,19 @@ export default function Image(): JSX.Element {
             </div>
           </section>
 
-          <aside style={ui.panelGrid}>
+          <section style={ui.panelGrid}>
             <section style={ui.card}>
               <div style={ui.cardBody}>
-                <div style={ui.historyHeader}>
-                  <h2 style={ui.sectionTitle}>Üretim durumu</h2>
-                  <span
-                    style={{
-                      ...ui.badge,
-                      background: currentStatusTone.bg,
-                      color: currentStatusTone.fg,
-                      borderColor: currentStatusTone.border,
-                    }}
-                  >
-                    {statusLabel(currentJob?.status)}
-                  </span>
+                <h2 style={ui.sectionTitle}>Durum</h2>
+                <div style={{ ...ui.badge, background: currentStatusTone.bg, color: currentStatusTone.fg, borderColor: currentStatusTone.border }}>
+                  {statusLabel(currentJob?.status)}
+                </div>
+
+                <div style={ui.progressWrap}>
+                  <div style={ui.progressBar}>
+                    <div style={{ ...ui.progressFill, width: `${clamp(normalizeNumber(currentJob?.progress, 0), 0, 100)}%` }} />
+                  </div>
+                  <p style={ui.tiny}>Adım: {currentJob?.step || '—'} · İlerleme: {clamp(normalizeNumber(currentJob?.progress, 0), 0, 100)}%</p>
                 </div>
 
                 <div style={ui.statusGrid}>
@@ -1162,95 +1500,66 @@ export default function Image(): JSX.Element {
                     <p style={ui.metricValue}>{currentJob?.jobId || '—'}</p>
                   </div>
                   <div style={ui.metricCard}>
-                    <p style={ui.metricLabel}>Adım</p>
-                    <p style={ui.metricValue}>{currentJob?.step || '—'}</p>
-                  </div>
-                  <div style={ui.metricCard}>
-                    <p style={ui.metricLabel}>Sıra</p>
-                    <p style={ui.metricValue}>
-                      {currentJob?.queuePosition == null ? '—' : String(currentJob.queuePosition)}
-                    </p>
-                  </div>
-                  <div style={ui.metricCard}>
-                    <p style={ui.metricLabel}>Tahmini süre</p>
+                    <p style={ui.metricLabel}>ETA</p>
                     <p style={ui.metricValue}>{formatEta(currentJob?.etaMs)}</p>
                   </div>
-                </div>
-
-                <div style={ui.progressWrap}>
-                  <div style={ui.historyHeader}>
-                    <p style={ui.metricLabel}>İlerleme</p>
-                    <p style={ui.metricValue}>%{clamp(normalizeNumber(currentJob?.progress, 0), 0, 100)}</p>
+                  <div style={ui.metricCard}>
+                    <p style={ui.metricLabel}>Model</p>
+                    <p style={ui.metricValue}>{currentJob?.requestSummary?.model || form.modelId || '—'}</p>
                   </div>
-                  <div style={ui.progressBar}>
-                    <div
-                      style={{
-                        ...ui.progressFill,
-                        width: `${clamp(normalizeNumber(currentJob?.progress, 0), 0, 100)}%`,
-                      }}
-                    />
+                  <div style={ui.metricCard}>
+                    <p style={ui.metricLabel}>Zaman</p>
+                    <p style={ui.metricValue}>{formatDateTime(currentJob?.updatedAt || currentJob?.createdAt)}</p>
                   </div>
                 </div>
 
                 {currentJob?.error?.message && <div style={ui.errorBox}>{currentJob.error.message}</div>}
-
-                <div style={ui.metricCard}>
-                  <p style={ui.metricLabel}>Son güncelleme</p>
-                  <p style={ui.metricValue}>{formatDateTime(currentJob?.updatedAt || currentJob?.createdAt)}</p>
-                  <p style={ui.tiny}>
-                    Oluşturulma: {formatDateTime(currentJob?.createdAt)}
-                    {currentJob?.finishedAt ? ` · Bitiş: ${formatDateTime(currentJob.finishedAt)}` : ''}
-                  </p>
-                </div>
               </div>
             </section>
 
             <section style={ui.card}>
               <div style={ui.cardBody}>
-                <div style={ui.historyHeader}>
-                  <h2 style={ui.sectionTitle}>Son işler</h2>
-                  <button type="button" style={ui.secondaryButton} onClick={() => void loadHistory()}>
-                    Yenile
-                  </button>
-                </div>
-
-                {historyLoading && history.length === 0 ? (
-                  <div style={ui.empty}>Geçmiş yükleniyor...</div>
-                ) : history.length === 0 ? (
-                  <div style={ui.empty}>Henüz kayıt yok.</div>
+                <h2 style={ui.sectionTitle}>Çıktılar</h2>
+                {activeImages.length === 0 ? (
+                  <div style={ui.empty}>Henüz görsel yok. Üretim tamamlandığında burada görünecek.</div>
                 ) : (
+                  <div style={ui.imageGrid}>
+                    {activeImages.map((imageUrl: string) => (
+                      <div key={imageUrl} style={ui.imageCard}>
+                        <img src={imageUrl} alt="Üretilen görsel" style={ui.image} />
+                        <div style={ui.imageMeta}>
+                          <a href={imageUrl} target="_blank" rel="noreferrer" style={{ color: '#175cd3', textDecoration: 'none', fontWeight: 600 }}>
+                            Görseli aç
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section style={ui.card}>
+              <div style={ui.cardBody}>
+                <h2 style={ui.sectionTitle}>Geçmiş</h2>
+                {historyLoading && <div style={ui.empty}>Geçmiş yükleniyor...</div>}
+                {!historyLoading && history.length === 0 && (
+                  <div style={ui.empty}>Henüz geçmiş kayıt yok veya worker history ucu veri döndürmedi.</div>
+                )}
+                {!historyLoading && history.length > 0 && (
                   <div style={ui.historyList}>
-                    {history.map((job) => {
+                    {history.map((job: JobRecord) => {
                       const tone = statusTone(job.status);
                       return (
-                        <button
-                          key={job.jobId}
-                          type="button"
-                          style={{
-                            ...ui.historyItem,
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                          }}
-                          onClick={() => openHistoryItem(job)}
-                        >
+                        <button key={job.jobId} type="button" style={ui.historyItem} onClick={() => openHistoryItem(job)}>
                           <div style={ui.historyHeader}>
-                            <span
-                              style={{
-                                ...ui.badge,
-                                background: tone.bg,
-                                color: tone.fg,
-                                borderColor: tone.border,
-                              }}
-                            >
+                            <strong style={{ color: '#101828', textAlign: 'left' }}>{job.requestSummary?.model || job.request?.modelId || 'Model yok'}</strong>
+                            <span style={{ ...ui.badge, background: tone.bg, color: tone.fg, borderColor: tone.border }}>
                               {statusLabel(job.status)}
                             </span>
-                            <span style={ui.tiny}>{formatDateTime(job.createdAt)}</span>
                           </div>
-                          <p style={ui.promptPreview}>{job.requestSummary?.promptPreview || job.requestSummary?.prompt || 'Prompt yok'}</p>
-                          <p style={ui.tiny}>
-                            {job.requestSummary?.model || job.request?.modelId || job.request?.model || 'Model bilinmiyor'}
-                          </p>
-                          {job.error?.message && <p style={{ ...ui.tiny, color: '#b42318' }}>{job.error.message}</p>}
+                          <p style={{ ...ui.promptPreview, textAlign: 'left' }}>{job.requestSummary?.promptPreview || job.requestSummary?.prompt || 'Prompt yok'}</p>
+                          <p style={{ ...ui.tiny, textAlign: 'left' }}>{formatDateTime(job.updatedAt || job.createdAt)} · {job.jobId}</p>
                         </button>
                       );
                     })}
@@ -1258,43 +1567,8 @@ export default function Image(): JSX.Element {
                 )}
               </div>
             </section>
-          </aside>
+          </section>
         </div>
-
-        <section style={ui.card}>
-          <div style={ui.cardBody}>
-            <div style={ui.historyHeader}>
-              <h2 style={ui.sectionTitle}>Üretilen görseller</h2>
-              {activeImages.length > 0 && currentJob?.jobId && <span style={ui.badge}>Job: {currentJob.jobId}</span>}
-            </div>
-
-            {activeImages.length === 0 ? (
-              <div style={ui.empty}>
-                Üretim tamamlandığında görseller burada görünür. Geçmişten bir kayıt seçersen eski çıktıları da aynı alanda açabilirsin.
-              </div>
-            ) : (
-              <div style={ui.imageGrid}>
-                {activeImages.map((imageUrl, index) => (
-                  <article key={`${imageUrl}-${index}`} style={ui.imageCard}>
-                    <img
-                      src={imageUrl}
-                      alt={`Üretilen görsel ${index + 1}`}
-                      style={ui.image}
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div style={ui.imageMeta}>
-                      <p style={ui.metricValue}>Görsel {index + 1}</p>
-                      <a href={imageUrl} target="_blank" rel="noreferrer" style={{ ...ui.tiny, color: '#175cd3' }}>
-                        Yeni sekmede aç
-                      </a>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
       </div>
     </div>
   );
