@@ -1,1362 +1,572 @@
+// ════════════════════════════════════════════════════════
+// idm.js — v7.0.0
+// Puter Serverless Worker — router tabanlı
+// KRİTİK DÜZELTME: me parametresi her handler'dan ctx.me olarak alınıyor
+// me.puter.ai.txt2img() ve me.puter.kv doğru erişim
+// ════════════════════════════════════════════════════════
 
+// ──────────────────────────────────────────────────────
+// BÖLÜM 1: YARDIMCI FONKSİYONLAR
+// ──────────────────────────────────────────────────────
 
-/* 
-AMAÇ CÜMLELERİ
-1) Bu workerın amacı, image.tsx sayfasının ihtiyaç duyduğu tüm görsel üretim uçlarını tek bir endpoint ailesi altında sunmaktır.
-2) Bu worker model kataloğunu, görsel üretim isteğini, iş durumu sorgusunu, geçmişi ve iptali aynı sözleşmede birleştirir.
-3) Bu workerın temel hedefi, frontend tarafında "Failed to fetch" ve "Worker jobId dönmedi." gibi sözleşme kırıklarını ortadan kaldırmaktır.
-4) Bu worker, cross-origin kullanım için güvenli CORS yanıtları üreterek tarayıcı kaynaklı erişim sorunlarını azaltır.
-5) Bu worker, image.tsx tarafındaki tek source of truth beklentisine uyacak şekilde /models, /generate, /jobs/status/:id, /jobs/history ve /jobs/cancel uçlarını sağlar.
-6) Bu worker, gerçek upstream üretim motoru yoksa bile iş akışını bozmamak için kontrollü placeholder üretim desteği içerir.
-7) Bu worker, model kataloğunu frontend'in beklediği alan adlarıyla döndürerek model seçimi ekranının kararlı açılmasını hedefler.
-8) Bu worker, jobId tabanlı akışı zorunlu tutarak frontend'in polling mantığını basitleştirir ve tahmin yürütmesini engeller.
-9) Bu worker, minimum bağımlılıkla tek dosya halinde çalışacak şekilde yazılmıştır; import zorunluluğu yoktur.
-10) Bu worker, Puter hosting tarzı service-worker söz dizimine uygun olacak şekilde addEventListener('fetch', ...) modeliyle çalışır.
-*/
+function nowIso() { return new Date().toISOString(); }
+function nowMs() { return Date.now(); }
 
-/*
-IMAGE SÜRECİ AÇIKLAMALARI
-1) Görsel süreci POST /generate ile başlar.
-2) İstek içinde prompt zorunludur.
-3) Model alanı modelId veya model olarak kabul edilir.
-4) İstek alındığında önce bir jobId üretilir.
-5) Job ilk aşamada queued durumuna alınır.
-6) Ardından kısa bir gecikmeyle processing aşamasına geçirilir.
-7) Üretim tamamlandığında status completed olur.
-8) Tamamlanan işte outputUrl ve outputUrls alanları doldurulur.
-9) Placeholder modda çıktı data:image/svg+xml olarak üretilir.
-10) Bu yaklaşım frontend'in gerçek resim URL'si bekleyen akışını bozmaz.
-11) Üretim sırasında ratio, quality, style, seed, guidance ve adet bilgileri saklanır.
-12) Negatif prompt alanı istek içinde korunur.
-*/
-
-/*
-İŞ DURUMU SÜRECİ AÇIKLAMALARI
-1) İş durumu sorgusu GET /jobs/status/:id ile yapılır.
-2) Her iş tekil jobId ile tutulur.
-3) İş bulunamazsa 404 ve JOB_NOT_FOUND hatası döner.
-4) İş bulunduğunda tam job nesnesi döner.
-5) İş durumu queued, processing, completed, failed veya canceled olabilir.
-6) Frontend polling mantığı yalnızca jobId üzerinden ilerler.
-7) completed olduğunda görsel alanları dolu gelir.
-8) canceled olduğunda step alanı iptal bilgisini açıkça yazar.
-9) Geçmiş listesi GET /jobs/history ile alınır.
-10) History en yeni işi başa alacak şekilde sıralanır.
-11) İptal işlemi POST /jobs/cancel ile yapılır.
-12) İptal isteğinde jobId zorunludur.
-*/
-
-/*
-MODEL KATALOĞUNU NASIL ÇEKTİĞİ AÇIKLAMALARI
-1) Bu sürümde model kataloğu dosya içindeki RAW_MODELS sabitinden çekilir.
-2) Böylece import zorunluluğu olmadan tek dosya halinde çalışır.
-3) GET /models çağrısı RAW_MODELS listesini filtreleyip döndürür.
-4) feature=image parametresi desteklenir.
-5) sort=price_asc parametresi desteklenir.
-6) limit parametresi üst sınır ile denetlenir.
-7) Dönen model nesneleri image.tsx'in beklediği provider, company, modelId ve badges alanlarını içerir.
-8) Katalog verisi JSON zarfı içinde data.items olarak döner.
-9) total alanı toplam model sayısını belirtir.
-10) İleride istenirse bu sabit, aynı sözleşmeyi koruyarak başka kaynaktan beslenebilir.
-11) Bu yaklaşım mevcut frontend ile uyum için en düşük riskli çözümdür.
-12) Tek dosya mantığı Puter hosting tarafında modül/import belirsizliğini ortadan kaldırır.
-*/
-/*
-DOSYA: models-worker.js
-AMAÇ: EXCEL'DEN ÜRETİLMİŞ MODEL KATALOĞUNU GÜVENLİ JSON API OLARAK SUNMAK.
-NOT: BU WORKER TEK GÖREVLİDİR; SADECE MODEL KATALOĞU SERVİSİ VERİR.
-NOT: VERİLER /mnt/data/ai-model-catalog.xlsx DOSYASINDAN ÇIKARILMIŞ SNAPSHOT'TIR.
-NOT: PREMIUM FİYATLAR GÖSTERİLİR; 1.5X BİLGİSİ RESPONSE İÇİNDE YAZDIRILMAZ.
-*/
-/*
-DOSYA: idm.js
-AMAÇ: MODEL KATALOĞU + IMAGE GENERATION + JOB YÖNETİMİ
-*/
-
-// ─────────────────── YARDIMCI ARAÇLAR ───────────────────
-
-function nowIso() {
-  return new Date().toISOString();
+function createId(prefix) {
+  return (prefix || 'id') + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
 }
 
-function nowMs() {
-  return Date.now();
-}
-
-function createId(prefix = 'req') {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function safeString(value, fallback = '') {
+function safeStr(value, fallback) {
+  var fb = (typeof fallback === 'string') ? fallback : '';
   try {
-    if (value === undefined || value === null) return fallback;
-    const text = String(value).trim();
-    return text || fallback;
-  } catch {
-    return fallback;
-  }
+    if (value === null || value === undefined) return fb;
+    var s = String(value).trim();
+    return s || fb;
+  } catch (_) { return fb; }
 }
 
-function safeNumber(value, fallback = 0) {
+function safeNum(value, fallback) {
+  var fb = (typeof fallback === 'number') ? fallback : 0;
   try {
-    if (value === undefined || value === null || value === '') return fallback;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : fallback;
-  } catch {
-    return fallback;
-  }
+    if (value === null || value === undefined || value === '') return fb;
+    var n = Number(value);
+    return Number.isFinite(n) ? n : fb;
+  } catch (_) { return fb; }
 }
 
-function normalizeNullablePrice(value) {
+function nullablePrice(value) {
   try {
-    if (value === undefined || value === null || value === '') return null;
-    const n = Number(value);
+    if (value === null || value === undefined || value === '') return null;
+    var n = Number(value);
     return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
+  } catch (_) { return null; }
 }
 
-function toPositiveInteger(value, fallback) {
+function clampInt(value, min, max, fallback) {
   try {
-    const n = Number(value);
-    return Number.isInteger(n) && n > 0 ? n : fallback;
-  } catch {
-    return fallback;
-  }
+    var n = Math.floor(Number(value));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  } catch (_) { return fallback; }
 }
 
-function clampLimit(value) {
-  const parsed = toPositiveInteger(value, DEFAULTS.limit);
-  return Math.min(parsed, DEFAULTS.maxLimit);
-}
-
-function clampOffset(value) {
+// Herhangi bir hata nesnesinden okunabilir string
+function errMsg(err) {
+  if (!err) return 'bilinmiyor';
   try {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) return 0;
-    return Math.floor(n);
-  } catch {
-    return 0;
-  }
+    if (typeof err === 'string') return err;
+    if (typeof err.message === 'string' && err.message) return err.message;
+    if (err.error && typeof err.error.message === 'string') return err.error.message;
+    if (err.error && typeof err.error === 'string') return err.error;
+    var s = JSON.stringify(err);
+    if (s && s !== '{}') return s.slice(0, 300);
+    return 'Hata nesnesi okunamadı';
+  } catch (_) { return 'Hata serialize edilemedi'; }
 }
 
-function sanitizeError(error) {
-  try {
-    const code = safeString(error?.code, 'UNEXPECTED_ERROR');
-    const message = safeString(error?.message, 'BEKLENMEYEN HATA OLUŞTU.');
-    return { code, message };
-  } catch {
-    return { code: 'UNEXPECTED_ERROR', message: 'BEKLENMEYEN HATA OLUŞTU.' };
-  }
-}
+// ──────────────────────────────────────────────────────
+// BÖLÜM 2: CORS & HTTP
+// ──────────────────────────────────────────────────────
 
-// ─────────────────── CORS / HEADER / JSON ───────────────────
-
-function buildCorsHeaders(request) {
-  const origin = request.headers.get('origin') || '*';
+function corsHeaders(request) {
+  var origin = '*';
+  try { origin = request.headers.get('origin') || '*'; } catch (_) {}
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-headers': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-credentials': 'true',
-    vary: 'origin',
+    'vary': 'origin',
   };
 }
 
-function buildJsonHeaders(request, extra = {}) {
-  const cacheControl = extra['cache-control'] || extra['Cache-Control'] || 'no-store';
-  return {
-    ...buildCorsHeaders(request),
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': cacheControl,
-    ...extra,
-  };
-}
-
-function jsonResponse(request, body, status = 200, extra = {}) {
+function jsonResp(request, body, status, cacheCtrl) {
   return new Response(JSON.stringify(body, null, 2), {
-    status,
-    headers: buildJsonHeaders(request, extra),
+    status: (typeof status === 'number') ? status : 200,
+    headers: Object.assign({}, corsHeaders(request), {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': (typeof cacheCtrl === 'string') ? cacheCtrl : 'no-store',
+    }),
   });
 }
 
-function safeJsonParse(text, fallback = null) {
+// ──────────────────────────────────────────────────────
+// BÖLÜM 3: ENVELOPE
+// ──────────────────────────────────────────────────────
+
+function okEnv(rid, trid, t, code, data, meta) {
+  return {
+    ok: true, code: code || 'OK', error: null,
+    data: (data !== undefined) ? data : null,
+    meta: (meta !== undefined) ? meta : null,
+    worker: 'idm', version: '7.0.0', protocolVersion: '2026-03-15',
+    billingMode: 'owner_pays', requestId: rid, traceId: trid,
+    time: nowIso(), durationMs: Math.max(0, nowMs() - t),
+  };
+}
+
+function errEnv(rid, trid, t, code, message, bullets, httpStatus) {
+  var bul = (Array.isArray(bullets) && bullets.length) ? bullets : [
+    '1) Hata: ' + (message || 'bilinmiyor') + ' — işlem tamamlanamadı.',
+    '2) Kod: ' + (code || 'BILINMIYOR') + ' — detay için worker loglarını inceleyin.',
+    '3) Promptu ve model seçimini değiştirerek tekrar deneyin.',
+  ];
+  return {
+    ok: false, code: code || 'ERROR',
+    error: { message: message || 'Bilinmeyen hata', bullets: bul, displayDurationMs: 5000, retryable: true },
+    data: null, meta: null, worker: 'idm', version: '7.0.0',
+    requestId: rid, traceId: trid, time: nowIso(),
+    durationMs: Math.max(0, nowMs() - t), httpStatus: httpStatus || 500,
+  };
+}
+
+// ──────────────────────────────────────────────────────
+// BÖLÜM 4: KV DEPOLAMA (me parametre alır)
+// ──────────────────────────────────────────────────────
+
+var JOB_PFX = 'ai_job:';
+var CANCEL_PFX = 'ai_cancel:';
+var TERMINAL = { completed: true, failed: true, cancelled: true };
+
+function jobKey(id) { return JOB_PFX + id; }
+function cancelKey(id) { return CANCEL_PFX + id; }
+
+async function kvGet(me, key) {
   try {
-    return JSON.parse(text);
-  } catch {
-    return fallback;
+    var raw = await me.puter.kv.get(key);
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'string') { try { return JSON.parse(raw); } catch (_) { return raw; } }
+    return raw;
+  } catch (err) {
+    var e = new Error('KV okuma hatası (' + key + '): ' + errMsg(err));
+    e.code = 'KV_READ_ERROR'; throw e;
   }
 }
 
-// ─────────────────── ENVELOPE ───────────────────
-
-const APP_INFO = Object.freeze({
-  worker: 'idm',
-  version: '2.0.0',
-  protocolVersion: '2026-03-15',
-  purpose: 'MODEL CATALOG + IMAGE GENERATION API',
-  billingMode: 'owner_pays',
-  sourceType: 'excel-snapshot',
-  supportsCatalog: true,
-  supportsImageGeneration: true,
-  supportsJobs: true,
-});
-
-function createEnvelopeBase(requestId, traceId, startedAt) {
-  return {
-    worker: APP_INFO.worker,
-    version: APP_INFO.version,
-    protocolVersion: APP_INFO.protocolVersion,
-    billingMode: APP_INFO.billingMode,
-    requestId,
-    traceId,
-    time: nowIso(),
-    durationMs: Math.max(0, nowMs() - startedAt),
-  };
-}
-
-function successEnvelope({ requestId, traceId, startedAt, code = 'OK', data = null, meta = null }) {
-  return {
-    ok: true,
-    code,
-    error: null,
-    data,
-    meta,
-    ...createEnvelopeBase(requestId, traceId, startedAt),
-  };
-}
-
-function errorEnvelope({ requestId, traceId, startedAt, code, message, details = null, status = 400 }) {
-  return {
-    ok: false,
-    code,
-    error: {
-      type: 'idm.error',
-      message,
-      details,
-      retryable: false,
-    },
-    data: null,
-    meta: null,
-    status,
-    ...createEnvelopeBase(requestId, traceId, startedAt),
-  };
-}
-
-// ─────────────────── MODEL KATALOĞU SABİTLERİ ───────────────────
-
-const DEFAULTS = Object.freeze({
-  limit: 50,
-  maxLimit: 250,
-  cacheSeconds: 300,
-});
-
-const SPEED_SCORE_MAP = Object.freeze({
-  'Rekor Hız': 100,
-  'Gerçek zamanlı': 97,
-  'Ultra Hızlı': 94,
-  'Çok Hızlı': 88,
-  'Hızlı': 78,
-  'Orta-Hızlı': 68,
-  'Orta': 58,
-  'Orta/Derin': 52,
-  'Derin': 42,
-  'Yavaş/Derin': 34,
-  'Derin/Yavaş': 30,
-  'Ultra Derin': 24,
-  '~1 sn/görsel': 92,
-  '~3 sn/görsel': 78,
-  '~4 sn/görsel': 70,
-  '~5 sn/görsel': 62,
-  '~6 sn/görsel': 56,
-  '~7 sn/görsel': 50,
-  '~8 sn/görsel': 44,
-});
-
-const RAW_MODELS = [
-  {
-    "company": "Amazon",
-    "provider": "Amazon",
-    "modelName": "Nova 2 Lite",
-    "modelId": "amazon/nova-2-lite-v1",
-    "categoryRaw": "LLM / multimodal",
-    "badges": ["MULTIMODAL"],
-    "parameters": "~12B",
-    "speedLabel": "Çok Hızlı",
-    "inputPrice": 0.45,
-    "outputPrice": 3.75,
-    "imagePrice": null,
-    "traits": ["2. nesil AWS zekası","Nova ailesinin güncel üyesi","Kurumsal multimodal","Gelişmiş AWS entegrasyonu","Ölçeklenebilir bulut AI"],
-    "standoutFeature": "Nova 1'e göre kapsamlı mimari güncellemesi",
-    "useCase": "AWS kurumsal AI, yüksek hacim cloud deploy",
-    "rivalAdvantage": "Amazon ekosistemine entegrasyonda Bedrock'un en iyi seçeneği",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "amazon","accent": "#ff9900"}
-  },
-  {
-    "company": "Amazon",
-    "provider": "Amazon",
-    "modelName": "Nova Lite 1.0",
-    "modelId": "amazon/nova-lite-v1",
-    "categoryRaw": "LLM / multimodal",
-    "badges": ["MULTIMODAL"],
-    "parameters": "~7B",
-    "speedLabel": "Ultra Hızlı",
-    "inputPrice": 0.09,
-    "outputPrice": 0.36,
-    "imagePrice": null,
-    "traits": ["AWS ekosistemine native","Bedrock altyapı güvencesi","Kurumsal güvenilirlik","Hızlı multimodal erişim","Bulut entegre zeka"],
-    "standoutFeature": "AWS Bedrock native — S3, Lambda, SageMaker entegrasyonu",
-    "useCase": "AWS tabanlı AI pipeline, bulut kurumsal uygulamalar",
-    "rivalAdvantage": "AWS servisleriyle native entegrasyonda rakipsiz",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "amazon","accent": "#ff9900"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Dev",
-    "modelId": "bfl/flux-dev",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0375,
-    "traits": ["Geliştirici öncelikli erişim","Fine-tuning altyapısı","Açık araştırma lisansı","Prototip kalite standardı","Topluluk ekosistemi"],
-    "standoutFeature": "Geliştirici ve araştırmacı lisansı ile tam Pro kalite",
-    "useCase": "Model fine-tuning, araştırma, uygulama prototipi",
-    "rivalAdvantage": "Pro kalitesinde geliştirici dostu fiyat ve lisans",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Pro",
-    "modelId": "bfl/flux-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B Pro diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.075,
-    "traits": ["Profesyonel üretim standardı","Fotogerçekçi çıktı","Detay ve kompozisyon dengesi","Yaratıcı direktör onaylı","Güvenilir üretim modeli"],
-    "standoutFeature": "FLUX Pro — ticari üretim için standart model",
-    "useCase": "İçerik ajansı, e-ticaret, pazarlama görseli",
-    "rivalAdvantage": "DALL-E 3'e kıyasla renk ve kompozisyon üstünlüğü",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Pro 1.1 Ultra",
-    "modelId": "bfl/flux-pro-1.1-ultra",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Ultra diffusion",
-    "speedLabel": "~6 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.09,
-    "traits": ["BFL amiral gemisi kalite","Ultra çözünürlük kapasitesi","Fotogerçekçilik zirvesi","Profesyonel baskı standardı","Premium üretim kalitesi"],
-    "standoutFeature": "BFL'nin en yüksek kaliteli production modeli",
-    "useCase": "Ticari baskı, reklam kampanyası, billboard",
-    "rivalAdvantage": "Adobe Firefly'a karşı maliyet-kalite oranı üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "BFL",
-    "provider": "BFL",
-    "modelName": "Flux Schnell",
-    "modelId": "bfl/flux-schnell",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B distilled",
-    "speedLabel": "~1 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0045,
-    "traits": ["Yıldırım hızı üretim","Toplu işlem şampiyonu","Minimum gecikme","Distilasyon mucizesi","Ölçek için tasarlandı"],
-    "standoutFeature": "Apache 2.0 lisanslı en hızlı açık diffusion modeli",
-    "useCase": "Toplu görsel üretim, A/B testi, anlık önizleme",
-    "rivalAdvantage": "Lisans ve hız kategorisinde Flux Schnell mutlak lider",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "bfl","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1 Dev",
-    "modelId": "black-forest-labs/flux-1-dev",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0375,
-    "traits": ["Geliştirici kitlesi için pro kalite","Ticari kullanım uyumlu","Fine-tuning dostu","Açık araştırma modeli","Topluluk onaylı"],
-    "standoutFeature": "Flux 1 Pro kalitesi — geliştirici lisansı ile",
-    "useCase": "Uygulama geliştirme, prototipler, özel fine-tune",
-    "rivalAdvantage": "Pro'ya yakın kalite %37 daha düşük maliyetle",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1 Schnell",
-    "modelId": "black-forest-labs/flux-1-schnell",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B distilled",
-    "speedLabel": "~1 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0045,
-    "traits": ["Alman hız mühendisliği","Saniyenin altında üretim","Maliyet minimize uzmanı","Yüksek hacim makinesi","Distilled verimlilik"],
-    "standoutFeature": "Distilled model — 4 adımlı üretim, 1 saniyenin altında",
-    "useCase": "Gerçek zamanlı önizleme, yüksek hacim thumbnail",
-    "rivalAdvantage": "Kategorisinde en hızlı ve en ucuz profesyonel diffusion",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1.1 Pro",
-    "modelId": "black-forest-labs/flux-1.1-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Profesyonel görsel kalite","Detay sadakati zirvesi","Fotogerçekçilik uzmanı","Yaratıcı direktöre uygun","Sektör onaylı çıktı"],
-    "standoutFeature": "FLUX mimarisi — stable diffusion ötesi kalite",
-    "useCase": "Ticari görselleştirme, reklam, ürün fotoğrafı",
-    "rivalAdvantage": "DALL-E 3 ve Midjourney'e karşı detay doğruluğu üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux 1.1 Pro Ultra",
-    "modelId": "black-forest-labs/flux-1.1-pro-ultra",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "12B diffusion Ultra",
-    "speedLabel": "~6 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.09,
-    "traits": ["Ultra yüksek çözünürlük","Maksimum detay yoğunluğu","Baskı hazır kalite","Sanatsal mükemmellik","Ultra gerçekçi doku"],
-    "standoutFeature": "4K+ çözünürlük desteği — en yüksek kalite modu",
-    "useCase": "Baskı medyası, billboard, stüdyo kalitesi içerik",
-    "rivalAdvantage": "Midjourney v6.1 Ultra'ya karşı maliyet-kalite oranı",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux Kontext Max",
-    "modelId": "black-forest-labs/flux-kontext-max",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Kontext diffusion",
-    "speedLabel": "~7 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.12,
-    "traits": ["Bağlamsal görsel zeka","Referans görsel anlama","Tutarlı stil transferi","Çoklu referans füzyonu","Yaratıcı kontrol zirvesi"],
-    "standoutFeature": "Referans görsel ile stil tutarlılığı — sektörde ilk",
-    "useCase": "Marka kimliği, ürün varyasyonları, karakter tutarlılığı",
-    "rivalAdvantage": "IP-Adapter ve ControlNet'e kıyasla çok daha kolay kullanım",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Black Forest Labs",
-    "provider": "Black Forest Labs",
-    "modelName": "Flux Kontext Pro",
-    "modelId": "black-forest-labs/flux-kontext-pro",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Kontext diffusion Pro",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Pro düzey bağlam anlama","Stil tutarlılığı","Gelişmiş kompozisyon","Uygun fiyatlı Kontext","Marka uyumlu üretim"],
-    "standoutFeature": "Kontext Max'ın %50 düşük maliyetli versiyonu",
-    "useCase": "İçerik kanalları, sosyal medya şablonları",
-    "rivalAdvantage": "Fiyata göre Kontext özelliklerinde maksimum değer",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "black-forest-labs","accent": "#ef4444"}
-  },
-  {
-    "company": "Google",
-    "provider": "Google",
-    "modelName": "Gemini 3.1 Flash Image",
-    "modelId": "google/gemini-3.1-flash-image-preview",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Diffusion",
-    "speedLabel": "~3 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.1005,
-    "traits": ["Fotogerçekçi detay","Google mağazası kalitesi","Anlık görsel üretim","Çok dilli prompt desteği","Güvenli içerik filtreleme"],
-    "standoutFeature": "Gemini altyapısıyla metin-görsel entegrasyonu",
-    "useCase": "Pazarlama görselleri, sosyal medya, e-ticaret",
-    "rivalAdvantage": "DALL-E 3'e göre %30 daha hızlı üretim",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "google","accent": "#4285f4"}
-  },
-  {
-    "company": "OpenAI",
-    "provider": "OpenAI",
-    "modelName": "GPT Image 1",
-    "modelId": "openai/gpt-image-1",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Özel diffusion",
-    "speedLabel": "~8 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.0165,
-    "traits": ["LLM bağlamlı görsel üretim","Metin anlama üstünlüğü","Prompt sadakati lideri","OpenAI kalite damgası","Native ChatGPT entegrasyonu"],
-    "standoutFeature": "GPT'nin metin anlayışı ile görsel üretim füzyonu",
-    "useCase": "ChatGPT entegrasyonu, metin-görsel içerik, eğitim",
-    "rivalAdvantage": "Prompt takibi doğruluğunda DALL-E 3'ün üstünde",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "openai","accent": "#10a37f"}
-  },
-  {
-    "company": "Recraft",
-    "provider": "Recraft",
-    "modelName": "Recraft 20B",
-    "modelId": "recraft-ai/recraft-20b",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "20B diffusion",
-    "speedLabel": "~5 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["20 milyar parametre görsel güç","Yüksek parametreli yaratıcılık","Detay derinliği uzmanı","Profesyonel görsel standart","Tasarım odaklı AI"],
-    "standoutFeature": "20B parametre ile görsel sektörünün en büyük modellerinden",
-    "useCase": "Profesyonel yaratıcı stüdyo, reklam, illustrasyon",
-    "rivalAdvantage": "Parametre başına görsel kalitede sektör rekoru",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "recraft","accent": "#8b5cf6"}
-  },
-  {
-    "company": "Recraft",
-    "provider": "Recraft",
-    "modelName": "Recraft V3",
-    "modelId": "recraft-ai/recraft-v3",
-    "categoryRaw": "Image generation",
-    "badges": ["GÖRSEL"],
-    "parameters": "Özel vektör+raster",
-    "speedLabel": "~4 sn/görsel",
-    "inputPrice": null,
-    "outputPrice": null,
-    "imagePrice": 0.06,
-    "traits": ["Vektör tasarım öncüsü","Marka kimliği uyumlu","SVG düzeyinde hassasiyet","Tasarımcı araç seti","Kurumsal görsel standart"],
-    "standoutFeature": "SVG + raster hibrit çıktı — tasarımcı için optimize",
-    "useCase": "Logo, ikon, kurumsal kimlik, UI asset üretimi",
-    "rivalAdvantage": "Midjourney'e karşı vektör çıktı ve logo üretiminde üstün",
-    "sourceUrl": "https://developer.puter.com/ai/models/",
-    "style": {"brandKey": "recraft","accent": "#8b5cf6"}
+async function kvSet(me, key, value) {
+  try {
+    await me.puter.kv.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+    return true;
+  } catch (err) {
+    var e = new Error('KV yazma hatası (' + key + '): ' + errMsg(err));
+    e.code = 'KV_WRITE_ERROR'; throw e;
   }
+}
+
+async function kvListKeys(me, prefix) {
+  try {
+    if (typeof me.puter.kv.list === 'function') {
+      var r = await me.puter.kv.list(prefix);
+      if (Array.isArray(r)) return r.map(function(i) { return typeof i === 'string' ? i : (i && i.key) || null; }).filter(Boolean);
+    }
+    return [];
+  } catch (_) { return []; }
+}
+
+async function saveJob(me, job) {
+  var j = Object.assign({}, job, { updatedAt: nowIso() });
+  try { await kvSet(me, jobKey(j.jobId), j); } catch (_) {}
+  return j;
+}
+
+async function readJob(me, jobId) {
+  try { return await kvGet(me, jobKey(safeStr(jobId))); } catch (_) { return null; }
+}
+
+async function updateJob(me, jobId, fn) {
+  var cur = (await readJob(me, jobId)) || { jobId: jobId };
+  var next = fn(Object.assign({}, cur));
+  return saveJob(me, Object.assign({}, next, { jobId: jobId }));
+}
+
+async function listJobs(me, limit) {
+  var n = clampInt(limit, 1, 50, 20);
+  try {
+    var keys = await kvListKeys(me, JOB_PFX);
+    var jobs = [];
+    for (var i = 0; i < keys.length; i++) {
+      try { var j = await kvGet(me, keys[i]); if (j && j.jobId) jobs.push(j); } catch (_) {}
+    }
+    jobs.sort(function(a, b) { return safeStr(b.updatedAt || b.createdAt).localeCompare(safeStr(a.updatedAt || a.createdAt)); });
+    return jobs.slice(0, n);
+  } catch (_) { return []; }
+}
+
+// ──────────────────────────────────────────────────────
+// BÖLÜM 5: GÖRSEL ÜRETİMİ
+// ──────────────────────────────────────────────────────
+
+var IMAGE_DEFAULTS = { modelId: 'openai/gpt-image-1', quality: 'low', ratio: '1:1' };
+var ALLOWED_QUALITIES = { low: true, medium: true, high: true };
+var ALLOWED_RATIOS = { '1:1': true, '16:9': true, '9:16': true, '4:3': true, '3:4': true };
+
+// Bizim modelId → Puter'ın beklediği provider + model
+function mapModel(modelId) {
+  var s = safeStr(modelId, '').toLowerCase();
+  if (s.includes('gpt-image-1.5'))  return { provider: 'openai-image-generation', model: 'gpt-image-1.5' };
+  if (s.includes('gpt-image-1'))    return { provider: 'openai-image-generation', model: 'gpt-image-1' };
+  if (s.includes('dall-e-3'))       return { provider: 'openai-image-generation', model: 'dall-e-3' };
+  if (s.includes('flux-schnell') || s.includes('flux-1-schnell')) return { provider: 'together', model: 'black-forest-labs/FLUX.1-schnell' };
+  if (s.includes('flux-dev')    || s.includes('flux-1-dev'))      return { provider: 'together', model: 'black-forest-labs/FLUX.1-dev' };
+  if (s.includes('flux-1.1-pro') || s.includes('flux-pro'))       return { provider: 'together', model: 'black-forest-labs/FLUX.1.1-pro' };
+  if (s.includes('flux'))           return { provider: 'together', model: 'black-forest-labs/FLUX.1-schnell' };
+  if (s.includes('recraft'))        return { provider: 'together', model: 'recraft-ai/recraftv3' };
+  if (s.includes('gemini') && s.includes('image')) return { provider: 'gemini', model: 'gemini-2.5-flash-image-preview' };
+  if (s.includes('grok'))           return { provider: 'xai', model: 'grok-2-image' };
+  return { provider: 'openai-image-generation', model: 'gpt-image-1' };
+}
+
+// ratio → {w, h}
+function ratioWH(r) {
+  var m = { '1:1':{w:1024,h:1024}, '16:9':{w:1792,h:1024}, '9:16':{w:1024,h:1792}, '4:3':{w:1024,h:768}, '3:4':{w:768,h:1024} };
+  return m[r] || { w: 1024, h: 1024 };
+}
+
+// Puter result → URL
+function pickUrl(result) {
+  if (!result) return null;
+  if (typeof result === 'string' && result.trim()) return result.trim();
+  if (typeof result === 'object' && !Array.isArray(result)) {
+    for (var k of ['src','url','href','dataUrl','data_url']) {
+      if (typeof result[k] === 'string' && result[k].trim()) return result[k].trim();
+    }
+    if (result.data) return pickUrl(result.data);
+  }
+  if (Array.isArray(result) && result.length > 0) return pickUrl(result[0]);
+  return null;
+}
+
+// data URL → Puter FS → kalıcı URL
+async function persistUrl(me, dataUrl, jobId) {
+  try {
+    var path = '/idm_images/img_' + jobId + '_' + Date.now() + '.png';
+    var resp = await fetch(dataUrl);
+    var blob = await resp.blob();
+    var fsItem = await me.puter.fs.write(path, blob, { createMissingParents: true, overwrite: true });
+    if (typeof me.puter.fs.getReadURL === 'function') {
+      var u = await me.puter.fs.getReadURL(path);
+      if (typeof u === 'string' && u.trim()) return u.trim();
+    }
+    if (fsItem && typeof fsItem.getReadURL === 'function') {
+      var u2 = await fsItem.getReadURL();
+      if (typeof u2 === 'string' && u2.trim()) return u2.trim();
+    }
+    return dataUrl;
+  } catch (_) { return dataUrl; }
+}
+
+// Ana üretim — me ctx'ten gelir
+async function doGenerate(me, req) {
+  // me kontrol
+  if (!me || !me.puter) {
+    var e1 = new Error('me.puter erişilemiyor — worker context hatası.');
+    e1.code = 'ME_PUTER_UNAVAILABLE';
+    e1.bullets = [
+      '1) me.puter nesnesi handler\'da mevcut değil veya undefined olarak geldi.',
+      '2) Worker\'ın Puter platformunda doğru publish edilmediği anlaşılıyor.',
+      '3) Worker\'ı Puter dashboard\'dan sil, yeniden oluştur ve publish et.',
+    ];
+    throw e1;
+  }
+  if (typeof me.puter.ai.txt2img !== 'function') {
+    var e2 = new Error('me.puter.ai.txt2img mevcut değil.');
+    e2.code = 'TXT2IMG_UNAVAILABLE';
+    e2.bullets = [
+      '1) me.puter.ai.txt2img fonksiyonu bu worker context\'inde tanımlanmamış.',
+      '2) Puter AI servisi aktif değil veya worker izinleri eksik olabilir.',
+      '3) Worker\'ı yeniden publish edin; sorun devam ederse Puter support ile iletişime geçin.',
+    ];
+    throw e2;
+  }
+
+  var mapped = mapModel(req.modelId);
+  var size = ratioWH(req.ratio);
+  var opts = { provider: mapped.provider, model: mapped.model, test_mode: false };
+
+  // Provider'a özel parametreler
+  if (mapped.provider === 'openai-image-generation') {
+    opts.quality = safeStr(req.quality, 'low');
+    opts.ratio = size;
+  } else if (mapped.provider === 'together') {
+    opts.width = size.w;
+    opts.height = size.h;
+    opts.steps = 20;
+    opts.n = 1;
+    if (req.negativePrompt) opts.negative_prompt = req.negativePrompt;
+  } else if (mapped.provider === 'gemini') {
+    opts.ratio = { w: 1024, h: 1024 };
+  }
+  // xAI: sadece prompt
+
+  var result;
+  try {
+    result = await me.puter.ai.txt2img(req.prompt, opts);
+  } catch (err) {
+    var msg = errMsg(err);
+    var e3 = new Error('me.puter.ai.txt2img çağrısı başarısız: ' + msg);
+    e3.code = safeStr(err && err.code, 'TXT2IMG_CALL_FAILED');
+    e3.bullets = [
+      '1) me.puter.ai.txt2img("' + req.prompt.slice(0, 50) + '", opts) hata fırlattı.',
+      '2) Hata: ' + msg + ' — provider: ' + mapped.provider + ', model: ' + mapped.model,
+      '3) GPT Image 1 modelini seçip tekrar deneyin; promptu kısaltmayı da deneyin.',
+    ];
+    throw e3;
+  }
+
+  var rawUrl = pickUrl(result);
+  if (!rawUrl) {
+    var rs = '';
+    try { rs = JSON.stringify(result); } catch (_) { rs = typeof result; }
+    var e4 = new Error('Görsel üretildi fakat URL alınamadı. Sonuç: ' + rs.slice(0, 200));
+    e4.code = 'IMAGE_URL_MISSING';
+    e4.bullets = [
+      '1) me.puter.ai.txt2img() çağrısı tamamlandı fakat URL içeren .src/.url alanı bulunamadı.',
+      '2) Dönen sonuç tipi: ' + typeof result + ' — Puter API çıktı formatı değişmiş olabilir.',
+      '3) Farklı model (örn: GPT Image 1) ile tekrar deneyin.',
+    ];
+    throw e4;
+  }
+
+  // data URL ise FS'e kaydet
+  if (rawUrl.startsWith('data:')) {
+    rawUrl = await persistUrl(me, rawUrl, createId('fs'));
+  }
+
+  return rawUrl;
+}
+
+function buildJobRecord(jobId, req) {
+  var now = nowIso();
+  return {
+    jobId: jobId, feature: 'image', status: 'queued', progress: 0, step: 'queued',
+    outputUrl: null, outputUrls: [], url: null, urls: [], retryable: true, cancelRequested: false,
+    requestSummary: { model: req.modelId, prompt: req.prompt, promptPreview: req.prompt.length <= 140 ? req.prompt : req.prompt.slice(0,139)+'…' },
+    request: { model: req.model, modelId: req.modelId, ratio: req.ratio, quality: req.quality, style: req.style, negativePrompt: req.negativePrompt },
+    error: null, createdAt: now, updatedAt: now, finishedAt: null,
+  };
+}
+
+// ──────────────────────────────────────────────────────
+// BÖLÜM 6: MODEL KATALOĞU
+// ──────────────────────────────────────────────────────
+
+var CATALOG_DEFAULTS = { limit: 50, maxLimit: 250, cacheSeconds: 300 };
+var SPEED_MAP = { 'Ultra Hızlı':94,'Çok Hızlı':88,'Hızlı':78,'Orta':58,'~1 sn/görsel':92,'~3 sn/görsel':78,'~4 sn/görsel':70,'~5 sn/görsel':62,'~6 sn/görsel':56,'~7 sn/görsel':50,'~8 sn/görsel':44 };
+
+var RAW_MODELS = [
+  {company:'OpenAI',provider:'OpenAI',modelName:'GPT Image 1',modelId:'openai/gpt-image-1',speedLabel:'~8 sn/görsel',imagePrice:0.0165,traits:['LLM bağlamlı','Metin anlama','Prompt sadakati','OpenAI kalite','ChatGPT entegre'],standoutFeature:'GPT metin anlayışı ile görsel füzyon',useCase:'ChatGPT entegrasyonu, içerik',style:{brandKey:'openai',accent:'#10a37f'}},
+  {company:'OpenAI',provider:'OpenAI',modelName:'DALL-E 3',modelId:'openai/dall-e-3',speedLabel:'~6 sn/görsel',imagePrice:0.04,traits:['Yüksek prompt uyum','Detaylı çıktı','Güçlü stil kontrolü','OpenAI güvencesi','Geniş kullanım'],standoutFeature:'DALL-E serisinin doruk modeli',useCase:'Reklam, içerik, pazarlama',style:{brandKey:'openai',accent:'#10a37f'}},
+  {company:'BFL',provider:'BFL',modelName:'Flux Schnell',modelId:'bfl/flux-schnell',speedLabel:'~1 sn/görsel',imagePrice:0.0045,traits:['Yıldırım hızı','Toplu üretim','Minimum gecikme','Distilasyon','Ölçek için'],standoutFeature:'En hızlı açık diffusion',useCase:'Toplu görsel, A/B testi',style:{brandKey:'bfl',accent:'#ef4444'}},
+  {company:'BFL',provider:'BFL',modelName:'Flux Pro',modelId:'bfl/flux-pro',speedLabel:'~4 sn/görsel',imagePrice:0.075,traits:['Profesyonel','Fotogerçekçi','Detay kalite','Yaratıcı standart','Güvenilir'],standoutFeature:'Ticari üretim standart modeli',useCase:'İçerik ajansı, e-ticaret',style:{brandKey:'bfl',accent:'#ef4444'}},
+  {company:'BFL',provider:'BFL',modelName:'Flux Dev',modelId:'bfl/flux-dev',speedLabel:'~4 sn/görsel',imagePrice:0.0375,traits:['Geliştirici lisansı','Fine-tuning','Açık araştırma','Prototip','Topluluk'],standoutFeature:'Geliştirici lisansı Pro kalite',useCase:'Fine-tuning, araştırma',style:{brandKey:'bfl',accent:'#ef4444'}},
+  {company:'BFL',provider:'BFL',modelName:'Flux Pro 1.1 Ultra',modelId:'bfl/flux-pro-1.1-ultra',speedLabel:'~6 sn/görsel',imagePrice:0.09,traits:['Amiral gemisi','Ultra çözünürlük','Fotogerçekçilik','Baskı standart','Premium'],standoutFeature:'BFL en yüksek kalite',useCase:'Ticari baskı, reklam',style:{brandKey:'bfl',accent:'#ef4444'}},
+  {company:'Black Forest Labs',provider:'Black Forest Labs',modelName:'Flux 1 Schnell',modelId:'black-forest-labs/flux-1-schnell',speedLabel:'~1 sn/görsel',imagePrice:0.0045,traits:['Alman mühendislik','1 sn altı','Maliyet minimize','Yüksek hacim','Distilled'],standoutFeature:'4 adımda 1 sn altı üretim',useCase:'Gerçek zamanlı önizleme',style:{brandKey:'black-forest-labs',accent:'#ef4444'}},
+  {company:'Black Forest Labs',provider:'Black Forest Labs',modelName:'Flux 1 Dev',modelId:'black-forest-labs/flux-1-dev',speedLabel:'~5 sn/görsel',imagePrice:0.0375,traits:['Pro kalite','Ticari uyumlu','Fine-tune','Açık model','Topluluk'],standoutFeature:'Pro kalite geliştirici lisansı',useCase:'Uygulama, prototip',style:{brandKey:'black-forest-labs',accent:'#ef4444'}},
+  {company:'Black Forest Labs',provider:'Black Forest Labs',modelName:'Flux 1.1 Pro',modelId:'black-forest-labs/flux-1.1-pro',speedLabel:'~4 sn/görsel',imagePrice:0.06,traits:['Profesyonel','Detay sadakati','Fotogerçekçi','Yaratıcı','Sektör onaylı'],standoutFeature:'Stable diffusion ötesi kalite',useCase:'Ticari görselleştirme',style:{brandKey:'black-forest-labs',accent:'#ef4444'}},
+  {company:'Black Forest Labs',provider:'Black Forest Labs',modelName:'Flux Kontext Pro',modelId:'black-forest-labs/flux-kontext-pro',speedLabel:'~5 sn/görsel',imagePrice:0.06,traits:['Bağlam anlama','Stil tutarlılığı','Kompozisyon','Marka uyumlu','Kontext'],standoutFeature:'Kontext Max yarı fiyatı',useCase:'İçerik kanalları',style:{brandKey:'black-forest-labs',accent:'#ef4444'}},
+  {company:'Google',provider:'Google',modelName:'Gemini Flash Image',modelId:'google/gemini-3.1-flash-image-preview',speedLabel:'~3 sn/görsel',imagePrice:0.1005,traits:['Fotogerçekçi','Google kalite','Anlık üretim','Çok dilli','Güvenli içerik'],standoutFeature:'Gemini altyapısı metin-görsel',useCase:'Pazarlama, sosyal medya',style:{brandKey:'google',accent:'#4285f4'}},
+  {company:'Recraft',provider:'Recraft',modelName:'Recraft V3',modelId:'recraft-ai/recraft-v3',speedLabel:'~4 sn/görsel',imagePrice:0.06,traits:['Vektör tasarım','Marka kimliği','SVG hassasiyet','Tasarımcı araç','Kurumsal'],standoutFeature:'SVG raster hibrit çıktı',useCase:'Logo, ikon, kimlik',style:{brandKey:'recraft',accent:'#8b5cf6'}},
+  {company:'Recraft',provider:'Recraft',modelName:'Recraft 20B',modelId:'recraft-ai/recraft-20b',speedLabel:'~5 sn/görsel',imagePrice:0.06,traits:['20B parametre','Yüksek parametre','Detay derinliği','Profesyonel','Tasarım odaklı'],standoutFeature:'20B parametre sektör büyüklerinden',useCase:'Stüdyo, reklam',style:{brandKey:'recraft',accent:'#8b5cf6'}},
 ];
 
-// ─────────────────── MODEL KATALOĞU FONKSİYONLARI ───────────────────
-
-function deriveSpeedScore(label) {
-  const text = safeString(label);
-  if (Object.prototype.hasOwnProperty.call(SPEED_SCORE_MAP, text)) {
-    return SPEED_SCORE_MAP[text];
-  }
-  return 50;
-}
-
-function normalizeBadges(badges) {
+function normModel(row, i) {
   try {
-    const source = Array.isArray(badges) ? badges : [];
-    const unique = [];
-    for (const badge of source) {
-      const clean = safeString(badge).toUpperCase();
-      if (clean && !unique.includes(clean)) unique.push(clean);
-    }
-    return unique;
-  } catch {
-    return [];
+    var id = safeStr(row.modelId, 'unknown-'+i);
+    var co = safeStr(row.company, '?');
+    var sl = safeStr(row.speedLabel, 'Orta');
+    var st = (row.style && typeof row.style === 'object') ? row.style : {};
+    return {
+      id:id, company:co, provider:safeStr(row.provider,co), modelName:safeStr(row.modelName,'ADSIZ'), modelId:id,
+      categoryRaw:'Image generation', badges:['GÖRSEL'],
+      speedLabel:sl, speedScore:SPEED_MAP[sl]||50,
+      imagePrice:nullablePrice(row.imagePrice), inputPrice:null, outputPrice:null,
+      traits:Array.isArray(row.traits)?row.traits.map(function(t){return safeStr(t,'');}).filter(Boolean).slice(0,5):[],
+      standoutFeature:safeStr(row.standoutFeature,''), useCase:safeStr(row.useCase,''),
+      style:{brandKey:safeStr(st.brandKey,'generic'),accent:safeStr(st.accent,'#64748b')},
+    };
+  } catch (_) {
+    return {id:'broken-'+i,company:'?',provider:'?',modelName:'BOZUK',modelId:'broken-'+i,categoryRaw:'Image generation',badges:[],speedLabel:'Orta',speedScore:50,imagePrice:null,inputPrice:null,outputPrice:null,traits:[],standoutFeature:'',useCase:'',style:{brandKey:'generic',accent:'#64748b'}};
   }
 }
 
-function normalizeModel(row, index) {
-  try {
-    const company = safeString(row.company, 'BİLİNMİYOR');
-    const modelName = safeString(row.modelName, 'ADSIZ MODEL');
-    const modelId = safeString(row.modelId, `unknown-model-${index + 1}`);
-    const provider = safeString(row.provider, company);
-    const categoryRaw = safeString(row.categoryRaw, 'GENEL');
-    const badges = normalizeBadges(row.badges);
-    const parameters = safeString(row.parameters, '-');
-    const speedLabel = safeString(row.speedLabel, 'Orta');
-    const inputPrice = normalizeNullablePrice(row.inputPrice);
-    const outputPrice = normalizeNullablePrice(row.outputPrice);
-    const imagePrice = normalizeNullablePrice(row.imagePrice);
-    const traits = Array.isArray(row.traits)
-      ? row.traits.map((item) => safeString(item)).filter(Boolean).slice(0, 5)
-      : [];
-    const standoutFeature = safeString(row.standoutFeature);
-    const useCase = safeString(row.useCase);
-    const rivalAdvantage = safeString(row.rivalAdvantage);
-    const sourceUrl = safeString(row.sourceUrl);
-    const style = row && typeof row.style === 'object' && row.style ? row.style : {};
+var MODEL_CATALOG = RAW_MODELS.map(function(r,i){return normModel(r,i);});
 
-    return Object.freeze({
-      id: modelId,
-      company,
-      provider,
-      modelName,
-      modelId,
-      categoryRaw,
-      badges,
-      parameters,
-      speedLabel,
-      speedScore: deriveSpeedScore(speedLabel),
-      prices: Object.freeze({
-        input: inputPrice,
-        output: outputPrice,
-        image: imagePrice,
-      }),
-      traits: Object.freeze(traits),
-      standoutFeature,
-      useCase,
-      rivalAdvantage,
-      sourceUrl,
-      style: Object.freeze({
-        brandKey: safeString(style.brandKey, 'generic'),
-        accent: safeString(style.accent, '#64748b'),
-      }),
-    });
-  } catch {
-    return Object.freeze({
-      id: `broken-model-${index + 1}`,
-      company: 'BİLİNMİYOR',
-      provider: 'BİLİNMİYOR',
-      modelName: 'BOZUK KAYIT',
-      modelId: `broken-model-${index + 1}`,
-      categoryRaw: 'GENEL',
-      badges: Object.freeze(['GENEL']),
-      parameters: '-',
-      speedLabel: 'Orta',
-      speedScore: 50,
-      prices: Object.freeze({ input: null, output: null, image: null }),
-      traits: Object.freeze([]),
-      standoutFeature: '',
-      useCase: '',
-      rivalAdvantage: '',
-      sourceUrl: '',
-      style: Object.freeze({ brandKey: 'generic', accent: '#64748b' }),
-    });
-  }
+function buildModels(request) {
+  var url = new URL(request.url);
+  var search = safeStr(url.searchParams.get('search'),'').toLowerCase();
+  var sort = safeStr(url.searchParams.get('sort'),'image_price_asc');
+  if (sort === 'price_asc') sort = 'image_price_asc';
+  if (sort === 'price_desc') sort = 'image_price_desc';
+  var limit = clampInt(url.searchParams.get('limit'), 1, CATALOG_DEFAULTS.maxLimit, CATALOG_DEFAULTS.limit);
+  var offset = clampInt(url.searchParams.get('offset'), 0, 100000, 0);
+  var items = MODEL_CATALOG.slice();
+  if (search) items = items.filter(function(m){ return [m.company,m.provider,m.modelName,m.modelId].concat(m.traits).some(function(f){return safeStr(f,'').toLowerCase().includes(search);}); });
+  items.sort(function(a,b){
+    if (sort==='name_asc') return safeStr(a.modelName).localeCompare(safeStr(b.modelName),'tr');
+    if (sort==='name_desc') return safeStr(b.modelName).localeCompare(safeStr(a.modelName),'tr');
+    if (sort==='image_price_asc') return safeNum(a.imagePrice,1e9)-safeNum(b.imagePrice,1e9);
+    if (sort==='image_price_desc') return safeNum(b.imagePrice,-1)-safeNum(a.imagePrice,-1);
+    if (sort==='speed_desc') return safeNum(b.speedScore,0)-safeNum(a.speedScore,0);
+    return safeStr(a.company+' '+a.modelName).localeCompare(safeStr(b.company+' '+b.modelName),'tr');
+  });
+  var total = items.length;
+  return {items:items.slice(offset,offset+limit),total:total,limit:limit,offset:offset,hasMore:offset+limit<total,feature:'image'};
 }
 
-const MODEL_CATALOG = Object.freeze(RAW_MODELS.map((row, index) => normalizeModel(row, index)));
+// ──────────────────────────────────────────────────────
+// BÖLÜM 7: ROUTE'LAR
+// KRİTİK: me her handler'da ctx.me olarak alınıyor
+// ──────────────────────────────────────────────────────
 
-function uniqueSortedStrings(values) {
-  return [...new Set(values.map((item) => safeString(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'tr'));
-}
-
-const MODEL_FACETS = Object.freeze({
-  companies: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.company))),
-  badges: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.flatMap((item) => item.badges))),
-  categories: Object.freeze(uniqueSortedStrings(MODEL_CATALOG.map((item) => item.categoryRaw))),
+router.options('/*page', function(ctx) {
+  return new Response(null, { status: 204, headers: corsHeaders(ctx.request) });
 });
 
-function queryContains(haystack, needle) {
-  return safeString(haystack).toLocaleLowerCase('tr').includes(safeString(needle).toLocaleLowerCase('tr'));
-}
-
-function matchesSearch(item, search) {
-  if (!safeString(search)) return true;
-  const bag = [
-    item.company, item.provider, item.modelName, item.modelId, item.categoryRaw,
-    ...item.badges, ...item.traits, item.standoutFeature, item.useCase, item.rivalAdvantage,
-  ];
-  return bag.some((part) => queryContains(part, search));
-}
-
-function matchesCompany(item, company) {
-  if (!safeString(company)) return true;
-  return safeString(item.company).toLocaleLowerCase('tr') === safeString(company).toLocaleLowerCase('tr');
-}
-
-function matchesBadge(item, badge) {
-  if (!safeString(badge)) return true;
-  return item.badges.includes(safeString(badge).toUpperCase());
-}
-
-function matchesCategory(item, category) {
-  if (!safeString(category)) return true;
-  return safeString(item.categoryRaw).toLocaleLowerCase('tr') === safeString(category).toLocaleLowerCase('tr');
-}
-
-function sortModels(items, sortKey) {
-  const cloned = [...items];
-  switch (safeString(sortKey)) {
-    case 'name_asc': return cloned.sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr'));
-    case 'name_desc': return cloned.sort((a, b) => b.modelName.localeCompare(a.modelName, 'tr'));
-    case 'company_asc': return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-    case 'company_desc': return cloned.sort((a, b) => `${b.company} ${b.modelName}`.localeCompare(`${a.company} ${a.modelName}`, 'tr'));
-    case 'input_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.input, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.input, Number.MAX_SAFE_INTEGER));
-    case 'input_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.input, -1) - safeNumber(a.prices.input, -1));
-    case 'output_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.output, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.output, Number.MAX_SAFE_INTEGER));
-    case 'output_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.output, -1) - safeNumber(a.prices.output, -1));
-    case 'image_price_asc': return cloned.sort((a, b) => safeNumber(a.prices.image, Number.MAX_SAFE_INTEGER) - safeNumber(b.prices.image, Number.MAX_SAFE_INTEGER));
-    case 'image_price_desc': return cloned.sort((a, b) => safeNumber(b.prices.image, -1) - safeNumber(a.prices.image, -1));
-    case 'speed_desc': return cloned.sort((a, b) => safeNumber(b.speedScore, 0) - safeNumber(a.speedScore, 0));
-    case 'speed_asc': return cloned.sort((a, b) => safeNumber(a.speedScore, 0) - safeNumber(b.speedScore, 0));
-    default: return cloned.sort((a, b) => `${a.company} ${a.modelName}`.localeCompare(`${b.company} ${b.modelName}`, 'tr'));
-  }
-}
-
-function mapSortKey(sortKey, feature) {
-  const clean = safeString(sortKey, feature === 'image' ? 'price_asc' : 'company_asc');
-  if (clean === 'price_asc') return feature === 'image' ? 'image_price_asc' : 'input_price_asc';
-  if (clean === 'price_desc') return feature === 'image' ? 'image_price_desc' : 'input_price_desc';
-  return clean;
-}
-
-function isImageCatalogModel(item) {
-  const category = safeString(item.categoryRaw).toLocaleLowerCase('tr');
-  const modelId = safeString(item.modelId).toLocaleLowerCase('tr');
-  const badges = Array.isArray(item.badges) ? item.badges.join(' ').toLocaleLowerCase('tr') : '';
-  return (
-    item?.prices?.image != null ||
-    category.includes('image') ||
-    category.includes('görsel') ||
-    badges.includes('görsel') ||
-    badges.includes('image') ||
-    modelId.includes('flux') ||
-    modelId.includes('gpt-image') ||
-    modelId.includes('recraft') ||
-    modelId.includes('ideogram') ||
-    modelId.includes('stable-diffusion')
-  );
-}
-
-function serializeModelForClient(item) {
-  return {
-    ...item,
-    inputPrice: item?.prices?.input ?? null,
-    outputPrice: item?.prices?.output ?? null,
-    imagePrice: item?.prices?.image ?? null,
-  };
-}
-
-function parseQuery(request) {
-  const url = new URL(request.url);
-  const feature = safeString(url.searchParams.get('feature')).toLocaleLowerCase('tr');
-  return {
-    search: safeString(url.searchParams.get('search')),
-    company: safeString(url.searchParams.get('company')),
-    badge: safeString(url.searchParams.get('badge')).toUpperCase(),
-    category: safeString(url.searchParams.get('category')),
-    sort: mapSortKey(url.searchParams.get('sort'), feature),
-    limit: clampLimit(url.searchParams.get('limit')),
-    offset: clampOffset(url.searchParams.get('offset')),
-    modelId: safeString(url.searchParams.get('modelId')),
-    feature,
-  };
-}
-
-function buildListPayload(query) {
-  let items = MODEL_CATALOG.filter((item) =>
-    matchesSearch(item, query.search) &&
-    matchesCompany(item, query.company) &&
-    matchesBadge(item, query.badge) &&
-    matchesCategory(item, query.category)
-  );
-
-  if (query.feature === 'image') {
-    items = items.filter(isImageCatalogModel);
-  }
-
-  items = sortModels(items, query.sort);
-
-  if (query.modelId) {
-    items = items.filter((item) => item.modelId === query.modelId || item.id === query.modelId);
-  }
-
-  const total = items.length;
-  const paginated = items.slice(query.offset, query.offset + query.limit).map(serializeModelForClient);
-
-  return {
-    items: paginated,
-    total,
-    limit: query.limit,
-    offset: query.offset,
-    hasMore: query.offset + query.limit < total,
-    facets: MODEL_FACETS,
-    source: {
-      type: APP_INFO.sourceType,
-      totalModels: MODEL_CATALOG.length,
-      sourceUrl: MODEL_CATALOG[0]?.sourceUrl || '',
-    },
-    filters: {
-      search: query.search,
-      company: query.company,
-      badge: query.badge,
-      category: query.category,
-      sort: query.sort,
-      modelId: query.modelId,
-      feature: query.feature,
-    },
-  };
-}
-
-// ─────────────────── JOB BELLEK DEPOLAMA ───────────────────
-
-const IMAGE_DEFAULTS = Object.freeze({
-  modelId: 'black-forest-labs/flux-1-schnell',
-  quality: 'high',
-  ratio: '1:1',
-  n: 1,
-  maxN: 4,
-  jobHistoryLimit: 20,
+router.get('/', async function(ctx) {
+  var t = nowMs(), rid = createId('info'), trid = createId('t');
+  return jsonResp(ctx.request, okEnv(rid, trid, t, 'WORKER_INFO', {
+    worker:'idm', version:'7.0.0', totalModels:MODEL_CATALOG.length,
+    routes:['GET /','GET /health','GET /models','POST /generate','GET /jobs/status/:id','GET /jobs/history','POST /jobs/cancel'],
+  }));
 });
 
-const IMAGE_ALLOWED_QUALITIES = new Set(['low', 'medium', 'high']);
-const IMAGE_ALLOWED_RATIOS = new Set(['1:1', '16:9', '9:16', '4:5', '3:2', '2:3']);
-const JOB_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-const JOB_MEMORY_KEY = '__IDM_JOB_MEMORY__';
-const JOB_MEMORY_HISTORY_KEY = '__IDM_JOB_MEMORY_HISTORY__';
-const MEMORY_JOBS = globalThis[JOB_MEMORY_KEY] || (globalThis[JOB_MEMORY_KEY] = new Map());
-const MEMORY_HISTORY = globalThis[JOB_MEMORY_HISTORY_KEY] || (globalThis[JOB_MEMORY_HISTORY_KEY] = []);
-
-function hasKvNamespace(env) {
-  return !!(env && env.IDM_JOBS && typeof env.IDM_JOBS.get === 'function' && typeof env.IDM_JOBS.put === 'function');
-}
-
-function jobStorageKey(jobId) {
-  return `job:${jobId}`;
-}
-
-function historyStorageKey(job) {
-  const created = safeString(job?.createdAt, nowIso());
-  return `history:${created}:${job.jobId}`;
-}
-
-async function saveJob(env, job) {
-  const normalized = { ...job, updatedAt: safeString(job.updatedAt, nowIso()) };
-  MEMORY_JOBS.set(normalized.jobId, normalized);
-  const existingIndex = MEMORY_HISTORY.findIndex((item) => item.jobId === normalized.jobId);
-  if (existingIndex >= 0) MEMORY_HISTORY.splice(existingIndex, 1);
-  MEMORY_HISTORY.unshift({ jobId: normalized.jobId, createdAt: normalized.createdAt || normalized.updatedAt || nowIso() });
-  if (MEMORY_HISTORY.length > 200) MEMORY_HISTORY.splice(200);
-  if (hasKvNamespace(env)) {
-    const payload = JSON.stringify(normalized);
-    await env.IDM_JOBS.put(jobStorageKey(normalized.jobId), payload);
-    await env.IDM_JOBS.put(historyStorageKey(normalized), payload);
-  }
-  return normalized;
-}
-
-async function readJob(env, jobId) {
-  if (!jobId) return null;
-  if (hasKvNamespace(env)) {
-    const text = await env.IDM_JOBS.get(jobStorageKey(jobId));
-    if (text) {
-      const parsed = safeJsonParse(text, null);
-      if (parsed && typeof parsed === 'object') {
-        MEMORY_JOBS.set(jobId, parsed);
-        return parsed;
-      }
-    }
-  }
-  return MEMORY_JOBS.get(jobId) || null;
-}
-
-async function listJobs(env, limit = IMAGE_DEFAULTS.jobHistoryLimit) {
-  const clampedLimit = Math.max(1, Math.min(50, Math.floor(safeNumber(limit, IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-  if (hasKvNamespace(env) && typeof env.IDM_JOBS.list === 'function') {
-    const listed = await env.IDM_JOBS.list({ prefix: 'history:', limit: Math.max(clampedLimit * 3, clampedLimit) });
-    const jobs = [];
-    for (const key of listed.keys || []) {
-      const value = await env.IDM_JOBS.get(key.name);
-      const parsed = safeJsonParse(value, null);
-      if (parsed && typeof parsed === 'object') jobs.push(parsed);
-    }
-    jobs.sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)));
-    return jobs.slice(0, clampedLimit);
-  }
-  return MEMORY_HISTORY
-    .map((item) => MEMORY_JOBS.get(item.jobId))
-    .filter(Boolean)
-    .sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)))
-    .slice(0, clampedLimit);
-}
-
-async function updateJob(env, jobId, updater) {
-  const current = (await readJob(env, jobId)) || { jobId };
-  const next = updater({ ...current });
-  return saveJob(env, { ...next, jobId, updatedAt: nowIso() });
-}
-
-// ─────────────────── GÖRSEL ÜRETİMİ ───────────────────
-
-function buildPromptPreview(text, max = 140) {
-  const clean = safeString(text);
-  if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1)}…`;
-}
-
-function normalizeImageRequest(body) {
-  const prompt = safeString(body?.prompt);
-  if (!prompt) {
-    const error = new Error('PROMPT ZORUNLU.');
-    error.code = 'PROMPT_REQUIRED';
-    throw error;
-  }
-  const model = safeString(body?.model || body?.modelId, IMAGE_DEFAULTS.modelId);
-  const qualityInput = safeString(body?.quality, IMAGE_DEFAULTS.quality).toLowerCase();
-  const quality = IMAGE_ALLOWED_QUALITIES.has(qualityInput) ? qualityInput : IMAGE_DEFAULTS.quality;
-  const ratioInput = safeString(body?.ratio || body?.size, IMAGE_DEFAULTS.ratio);
-  const ratio = IMAGE_ALLOWED_RATIOS.has(ratioInput) ? ratioInput : IMAGE_DEFAULTS.ratio;
-  const n = Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(body?.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n)));
-  const style = safeString(body?.style);
-  const negativePrompt = safeString(body?.negativePrompt);
-  const clientRequestId = safeString(body?.clientRequestId);
-  const responseFormat = safeString(body?.responseFormat, 'url');
-  const guidance = safeString(body?.guidance);
-  const seed = safeString(body?.seed);
-  const metadata = body && typeof body.metadata === 'object' && body.metadata ? body.metadata : {};
-  return {
-    prompt, model, modelId: model, ratio, size: ratio, quality, style,
-    negativePrompt, n, responseFormat, guidance, seed, clientRequestId, metadata,
-    attachmentCount: safeNumber(body?.attachmentCount, 0),
-  };
-}
-
-function buildImageJobRecord(jobId, requestPayload) {
-  const createdAt = nowIso();
-  return {
-    jobId,
-    feature: 'image',
-    status: 'queued',
-    progress: 0,
-    step: 'queued',
-    queuePosition: null,
-    etaMs: null,
-    outputUrl: null,
-    outputUrls: [],
-    url: null,
-    urls: [],
-    retryable: true,
-    cancelRequested: false,
-    requestSummary: {
-      model: requestPayload.modelId,
-      prompt: requestPayload.prompt,
-      promptPreview: buildPromptPreview(requestPayload.prompt),
-    },
-    request: {
-      model: requestPayload.model,
-      modelId: requestPayload.modelId,
-      ratio: requestPayload.ratio,
-      size: requestPayload.size,
-      quality: requestPayload.quality,
-      style: requestPayload.style,
-      negativePrompt: requestPayload.negativePrompt,
-      n: requestPayload.n,
-      responseFormat: requestPayload.responseFormat,
-      metadata: requestPayload.metadata,
-      clientRequestId: requestPayload.clientRequestId,
-      attachmentCount: requestPayload.attachmentCount,
-    },
-    error: null,
-    createdAt,
-    updatedAt: createdAt,
-    finishedAt: null,
-  };
-}
-
-function collectStringCandidates(value, bag) {
-  if (value == null) return;
-  if (typeof value === 'string') {
-    const clean = value.trim();
-    if (clean) bag.push(clean);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectStringCandidates(item, bag);
-    return;
-  }
-  if (typeof value === 'object') {
-    for (const key of ['src', 'url', 'href', 'outputUrl']) {
-      if (typeof value[key] === 'string' && value[key].trim()) bag.push(value[key].trim());
-    }
-    for (const key of ['urls', 'outputUrls', 'images', 'items', 'results', 'data']) {
-      if (value[key] != null) collectStringCandidates(value[key], bag);
-    }
-  }
-}
-
-function extractImageUrls(raw) {
-  const bag = [];
-  collectStringCandidates(raw, bag);
-  return [...new Set(bag.filter(Boolean))];
-}
-
-function getImageGeneratorCandidates(env) {
-  return [
-    env?.me?.puter?.ai?.txt2img,
-    env?.me?.ai?.txt2img,
-    env?.puter?.ai?.txt2img,
-    globalThis?.me?.puter?.ai?.txt2img,
-    globalThis?.me?.ai?.txt2img,
-    globalThis?.puter?.ai?.txt2img,
-    globalThis?.Puter?.ai?.txt2img,
-  ].filter((candidate) => typeof candidate === 'function');
-}
-
-async function runTxt2Img(env, prompt, options) {
-  const candidates = getImageGeneratorCandidates(env);
-  if (!candidates.length) {
-    const error = new Error('WORKER İÇİNDE txt2img FONKSİYONU BULUNAMADI.');
-    error.code = 'TXT2IMG_UNAVAILABLE';
-    throw error;
-  }
-  let lastError = null;
-  for (const candidate of candidates) {
-    try {
-      return await candidate(prompt, options);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error('txt2img ÇAĞRISI BAŞARISIZ OLDU.');
-}
-
-function buildTxt2ImgOptions(job) {
-  const request = job.request || {};
-  return {
-    model: safeString(request.modelId || request.model, IMAGE_DEFAULTS.modelId),
-    quality: safeString(request.quality, IMAGE_DEFAULTS.quality),
-    ratio: safeString(request.ratio || request.size, IMAGE_DEFAULTS.ratio),
-    size: safeString(request.size || request.ratio, IMAGE_DEFAULTS.ratio),
-    n: Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(request.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n))),
-    style: safeString(request.style),
-    negativePrompt: safeString(request.negativePrompt),
-    responseFormat: 'url',
-    metadata: request.metadata || {},
-    guidance: safeString(request.guidance),
-    seed: safeString(request.seed),
-  };
-}
-
-async function processImageJob(env, jobId) {
-  const initialJob = await readJob(env, jobId);
-  if (!initialJob) return;
-  if (JOB_TERMINAL_STATUSES.has(initialJob.status)) return;
-  if (initialJob.cancelRequested) {
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'cancelled', progress: job.progress || 0,
-      step: 'cancelled', finishedAt: nowIso(), error: null,
-    }));
-    return;
-  }
-
-  await updateJob(env, jobId, (job) => ({
-    ...job, status: 'processing', progress: Math.max(5, safeNumber(job.progress, 0)),
-    step: 'processing', retryable: true, error: null,
-  }));
-
-  try {
-    const currentJob = await readJob(env, jobId);
-    if (!currentJob) return;
-    const result = await runTxt2Img(env, currentJob.requestSummary?.prompt || currentJob.request?.prompt || '', buildTxt2ImgOptions(currentJob));
-    const urls = extractImageUrls(result);
-    if (!urls.length) {
-      const error = new Error('GÖRSEL ÜRETİMİ TAMAMLANDI AMA URL ÇIKMADI.');
-      error.code = 'IMAGE_URL_MISSING';
-      throw error;
-    }
-    const latestJob = await readJob(env, jobId);
-    if (latestJob?.cancelRequested) {
-      await updateJob(env, jobId, (job) => ({
-        ...job, status: 'cancelled', progress: Math.max(safeNumber(job.progress, 0), 90),
-        step: 'cancelled', finishedAt: nowIso(), outputUrl: null, outputUrls: [],
-        url: null, urls: [], error: null,
-      }));
-      return;
-    }
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'completed', progress: 100, step: 'completed',
-      finishedAt: nowIso(), retryable: false,
-      outputUrl: urls[0] || null, outputUrls: urls, url: urls[0] || null, urls, error: null,
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    await updateJob(env, jobId, (job) => ({
-      ...job, status: 'failed', progress: Math.max(safeNumber(job.progress, 0), 100),
-      step: 'failed', finishedAt: nowIso(), retryable: true,
-      error: { message: safe.message || 'GÖRSEL ÜRETİMİ BAŞARISIZ.', retryable: true },
-    }));
-  }
-}
-
-// ─────────────────── REQUEST PARSE ───────────────────
-
-async function parseRequestJson(request) {
-  const text = await request.text();
-  if (!text.trim()) return {};
-  const parsed = safeJsonParse(text, null);
-  if (!parsed || typeof parsed !== 'object') {
-    const error = new Error('JSON BODY GEÇERSİZ.');
-    error.code = 'INVALID_JSON';
-    throw error;
-  }
-  return parsed;
-}
-
-// ─────────────────── ROUTE HANDLER'LAR ───────────────────
-
-async function handleOptions(request) {
-  return new Response(null, { status: 204, headers: buildCorsHeaders(request) });
-}
-
-async function handleRoot(request) {
-  const startedAt = nowMs();
-  const requestId = createId('info');
-  const traceId = createId('trace');
-  return jsonResponse(request, successEnvelope({
-    requestId, traceId, startedAt, code: 'WORKER_INFO',
-    data: {
-      worker: APP_INFO.worker,
-      version: APP_INFO.version,
-      protocolVersion: APP_INFO.protocolVersion,
-      purpose: APP_INFO.purpose,
-      supportsCatalog: true,
-      supportsImageGeneration: true,
-      supportsJobs: true,
-      routes: ['GET /','GET /health','GET /models','POST /generate','GET /jobs/status/:id','GET /jobs/history','POST /jobs/cancel'],
-      supportedQuery: ['search','company','badge','category','sort','limit','offset','modelId','feature'],
-    },
-    meta: { totalModels: MODEL_CATALOG.length, sourceType: APP_INFO.sourceType },
-  }));
-}
-
-async function handleHealth(request) {
-  const startedAt = nowMs();
-  const requestId = createId('health');
-  const traceId = createId('trace');
-  return jsonResponse(request, successEnvelope({
-    requestId, traceId, startedAt, code: 'HEALTH_OK',
-    data: {
-      status: 'ok', worker: APP_INFO.worker, totalModels: MODEL_CATALOG.length,
-      sourceType: APP_INFO.sourceType, supportsImageGeneration: true, supportsJobs: true, time: nowIso(),
-    },
-  }));
-}
-
-async function handleModels(request) {
-  const startedAt = nowMs();
-  const requestId = createId('models');
-  const traceId = createId('trace');
-  try {
-    const query = parseQuery(request);
-    const payload = buildListPayload(query);
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'MODELS_OK', data: payload,
-      meta: { totalModels: MODEL_CATALOG.length, returnedItems: payload.items.length },
-    }), 200, { 'cache-control': `public, max-age=${DEFAULTS.cacheSeconds}` });
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'MODELS_FAILED',
-      message: safe.message || 'MODEL KATALOĞU İSTEĞİ BAŞARISIZ.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleGenerate(request, env, ctx) {
-  const startedAt = nowMs();
-  const requestId = createId('generate');
-  const traceId = createId('trace');
-  try {
-    const body = await parseRequestJson(request);
-    const imageRequest = normalizeImageRequest(body);
-    const jobId = createId('img');
-    const job = buildImageJobRecord(jobId, imageRequest);
-    await saveJob(env, job);
-    ctx.waitUntil(processImageJob(env, jobId));
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'IMAGE_JOB_QUEUED',
-      data: { jobId, status: 'queued', progress: 0, step: 'queued', modelId: imageRequest.modelId, requestId },
-      meta: { feature: 'image' },
-    }), 202);
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'PROMPT_REQUIRED' || safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'IMAGE_GENERATE_FAILED',
-      message: safe.message || 'GÖRSEL ÜRETİMİ BAŞLATILAMADI.', status,
-    }), status);
-  }
-}
-
-async function handleJobStatus(request, env, jobId) {
-  const startedAt = nowMs();
-  const requestId = createId('status');
-  const traceId = createId('trace');
-  try {
-    const job = await readJob(env, jobId);
-    if (!job) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_NOT_FOUND', message: 'JOB BULUNAMADI.', status: 404,
-      }), 404);
-    }
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_STATUS_OK', data: job, meta: { feature: 'image' },
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_STATUS_FAILED',
-      message: safe.message || 'JOB DURUMU OKUNAMADI.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleJobHistory(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('history');
-  const traceId = createId('trace');
-  try {
-    const url = new URL(request.url);
-    const limit = Math.max(1, Math.min(50, Math.floor(safeNumber(url.searchParams.get('limit'), IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
-    const items = await listJobs(env, limit);
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_HISTORY_OK',
-      data: { items, total: items.length, limit, feature: 'image' },
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_HISTORY_FAILED',
-      message: safe.message || 'JOB GEÇMİŞİ OKUNAMADI.', status: 500,
-    }), 500);
-  }
-}
-
-async function handleJobCancel(request, env) {
-  const startedAt = nowMs();
-  const requestId = createId('cancel');
-  const traceId = createId('trace');
-  try {
-    const body = await parseRequestJson(request);
-    const jobId = safeString(body?.jobId);
-    if (!jobId) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_ID_REQUIRED', message: 'jobId ZORUNLU.', status: 400,
-      }), 400);
-    }
-    const current = await readJob(env, jobId);
-    if (!current) {
-      return jsonResponse(request, errorEnvelope({
-        requestId, traceId, startedAt, code: 'JOB_NOT_FOUND', message: 'JOB BULUNAMADI.', status: 404,
-      }), 404);
-    }
-    const job = await updateJob(env, jobId, (jobState) => {
-      if (JOB_TERMINAL_STATUSES.has(jobState.status)) return { ...jobState, cancelRequested: true };
-      return { ...jobState, cancelRequested: true, status: 'cancelled', step: 'cancelled', finishedAt: nowIso() };
-    });
-    return jsonResponse(request, successEnvelope({
-      requestId, traceId, startedAt, code: 'JOB_CANCELLED', data: job,
-    }));
-  } catch (error) {
-    const safe = sanitizeError(error);
-    const status = safe.code === 'INVALID_JSON' ? 400 : 500;
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt, code: safe.code || 'JOB_CANCEL_FAILED',
-      message: safe.message || 'JOB İPTAL EDİLEMEDİ.', status,
-    }), status);
-  }
-}
-
-async function handleNotFound(request) {
-  const startedAt = nowMs();
-  const requestId = createId('route');
-  const traceId = createId('trace');
-  return jsonResponse(request, errorEnvelope({
-    requestId, traceId, startedAt, code: 'ROUTE_NOT_FOUND', message: 'ROUTE BULUNAMADI.', status: 404,
-  }), 404);
-}
-
-// ─────────────────── DISPATCHER ───────────────────
-
-async function dispatchRequest(request, env, ctx) {
-  const url = new URL(request.url);
-  const pathname = url.pathname.replace(/\/+$/, '') || '/';
-  const method = request.method.toUpperCase();
-
-  if (method === 'OPTIONS') return handleOptions(request);
-  if (method === 'GET' && pathname === '/') return handleRoot(request);
-  if (method === 'GET' && pathname === '/health') return handleHealth(request);
-  if (method === 'GET' && pathname === '/models') return handleModels(request);
-  if (method === 'POST' && pathname === '/generate') return handleGenerate(request, env, ctx);
-  if (method === 'GET' && pathname.startsWith('/jobs/status/')) {
-    const jobId = decodeURIComponent(pathname.slice('/jobs/status/'.length));
-    return handleJobStatus(request, env, jobId);
-  }
-  if (method === 'GET' && pathname === '/jobs/history') return handleJobHistory(request, env);
-  if (method === 'POST' && pathname === '/jobs/cancel') return handleJobCancel(request, env);
-  return handleNotFound(request);
-}
-
-// ─────────────────── FETCH ENTRY POINT ───────────────────
-
-addEventListener('fetch', (event) => {
-  event.respondWith(handleFetch(event.request, event));
+router.get('/health', async function(ctx) {
+  var request = ctx.request, me = ctx.me;
+  var t = nowMs(), rid = createId('h'), trid = createId('t');
+  var aiOk = false;
+  try { aiOk = !!(me && me.puter && me.puter.ai && typeof me.puter.ai.txt2img === 'function'); } catch (_) {}
+  return jsonResp(request, okEnv(rid, trid, t, 'HEALTH_OK', { status:'ok', worker:'idm', version:'7.0.0', totalModels:MODEL_CATALOG.length, aiAvailable:aiOk, meAvailable:!!(me && me.puter), time:nowIso() }));
 });
 
-async function handleFetch(request, event) {
-  const env = {};
-  const ctx = {
-    waitUntil(promise) {
-      if (event && typeof event.waitUntil === 'function') {
-        event.waitUntil(promise);
-      }
-    },
-  };
+router.get('/models', async function(ctx) {
+  var request = ctx.request;
+  var t = nowMs(), rid = createId('m'), trid = createId('t');
   try {
-    return await dispatchRequest(request, env, ctx);
-  } catch (error) {
-    const startedAt = nowMs();
-    const requestId = createId('fatal');
-    const traceId = createId('trace');
-    const safe = sanitizeError(error);
-    return jsonResponse(request, errorEnvelope({
-      requestId, traceId, startedAt,
-      code: safe.code || 'UNEXPECTED_ERROR',
-      message: safe.message || 'BEKLENMEYEN HATA OLUŞTU.',
-      status: 500,
-    }), 500);
+    var p = buildModels(request);
+    return jsonResp(request, okEnv(rid, trid, t, 'MODELS_OK', p, { returnedItems:p.items.length }), 200, 'public, max-age='+CATALOG_DEFAULTS.cacheSeconds);
+  } catch (err) {
+    var msg = errMsg(err);
+    return jsonResp(request, errEnv(rid, trid, t, 'MODELS_FAILED', msg, ['1) Model kataloğu oluşturulurken hata: '+msg,'2) Model verisi parse edilemedi.','3) Sayfayı yenileyip tekrar deneyin.'], 500), 500);
   }
-}
+});
 
+router.post('/generate', async function(ctx) {
+  var request = ctx.request;
+  var me = ctx.me; // ← Puter worker context — me.puter.ai buradan gelir
+  var t = nowMs(), rid = createId('g'), trid = createId('t');
+  var jobId = null, reqData = null;
+
+  try {
+    // Body parse
+    var body = {};
+    try { body = await request.json(); }
+    catch (_) {
+      return jsonResp(request, errEnv(rid, trid, t, 'INVALID_JSON', 'İstek gövdesi JSON formatında değil.', ['1) POST /generate gövdesi JSON parse edilemedi.','2) Content-Type: application/json header ekleyin.','3) Gövdedeki JSON sözdizimini kontrol edin.'], 400), 400);
+    }
+
+    // Prompt
+    var prompt = safeStr(body && body.prompt, '');
+    if (!prompt) {
+      return jsonResp(request, errEnv(rid, trid, t, 'PROMPT_REQUIRED', 'Prompt zorunludur.', ['1) Prompt alanı boş — görsel üretmek için metin zorunludur.','2) Sol paneldeki Prompt alanına açıklayıcı metin yazın.','3) Örnek: "Gece yağmurunda neon ışıklı şehir, sinematik"'], 400), 400);
+    }
+
+    // Parametreler
+    var modelId = safeStr((body.model || body.modelId), IMAGE_DEFAULTS.modelId);
+    var quality = safeStr(body.quality, IMAGE_DEFAULTS.quality).toLowerCase();
+    if (!ALLOWED_QUALITIES[quality]) quality = IMAGE_DEFAULTS.quality;
+    var ratio = safeStr((body.ratio || body.size), IMAGE_DEFAULTS.ratio);
+    if (!ALLOWED_RATIOS[ratio]) ratio = IMAGE_DEFAULTS.ratio;
+
+    reqData = { prompt:prompt, model:modelId, modelId:modelId, ratio:ratio, quality:quality, style:safeStr(body.style,''), negativePrompt:safeStr(body.negativePrompt,'') };
+
+    // Job kaydet
+    jobId = createId('img');
+    await saveJob(me, buildJobRecord(jobId, reqData));
+    try { await updateJob(me, jobId, function(j){ return Object.assign({},j,{status:'processing',progress:10,step:'processing'}); }); } catch (_) {}
+
+    // Üret
+    var finalUrl = null, genErr = null;
+    try { finalUrl = await doGenerate(me, reqData); }
+    catch (err) { genErr = err; }
+
+    if (genErr) {
+      var em = errMsg(genErr);
+      var eb = Array.isArray(genErr.bullets) ? genErr.bullets : ['1) Görsel üretim API hatası: '+em,'2) Model: '+modelId+' — parametre veya provider uyumsuzluğu.','3) GPT Image 1 modelini seçip tekrar deneyin.'];
+      try { await updateJob(me, jobId, function(j){ return Object.assign({},j,{status:'failed',progress:100,step:'failed',finishedAt:nowIso(),error:{message:em,retryable:true}}); }); } catch (_) {}
+      return jsonResp(request, {
+        ok:false, code:safeStr(genErr.code,'GENERATE_FAILED'),
+        error:{message:em,bullets:eb,displayDurationMs:5000,retryable:true},
+        data:{jobId:jobId,status:'failed',progress:100,step:'failed',modelId:modelId,requestId:rid,outputUrl:null,outputUrls:[],error:{message:em}},
+        meta:{feature:'image'}, worker:'idm', version:'7.0.0',
+        requestId:rid, traceId:trid, time:nowIso(), durationMs:Math.max(0,nowMs()-t),
+      }, 200);
+    }
+
+    var urls = finalUrl ? [finalUrl] : [];
+    try { await updateJob(me, jobId, function(j){ return Object.assign({},j,{status:'completed',progress:100,step:'completed',finishedAt:nowIso(),retryable:false,outputUrl:urls[0]||null,outputUrls:urls,url:urls[0]||null,urls:urls,error:null}); }); } catch (_) {}
+
+    return jsonResp(request, okEnv(rid, trid, t, 'IMAGE_JOB_COMPLETED', {
+      jobId:jobId, status:'completed', progress:100, step:'completed',
+      modelId:modelId, requestId:rid,
+      outputUrl:urls[0]||null, outputUrls:urls, url:urls[0]||null, urls:urls, error:null,
+    }, {feature:'image'}));
+
+  } catch (err) {
+    var m2 = errMsg(err);
+    var b2 = Array.isArray(err.bullets) ? err.bullets : ['1) /generate beklenmeyen hata: '+m2,'2) Kod: '+safeStr(err.code,'UNEXPECTED'),'3) Promptu ve modeli değiştirip tekrar deneyin.'];
+    return jsonResp(request, {
+      ok:false, code:safeStr(err.code,'UNEXPECTED_ERROR'),
+      error:{message:m2,bullets:b2,displayDurationMs:5000,retryable:true},
+      data:jobId?{jobId:jobId,status:'failed',progress:0,step:'failed',modelId:reqData?reqData.modelId:null,requestId:rid,outputUrl:null,outputUrls:[],error:{message:m2}}:null,
+      meta:{feature:'image'}, worker:'idm', version:'7.0.0',
+      requestId:rid, traceId:trid, time:nowIso(), durationMs:Math.max(0,nowMs()-t),
+    }, 500);
+  }
+});
+
+router.get('/jobs/status/:id', async function(ctx) {
+  var request = ctx.request, me = ctx.me, params = ctx.params;
+  var t = nowMs(), rid = createId('s'), trid = createId('t');
+  try {
+    var jobId = safeStr(params && params.id, '');
+    if (!jobId) return jsonResp(request, errEnv(rid,trid,t,'JOB_ID_REQUIRED','jobId eksik.',['1) URL\'de :id parametresi bulunamadı.','2) /jobs/status/JOB_ID formatını kontrol edin.','3) Geçerli bir jobId ile tekrar deneyin.'],400),400);
+    var job = await readJob(me, jobId);
+    if (!job) return jsonResp(request, errEnv(rid,trid,t,'JOB_NOT_FOUND','Job bulunamadı: '+jobId,['1) '+jobId+' ID\'li job KV\'de bulunamadı.','2) Worker yeniden başlatıldığında KV verileri kalıcıdır, ancak eski job silinmiş olabilir.','3) Yeni üretim başlatın.'],404),404);
+    return jsonResp(request, okEnv(rid,trid,t,'JOB_STATUS_OK',job,{feature:'image'}));
+  } catch (err) {
+    var m = errMsg(err);
+    return jsonResp(request, errEnv(rid,trid,t,safeStr(err.code,'STATUS_ERROR'),m,['1) /jobs/status hatası: '+m,'2) KV okuma başarısız.','3) Birkaç sn bekleyip tekrar deneyin.'],500),500);
+  }
+});
+
+router.get('/jobs/history', async function(ctx) {
+  var request = ctx.request, me = ctx.me;
+  var t = nowMs(), rid = createId('h'), trid = createId('t');
+  try {
+    var url = new URL(request.url);
+    var limit = clampInt(url.searchParams.get('limit'),1,50,20);
+    var items = await listJobs(me, limit);
+    return jsonResp(request, okEnv(rid,trid,t,'JOB_HISTORY_OK',{items:items,total:items.length,limit:limit,feature:'image'}));
+  } catch (err) {
+    var m = errMsg(err);
+    return jsonResp(request, errEnv(rid,trid,t,safeStr(err.code,'HISTORY_ERROR'),m,['1) /jobs/history hatası: '+m,'2) KV listesi okunamadı.','3) Sayfa yenilendiğinde otomatik güncellenecek.'],500),500);
+  }
+});
+
+router.post('/jobs/cancel', async function(ctx) {
+  var request = ctx.request, me = ctx.me;
+  var t = nowMs(), rid = createId('c'), trid = createId('t');
+  try {
+    var body = {}; try { body = await request.json(); } catch (_) {}
+    var jobId = safeStr(body && body.jobId, '');
+    if (!jobId) return jsonResp(request, errEnv(rid,trid,t,'JOB_ID_REQUIRED','jobId zorunlu.',['1) İptal isteğinde jobId gövdede bulunamadı.','2) {"jobId":"..."} formatını kontrol edin.','3) jobId boş olmamalı.'],400),400);
+    var cur = await readJob(me, jobId);
+    if (!cur) return jsonResp(request, errEnv(rid,trid,t,'JOB_NOT_FOUND','İptal edilecek job yok.',['1) '+jobId+' KV\'de bulunamadı.','2) Job zaten tamamlanmış veya silinmiş.','3) Geçmişi yenileyin.'],404),404);
+    try { await kvSet(me, cancelKey(jobId), {jobId:jobId,requestedAt:nowIso()}); } catch (_) {}
+    var job = await updateJob(me, jobId, function(j){ var p={cancelRequested:true}; if(!TERMINAL[j.status]){p.status='cancelled';p.step='cancelled';p.finishedAt=nowIso();} return Object.assign({},j,p); });
+    return jsonResp(request, okEnv(rid,trid,t,'JOB_CANCELLED',job));
+  } catch (err) {
+    var m = errMsg(err);
+    return jsonResp(request, errEnv(rid,trid,t,safeStr(err.code,'CANCEL_ERROR'),m,['1) /jobs/cancel hatası: '+m,'2) KV yazma başarısız.','3) Sayfayı yenileyip tekrar deneyin.'],500),500);
+  }
+});
