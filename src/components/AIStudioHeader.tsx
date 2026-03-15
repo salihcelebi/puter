@@ -2,6 +2,22 @@
 // src/components/AIStudioHeader.tsx
 // Bu üst bileşen, katalog ve sohbet sayfalarına ortak ürün başlığını verir.
 // ===============================
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, AI STUDIO BÖLÜMÜNDE ORTAK ÜST BAŞLIK VE GEZİNME ŞERİDİNİ SUNAN BİLEŞENDİR.
+2) DOSYA BAŞINDAKİ YORUM, BU BİLEŞENİN KATALOG VE SOHBET SAYFALARINA ORTAK ÜRÜN BAŞLIĞI VERDİĞİNİ AÇIKÇA SÖYLER.
+3) Link VE NavLink KULLANARAK ROUTER TABANLI GEZİNME SAĞLAR.
+4) NAV_ITEMS DİZİSİNDE Sohbet, Görsel Üretim, Video VE Ses (TTS) BAŞLIKLARI TANIMLANMIŞTIR.
+5) YANİ BU BİLEŞEN, FARKLI AI MODÜLLERİ ARASINDA HIZLI GEÇİŞ YAPILMASI İÇİN TASARLANMIŞTIR.
+6) searchValue VE onSearchChange PROP'LARI, GEREKİRSE ÜST BÖLÜMDE ARAMA GİRDİSİ KULLANILMASINA İZİN VERİR.
+7) navClass() FONKSİYONU, AKTİF VE PASİF SEKME STİLLERİNİ DİNAMİK OLARAK ÜRETİR.
+8) AKTİF ÖĞE İÇİN EMERALD TONLU DAHA BELİRGİN BİR GÖRSEL STİL UYGULANIR.
+9) DOSYA, FARKLI AI SAYFALARINI TEK ÜRÜN BAŞLIĞI ALTINDA TOPLADIĞI İÇİN DENEYİM TUTARLILIĞI SAĞLAR.
+10) KISACA: BU DOSYA, AI STUDIO İÇİN ÜST BAŞLIK, SEKME NAVİGASYONU VE OPSİYONEL ARAMA ALANI SUNAN ORTAK HEADER BİLEŞENİDİR.
+█████████████████████████████████████████████
+*/
+
+
 import { Link, NavLink } from 'react-router-dom';
 
 type AIStudioHeaderProps = {
