@@ -1,25 +1,31 @@
 /*
-  DOSYA: api-cagrilari.js
-
-  AMAÇ
-  - "prompt zorunludur" gibi salak ve gereksiz hataları minimuma indirmek
-  - Frontend farklı field adları gönderse bile isteği normalize etmek
-  - Chat / image / tts / video / photo-to-video uçlarını daha toleranslı hale getirmek
-  - Kullanıcıya boş, anlamsız veya teknik hata yerine açıklayıcı hata vermek
-
-  BU DOSYADA ÖNGÖRÜLÜP ÇÖZÜLEN 10+ HATA
-  1) prompt yerine text/message/content/query/input/betimleme gelmesi
-  2) body JSON parse edilememesi
-  3) content-type yanlış olsa da text body gelmesi
-  4) sadece boşluklardan oluşan prompt/text
-  5) image route’una yanlış field adı ile prompt gelmesi
-  6) tts route’una prompt yerine text/message gelmesi
-  7) video route’unda duration/seconds/length karmaşası
-  8) photo-to-video route’unda imageUrl alias karmaşası
-  9) sayı alanlarının string gelmesi
-  10) /photo-to-video ile /photoToVideo karışması
-  11) OPTIONS/CORS eksikliği
-  12) provider/model verilmezse patlama
+█████████████████████████████████████████████
+1) BU DOSYA, TOLERANSLI AI GATEWAY WORKER'IDIR.
+2) APP_INFO İÇİNDE worker: "api-cagrilari", version: "2.0.0" VE purpose: "Toleranslı AI gateway worker" TANIMLANMIŞTIR.
+3) DOSYANIN AÇIK HEDEFİ, FRONTEND FARKLI FIELD ADLARI GÖNDERSE BİLE İSTEĞİ NORMALE ÇEKMEKTİR.
+4) CHAT, IMAGE, TTS, VIDEO VE PHOTO-TO-VIDEO UÇLARI İÇİN TEK BİR GATEWAY DAVRANIŞI SUNAR.
+5) DEFAULTS NESNESİ, chatModel, videoProvider, videoModel, videoSeconds VE MAX UZUNLUKLAR GİBİ TEMEL AYARLARI BARINDIRIR.
+6) corsHeaders(), JSON CONTENT-TYPE VE CORS BAŞLIKLARINI BİRLİKTE ÜRETİR.
+7) ok() VE fail() YARDIMCILARI, TÜM BAŞARILI VE BAŞARISIZ YANITLARI TUTARLI JSON ZARFIYLA DÖNER.
+8) safeReadBody(), application/json OLMASA BİLE TEXT BODY'Yİ OKUYUP MÜMKÜNSE JSON'A ÇEVİRMEYE ÇALIŞIR.
+9) mergeQueryIntoBody(), QUERY PARAMETRELERİNİ BODY İLE BİRLEŞTİREREK ESNEK İSTEK KABULÜ SAĞLAR.
+10) normalizePrompt(), prompt, text, message, content, query, input, description, betimleme GİBİ ÇOK SAYIDA ALIAS'I TEK PROMPT'A DÖNÜŞTÜRÜR.
+11) normalizeText(), TTS VE METİN TABANLI İSTEKLER İÇİN BENZER ALIAS NORMALİZASYONU YAPAR.
+12) normalizeImageUrl() VE normalizeImageBase64(), imageUrl / image_url / photoUrl / url GİBİ DAĞINIK ALAN ADLARINI TEKLEŞTİRİR.
+13) normalizeChatPayload(), CHAT İSTEĞİ İÇİN MODEL, TEMPERATURE, MAX TOKENS VE TOOLS GİBİ DEĞERLERİ DERLER.
+14) normalizeImagePayload(), PROMPT, MODEL, QUALITY, RATIO, BOYUT, NEGATIVE PROMPT, INPUT IMAGE, MASK VE TEST MODE GİBİ ALANLARI TOPLAR.
+15) normalizeTtsPayload(), TEXT, PROVIDER, MODEL, VOICE, ENGINE VE LANGUAGE BİLGİLERİNİ DÜZENLER.
+16) normalizeVideoPayload(), duration / seconds / length KARMAŞASINI TOPARLAYIP TEK seconds ALANINA ÇEVİRİR.
+17) normalizePhotoToVideoPayload(), PROMPT VE imageUrl BAŞTA OLMAK ÜZERE FOTOĞRAFTAN VİDEO İSTEĞİNİ YAPISAL HALE GETİRİR.
+18) toPositiveNumber() VE toOptionalPositiveNumber(), SAYI ALANLARININ STRING GELMESİ GİBİ HATALARI YUMUŞATIR.
+19) clampText(), METİNİ TRAŞLAYIP UZUNLUK SINIRINI KORUR.
+20) sanitizeError(), HATA MESAJLARINDAN BEARER TOKEN BENZERİ HASSAS BİLGİLERİ TEMİZLEMEYE ÇALIŞIR.
+21) getPuterContext(), user.puter VARSA ONU, YOKSA me.puter BAĞLAMINI KULLANARAK USER_PAYS / OWNER_PAYS MİMARİSİNE UYUM SAĞLAR.
+22) getBillingMode(), USER_PAYS İLE OWNER_PAYS MODLARINI AYIRT EDER.
+23) validateChatPayload() GİBİ KONTROLLER, BOŞ PROMPT GİBİ HATALARDA TEKNİK PATLAMA YERİNE AÇIK KODLU HATA DÖNMEYİ AMAÇLAR.
+24) DOSYANIN AÇILIŞ YORUMUNDA 10'DAN FAZLA ÖNGÖRÜLEN HATA SENARYOSU AÇIKÇA SAYILMIŞTIR; BU DA DOSYANIN “SERT DOĞRULAYICI DEĞİL, TOLERANSLI GEÇİT” OLDUĞUNU GÖSTERİR.
+25) KISACA: BU DOSYA, DAĞINIK VE HATALI İSTEMCİ İSTEKLERİNİ NORMALİZE EDİP CHAT / IMAGE / TTS / VIDEO AKIŞLARINA GÜVENLİ ŞEKİLDE AKTARAN MERKEZİ AI GATEWAY WORKER'IDIR.
+█████████████████████████████████████████████
 */
 
 const APP_INFO = {
