@@ -5,7 +5,7 @@
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
 const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.0.0';
+const WORKER_VERSION = '18.0.1';
 const JOB_PREFIX = 'ai_job:';
 const MODEL_ID = 'openai/dall-e-3';
 const PROVIDER = 'openai-image-generation';
@@ -79,21 +79,22 @@ function normalizeError(err) {
   }
 }
 
-function corsHeaders() {
+function corsHeaders(request) {
+  const origin = ss(request?.headers?.get('origin'), '*');
   return {
-    'access-control-allow-origin': '*',
+    'access-control-allow-origin': origin,
     'access-control-allow-headers': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-credentials': 'true',
+    'access-control-allow-credentials': origin === '*' ? 'false' : 'true',
     'vary': 'origin'
   };
 }
 
-function jsonResponse(body, status = 200, cacheControl = 'no-store') {
+function jsonResponse(body, status = 200, cacheControl = 'no-store', request = null) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
-      ...corsHeaders(),
+      ...corsHeaders(request),
       'content-type': 'application/json; charset=utf-8',
       'cache-control': cacheControl
     }
@@ -508,10 +509,10 @@ async function runGeneration(jobId, prompt, ratio, quality) {
   };
 }
 
-router.options('/*page', async () => {
+router.options('/*page', async ({ request }) => {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders()
+    headers: corsHeaders(request)
   });
 });
 
@@ -524,7 +525,7 @@ router.get('/', async ({ request }) => {
     version: WORKER_VERSION,
     totalModels: 1,
     model: MODEL_ID
-  }));
+  }), 200, 'no-store', request);
 });
 
 router.get('/health', async ({ request }) => {
@@ -536,7 +537,7 @@ router.get('/health', async ({ request }) => {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
     storageMode: 'me.puter'
-  }));
+  }), 200, 'no-store', request);
 });
 
 router.get('/models', async ({ request }) => {
@@ -546,7 +547,8 @@ router.get('/models', async ({ request }) => {
   return jsonResponse(
     okEnvelope(rid, trid, t, 'MODELS_OK', buildModels()),
     200,
-    'public, max-age=300'
+    'public, max-age=300',
+    request
   );
 });
 
@@ -581,7 +583,7 @@ router.post('/generate', async ({ request }) => {
         feature: 'image',
         model: MODEL_ID,
         inlinePreview: result.inlinePreview // UI anlık gösterim için kullanabilir
-      }));
+      }), 200, 'no-store', request);
     } catch (generationError) {
       const msg = normalizeError(generationError);
 
@@ -620,7 +622,9 @@ router.post('/generate', async ({ request }) => {
             job: failedJob
           }
         ),
-        500
+        500,
+        'no-store',
+        request
       );
     }
   } catch (err) {
@@ -644,7 +648,9 @@ router.post('/generate', async ({ request }) => {
 
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', `Ana çöküş: ${msg}`, [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -659,7 +665,9 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -667,7 +675,9 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     if (!job) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -678,11 +688,13 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
     return jsonResponse(okEnvelope(rid, trid, t, 'JOB_STATUS_OK', job, {
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -709,11 +721,13 @@ router.get('/jobs/history', async ({ request }) => {
       limit: HISTORY_LIMIT,
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -728,7 +742,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -736,7 +752,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     if (!job) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -754,7 +772,9 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
           ],
           409
         ),
-        409
+        409,
+        'no-store',
+        request
       );
     }
 
@@ -770,11 +790,13 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
     }, {
       feature: 'image',
       model: MODEL_ID
-    }));
+    }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });
@@ -791,7 +813,9 @@ router.post('/jobs/cancel', async ({ request }) => {
     if (!jobId) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400),
-        400
+        400,
+        'no-store',
+        request
       );
     }
 
@@ -799,7 +823,9 @@ router.post('/jobs/cancel', async ({ request }) => {
     if (!current) {
       return jsonResponse(
         errEnvelope(rid, trid, t, 'NOT_FOUND', 'Job bulunamadı.', [], 404),
-        404
+        404,
+        'no-store',
+        request
       );
     }
 
@@ -811,11 +837,13 @@ router.post('/jobs/cancel', async ({ request }) => {
       finishedAt: j.status === 'processing' ? nowIso() : j.finishedAt
     }));
 
-    return jsonResponse(okEnvelope(rid, trid, t, 'JOB_CANCEL_OK', updated));
+    return jsonResponse(okEnvelope(rid, trid, t, 'JOB_CANCEL_OK', updated), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
       errEnvelope(rid, trid, t, 'ERR', normalizeError(err), [], 500),
-      500
+      500,
+      'no-store',
+      request
     );
   }
 });

@@ -141,15 +141,30 @@ function normalizeWorkerErrorMessage(payload, response) {
 }
 
 async function requestWorker(path, options = {}) {
-  const response = await fetch(`${WORKER_BASE_URL}${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      'content-type': 'application/json',
-      ...(options.headers || {}),
-    },
-    credentials: 'include',
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response;
+  let timer = null;
+
+  try {
+    const controller = new AbortController();
+    timer = window.setTimeout(() => controller.abort(), 60000);
+
+    response = await fetch(`${WORKER_BASE_URL}${path}`, {
+      method: options.method || 'GET',
+      headers: {
+        'content-type': 'application/json',
+        ...(options.headers || {}),
+      },
+      credentials: 'include',
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+
+  } catch (error) {
+    const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+    throw new Error(isAbort ? 'İstek zaman aşımına uğradı.' : 'Worker erişilemedi. Lütfen tekrar deneyin.');
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
 
   const payload = await readJson(response);
 
