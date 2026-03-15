@@ -1,3 +1,21 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, UYGULAMANIN ORTAK ANA KABUK VE YAN MENÜ LAYOUT BİLEŞENİDİR.
+2) Outlet KULLANILDIĞI İÇİN İÇ SAYFALAR BU BİLEŞENİN ORTASINA YERLEŞTİRİLİR.
+3) useAuth() İLE user VE logout FONKSİYONU ALINIR; YANİ LAYOUT KULLANICI BAĞLAMINI DOĞRUDAN KULLANIR.
+4) useNavigate() İLE ÇIKIŞ SONRASI KULLANICI /giris SAYFASINA YÖNLENDİRİLİR.
+5) isSidebarOpen STATE'I, MOBİL VE DAR EKRANLARDA MENÜNÜN AÇILIP KAPANMASINI YÖNETİR.
+6) handleLogout() FONKSİYONU, logout SONRASI ROUTER YÖNLENDİRMESİNİ YAPAR.
+7) closeSidebar() YARDIMCISI, MENÜ TIKLAMALARINDA YAN PANELİ KAPATMAK İÇİN KULLANILIR.
+8) lucide-react İKONLARI KULLANILDIĞI İÇİN DASHBOARD, GÖRSEL, VIDEO, SOHBET, AYAR, KREDİ VE DİĞER MENÜLER İKONLU SUNULUR.
+9) DOSYA, KULLANICI VE ADMIN MENÜLERİNİ TEK ÇATI ALTINDA TAŞIYAN ANA GEZİNME YAPISIDIR.
+10) Outlet SAYESİNDE AYNI LAYOUT İÇİNDE ÇOK SAYIDA SAYFA ORTAK GÖRÜNÜMÜ PAYLAŞIR.
+11) BU BİLEŞEN, APP ROUTER İLE SAYFA BİLEŞENLERİ ARASINDA GÖRSEL İSKELET GÖREVİ GÖRÜR.
+12) KISACA: BU DOSYA, SOL MENÜ, ÇIKIŞ AKIŞI, MOBİL MENÜ KONTROLÜ VE İÇ SAYFA YERLEŞİMİNİ YÖNETEN ANA UYGULAMA LAYOUT'UDUR.
+█████████████████████████████████████████████
+*/
+
+
 import { useState } from 'react';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Image as ImageIcon, Video, MessageSquare, Settings, CreditCard, Folder, Users, Shield, Activity, LogOut, Menu, X, DollarSign } from 'lucide-react';
