@@ -246,8 +246,18 @@ function statusTone(status?: string): { bg: string; fg: string; border: string }
 
 async function readJson<T>(response: Response): Promise<WorkerEnvelope<T> | T> {
   const text = await response.text();
-  const parsed = text ? JSON.parse(text) : {};
-  return parsed as WorkerEnvelope<T> | T;
+  if (!text.trim()) return {} as WorkerEnvelope<T>;
+
+  try {
+    return JSON.parse(text) as WorkerEnvelope<T> | T;
+  } catch {
+    return {
+      ok: false,
+      error: {
+        message: `Worker JSON dönmedi: ${text.slice(0, 180)}`,
+      },
+    } as WorkerEnvelope<T>;
+  }
 }
 
 async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
@@ -264,7 +274,8 @@ async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
   const envelope = body as WorkerEnvelope<T>;
 
   if (!response.ok || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
-    const message = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
+    const rawMessage = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
+    const message = normalizeWorkerErrorMessage(rawMessage, response.status);
     throw new Error(message);
   }
 
@@ -273,6 +284,18 @@ async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return body as T;
+}
+
+
+function normalizeWorkerErrorMessage(message: string, status: number): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("reading 'puter'") || lower.includes('reading "puter"') || lower.includes('undefined') && lower.includes('puter')) {
+    return 'Worker oturum doğrulaması başarısız. Lütfen yeniden giriş yapıp tekrar dene.';
+  }
+  if (lower.includes('failed to fetch')) {
+    return 'Worker ağına erişilemedi. Lütfen bağlantını kontrol edip tekrar dene.';
+  }
+  return message || `İstek başarısız oldu (${status}).`;
 }
 
 function styles() {
