@@ -5,7 +5,7 @@ KISA AÇIKLAMA:
 Bu React sayfası sadece worker API ile konuşur, modeli tarayıcıda çalıştırmaz.
 */
 
-const WORKER_BASE_URL = 'https://idm.puter.work';
+const WORKER_BASE_URL = 'https://ibb.puter.work';
 const DEFAULT_MODEL_ID = 'openai/dall-e-3';
 const DEFAULT_RATIO = '1:1';
 const DEFAULT_QUALITY = 'standard';
