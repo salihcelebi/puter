@@ -11,6 +11,19 @@ NEDEN?
 - Sen bu worker’ı zaten oluşturmuşsun.
 - Yanlışlıkla kullanılırsa doğru mimariyi anlatsın.
 - Ama gerçek backend işini burada yapmıyoruz.
+*//*
+█████████████████████████████████████████████
+1) BU DOSYA DA GERÇEK SERVİS WORKER'I DEĞİL, DEPRECATED UYARI WORKER'IDIR.
+2) ADI, FRONTEND ENV DEĞİŞKENİ GİBİ GÖRÜNEN "vite_api_base_url" İSMİYLE TUTULMUŞTUR.
+3) deprecated: true ALANIYLA YANLIŞ KULLANILMAMASI GEREKEN BİR ADRES OLDUĞU İŞARETLENİR.
+4) useInstead ALANI, DOĞRU SERVİS OLARAK https://api-cagrilari.puter.work ADRESİNİ GÖSTERİR.
+5) json() VE corsHeaders() YARDIMCILARI, RESPONSE VE CORS DAVRANIŞINI STANDARTLAŞTIRIR.
+6) OPTIONS İSTEKLERİNDE 204 DÖNÜLEREK TARAYICI PRE-FLIGHT AKIŞI DESTEKLENİR.
+7) GET / UÇ NOKTASI 410 DÖNÜP “BU WORKER GERÇEK API KÖKÜ DEĞİLDİR” MESAJI VERİR.
+8) POST İSTEKLERİNDE DE AYNI MANTIKLA YANLIŞ WORKER ÇAĞRISI TESPİT EDİLİR.
+9) routesToUse ALANI, CHAT, IMAGE, TTS, VIDEO, PHOTO-TO-VIDEO VE JOB STATUS İÇİN KULLANILMASI GEREKEN GERÇEK UÇLARI SAYAR.
+10) KISACA: BU DOSYA, FRONTEND ENV GİBİ İSİMLENDİRİLMİŞ YANLIŞ BİR WORKER'I EĞİTİCİ YÖNLENDİRME SERVİSİNE DÖNÜŞTÜRÜR.
+█████████████████████████████████████████████
 */
 
 const DEPRECATED_WORKER_INFO = {
