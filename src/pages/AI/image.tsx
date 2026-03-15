@@ -68,6 +68,8 @@ type JobRequest = {
 
 type JobRecord = {
   jobId: string;
+  requestId?: string | null;
+  clientRequestId?: string | null;
   feature?: string;
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | string;
   progress?: number;
@@ -223,6 +225,93 @@ function ensureStringArray(value: unknown): string[] {
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter((item) => item.trim() !== '')));
+}
+
+
+function createClientRequestId(): string {
+  return `img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildSyntheticPendingJob(fallbackForm: FormState, prompt: string, providerHint: string, clientRequestId: string): JobRecord {
+  return {
+    jobId: `${LOCAL_JOB_PREFIX}${clientRequestId}`,
+    requestId: clientRequestId,
+    clientRequestId,
+    feature: 'image',
+    status: 'processing',
+    progress: 8,
+    step: 'Worker kabul etti, job kimliği history üzerinden bekleniyor',
+    queuePosition: null,
+    etaMs: null,
+    outputUrl: null,
+    outputUrls: [],
+    url: null,
+    urls: [],
+    retryable: true,
+    cancelRequested: false,
+    requestSummary: {
+      model: fallbackForm.modelId,
+      prompt,
+      promptPreview: prompt.slice(0, 160),
+    },
+    request: {
+      model: fallbackForm.modelId,
+      modelId: fallbackForm.modelId,
+      provider: providerHint,
+      ratio: fallbackForm.ratio,
+      quality: fallbackForm.quality,
+      style: fallbackForm.style,
+      negativePrompt: fallbackForm.negativePrompt,
+      n: fallbackForm.n,
+      clientRequestId,
+      metadata: {
+        clientRequestId,
+      },
+    },
+    error: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+}
+
+function scoreHistoryMatch(job: JobRecord, prompt: string, modelId: string, clientRequestId: string): number {
+  let score = 0;
+  const jobPrompt = normalizeText(job.requestSummary?.prompt || job.requestSummary?.promptPreview).trim();
+  const jobModel = normalizeText(job.request?.modelId || job.request?.model).trim();
+  const jobClientRequestId = normalizeText(job.clientRequestId || job.requestId).trim();
+
+  if (jobClientRequestId && jobClientRequestId === clientRequestId) score += 10;
+  if (jobPrompt && jobPrompt === prompt) score += 6;
+  if (jobPrompt && (prompt.includes(jobPrompt) || jobPrompt.includes(prompt))) score += 3;
+  if (jobModel && jobModel === modelId) score += 3;
+
+  const createdAt = normalizeText(job.createdAt || job.updatedAt);
+  if (createdAt) {
+    const createdMs = new Date(createdAt).getTime();
+    if (!Number.isNaN(createdMs)) {
+      const ageMs = Math.abs(Date.now() - createdMs);
+      if (ageMs <= 2 * 60 * 1000) score += 2;
+      else if (ageMs <= 10 * 60 * 1000) score += 1;
+    }
+  }
+
+  return score;
+}
+
+function pickBestHistoryMatch(historyItems: JobRecord[], prompt: string, modelId: string, clientRequestId: string): JobRecord | null {
+  let best: JobRecord | null = null;
+  let bestScore = 0;
+
+  historyItems.forEach((job) => {
+    const score = scoreHistoryMatch(job, prompt, modelId, clientRequestId);
+    if (score > bestScore) {
+      best = job;
+      bestScore = score;
+    }
+  });
+
+  return bestScore >= 3 ? best : null;
 }
 
 function normalizeModel(raw: unknown): ModelItem | null {
@@ -538,7 +627,15 @@ function normalizeJobRecord(raw: unknown): JobRecord | null {
   if (!raw || typeof raw !== 'object') return null;
   const source = raw as Record<string, unknown>;
   const nestedJob = source.job && typeof source.job === 'object' ? (source.job as Record<string, unknown>) : null;
-  const jobId = normalizeText(source.jobId) || normalizeText(source.id) || normalizeText(source.requestId) || normalizeText(nestedJob?.jobId) || normalizeText(nestedJob?.id);
+  const requestSource = source.request && typeof source.request === 'object' ? (source.request as Record<string, unknown>) : null;
+  const metadataSource = requestSource?.metadata && typeof requestSource.metadata === 'object'
+    ? (requestSource.metadata as Record<string, unknown>)
+    : source.metadata && typeof source.metadata === 'object'
+      ? (source.metadata as Record<string, unknown>)
+      : null;
+  const requestId = normalizeText(source.requestId) || normalizeText(nestedJob?.requestId);
+  const clientRequestId = normalizeText(source.clientRequestId) || normalizeText(requestSource?.clientRequestId) || normalizeText(metadataSource?.clientRequestId);
+  const jobId = normalizeText(source.jobId) || normalizeText(source.id) || requestId || normalizeText(nestedJob?.jobId) || normalizeText(nestedJob?.id);
   const urls = uniqueStrings([
     ...extractImageUrls(source.outputUrls),
     ...extractImageUrls(source.urls),
@@ -549,13 +646,15 @@ function normalizeJobRecord(raw: unknown): JobRecord | null {
     normalizeText(source.url),
   ]);
   const status = normalizeText(source.status) || normalizeText(nestedJob?.status) || (urls.length > 0 ? 'completed' : 'queued');
-  const modelId = normalizeText(source.modelId) || normalizeText(source.model) || normalizeText((source.request as Record<string, unknown> | undefined)?.modelId) || normalizeText((source.request as Record<string, unknown> | undefined)?.model);
-  const prompt = normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.prompt) || normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.promptPreview) || normalizeText((source.request as Record<string, unknown> | undefined)?.prompt);
+  const modelId = normalizeText(source.modelId) || normalizeText(source.model) || normalizeText(requestSource?.modelId) || normalizeText(requestSource?.model);
+  const prompt = normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.prompt) || normalizeText((source.requestSummary as Record<string, unknown> | undefined)?.promptPreview) || normalizeText(requestSource?.prompt);
 
   if (!jobId && urls.length === 0) return null;
 
   return {
     jobId: jobId || `${LOCAL_JOB_PREFIX}${Date.now()}`,
+    requestId: requestId || null,
+    clientRequestId: clientRequestId || null,
     feature: normalizeText(source.feature, 'image'),
     status,
     progress: clamp(normalizeNumber(source.progress, status === 'completed' ? 100 : 0), 0, 100),
@@ -576,13 +675,15 @@ function normalizeJobRecord(raw: unknown): JobRecord | null {
     request: {
       model: modelId,
       modelId,
-      provider: normalizeText((source.request as Record<string, unknown> | undefined)?.provider),
-      ratio: normalizeText((source.request as Record<string, unknown> | undefined)?.ratio),
-      size: normalizeText((source.request as Record<string, unknown> | undefined)?.size),
-      quality: normalizeText((source.request as Record<string, unknown> | undefined)?.quality),
-      style: normalizeText((source.request as Record<string, unknown> | undefined)?.style),
-      negativePrompt: normalizeText((source.request as Record<string, unknown> | undefined)?.negativePrompt),
-      n: normalizeNumber((source.request as Record<string, unknown> | undefined)?.n, 1),
+      provider: normalizeText(requestSource?.provider),
+      ratio: normalizeText(requestSource?.ratio),
+      size: normalizeText(requestSource?.size),
+      quality: normalizeText(requestSource?.quality),
+      style: normalizeText(requestSource?.style),
+      negativePrompt: normalizeText(requestSource?.negativePrompt),
+      n: normalizeNumber(requestSource?.n, 1),
+      clientRequestId: clientRequestId || undefined,
+      metadata: metadataSource ? Object.fromEntries(Object.entries(metadataSource).filter(([, value]) => value == null || ['string', 'number', 'boolean'].includes(typeof value))) as Record<string, JsonValue> : undefined,
     },
     error: source.error && typeof source.error === 'object' ? {
       message: normalizeText((source.error as Record<string, unknown>).message),
@@ -624,6 +725,8 @@ function normalizeGenerateResult(payload: unknown, fallbackForm: FormState, prom
   return {
     ...normalized,
     jobId: finalJobId,
+    requestId: normalizeText(normalized.requestId) || normalizeText((payload as Record<string, unknown> | undefined)?.requestId) || null,
+    clientRequestId: normalizeText(normalized.clientRequestId) || normalizeText((payload as Record<string, unknown> | undefined)?.clientRequestId) || null,
     status: finalStatus,
     progress: clamp(normalizeNumber(normalized.progress, finalStatus === 'completed' ? 100 : 0), 0, 100),
     step: normalizeText(normalized.step, finalStatus),
@@ -975,17 +1078,20 @@ export default function Image(): React.ReactElement {
   const canCancel = currentJob != null && !TERMINAL_STATUSES.has(normalizeText(currentJob.status)) && !isLocalOnlyJob(currentJob.jobId);
   const canRetry = currentJob != null && currentJob.status === 'failed' && Boolean(lastSubmittedForm || currentJob.requestSummary?.prompt);
   const declaredRoutes = ensureStringArray(workerInfo?.routes);
+  const normalizedRoutes = useMemo(() => declaredRoutes.map((route) => route.toLowerCase()), [declaredRoutes]);
+  const workerSupportsGenerate = normalizedRoutes.some((route) => route.includes('/generate'));
+  const workerSupportsStatus = normalizedRoutes.some((route) => route.includes('/jobs/status'));
+  const workerSupportsHistory = normalizedRoutes.some((route) => route.includes('/jobs/history'));
+  const workerSupportsCancel = normalizedRoutes.some((route) => route.includes('/jobs/cancel'));
+  const preferApiExecution = declaredRoutes.length > 0 && (!workerSupportsGenerate || !workerSupportsStatus);
   const declaredRouteLabel = declaredRoutes.length > 0 ? declaredRoutes.join(' · ') : '/models · /generate · /jobs/status/:id · /jobs/history · /jobs/cancel';
   const workerContractWarning = useMemo(() => {
     if (declaredRoutes.length === 0) return '';
-    const normalizedRoutes = declaredRoutes.map((route) => route.toLowerCase());
-    const announcesGenerate = normalizedRoutes.some((route) => route.includes('/generate'));
-    const announcesStatus = normalizedRoutes.some((route) => route.includes('/jobs/status'));
-    if (!announcesGenerate || !announcesStatus) {
-      return 'Canlı worker kök bilgisinde üretim ve job uçları ilan edilmiyor. Sayfa bu yüzden cevapları toleranslı parse ediyor ve eksik jobId durumunda history kurtarma akışına düşüyor.';
+    if (!workerSupportsGenerate || !workerSupportsStatus) {
+      return 'Canlı worker kök bilgisinde üretim ve job uçları ilan edilmiyor. Bu nedenle sayfa generate ve job akışında aynı-origin fallback ve history kurtarma moduna geçer.';
     }
     return '';
-  }, [declaredRoutes]);
+  }, [declaredRoutes.length, workerSupportsGenerate, workerSupportsStatus]);
 
   const currentModel = useMemo(() => {
     return imageModels.find((item: ModelItem) => normalizeText(item.modelId || item.id) === form.modelId) || null;
@@ -1021,7 +1127,9 @@ export default function Image(): React.ReactElement {
   const loadHistory = useCallback(async (): Promise<JobRecord[]> => {
     setHistoryLoading(true);
     try {
-      const payload = await requestWorker<HistoryPayload>(`/jobs/history?feature=image&limit=${HISTORY_LIMIT}`);
+      const payload = preferApiExecution || !workerSupportsHistory
+        ? await requestApiFallback<HistoryPayload>(`/jobs/history?feature=image&limit=${HISTORY_LIMIT}`)
+        : await requestWorker<HistoryPayload>(`/jobs/history?feature=image&limit=${HISTORY_LIMIT}`);
       const items = normalizeHistoryItems(payload);
       if (mountedRef.current) setHistory(items);
       return items;
@@ -1033,7 +1141,46 @@ export default function Image(): React.ReactElement {
     } finally {
       if (mountedRef.current) setHistoryLoading(false);
     }
-  }, []);
+  }, [preferApiExecution, workerSupportsHistory]);
+
+  const rescueJobFromHistory = useCallback(async (sourceForm: FormState, prompt: string, clientRequestId: string, attempts = 6): Promise<JobRecord | null> => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const recentHistory = await loadHistory();
+      const matched = pickBestHistoryMatch(recentHistory, prompt, sourceForm.modelId, clientRequestId);
+      if (matched) {
+        return {
+          ...matched,
+          requestId: normalizeText(matched.requestId, clientRequestId),
+          clientRequestId: normalizeText(matched.clientRequestId, clientRequestId),
+          requestSummary: {
+            model: sourceForm.modelId,
+            prompt,
+            promptPreview: prompt.slice(0, 160),
+          },
+          request: {
+            ...matched.request,
+            model: sourceForm.modelId,
+            modelId: sourceForm.modelId,
+            provider: deriveProviderFromModelId(sourceForm.modelId, currentModel?.company),
+            ratio: sourceForm.ratio,
+            quality: sourceForm.quality,
+            style: sourceForm.style,
+            negativePrompt: sourceForm.negativePrompt,
+            n: sourceForm.n,
+            clientRequestId,
+            metadata: {
+              ...(matched.request?.metadata || {}),
+              clientRequestId,
+            },
+          },
+        };
+      }
+      if (attempt < attempts - 1) {
+        await sleep(1100);
+      }
+    }
+    return null;
+  }, [currentModel?.company, loadHistory]);
 
   const pollJob = useCallback(async (jobId: string) => {
     if (!jobId || isLocalOnlyJob(jobId)) {
@@ -1044,7 +1191,9 @@ export default function Image(): React.ReactElement {
     clearPollTimer();
 
     try {
-      const payload = await requestWorker<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
+      const payload = preferApiExecution || !workerSupportsStatus
+        ? await requestApiFallback<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`)
+        : await requestWorker<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
       const job = normalizeJobRecord(payload);
       if (!job) {
         throw new Error('Worker job durumu beklenmeyen biçimde döndü.');
@@ -1067,7 +1216,7 @@ export default function Image(): React.ReactElement {
       setSubmitting(false);
       setError(pollError instanceof Error ? pollError.message : 'İş durumu alınamadı.');
     }
-  }, [clearPollTimer, loadHistory]);
+  }, [clearPollTimer, loadHistory, preferApiExecution, workerSupportsStatus]);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -1147,55 +1296,45 @@ export default function Image(): React.ReactElement {
         },
       };
 
-      const { body } = await requestWorkerRaw<GeneratePayload>('/generate', {
-        method: 'POST',
-        body: JSON.stringify(requestBody),
-      });
+      const clientRequestId = createClientRequestId();
+      const finalRequestBody = {
+        ...requestBody,
+        clientRequestId,
+        metadata: {
+          ...requestBody.metadata,
+          clientRequestId,
+        },
+      };
 
+      const generateResponse = preferApiExecution || !workerSupportsGenerate
+        ? { status: 200, body: await requestApiFallback<GeneratePayload>('/generate', { method: 'POST', body: JSON.stringify(finalRequestBody) }) }
+        : await requestWorkerRaw<GeneratePayload>('/generate', {
+            method: 'POST',
+            body: JSON.stringify(finalRequestBody),
+          });
+
+      const { body } = generateResponse;
       const rawPayload = isEnvelope<GeneratePayload>(body) && typeof body.data !== 'undefined' ? body.data : body;
       let immediateJob = normalizeGenerateResult(rawPayload, nextForm, trimmedPrompt);
 
       if (!immediateJob || (!immediateJob.jobId && pickJobImages(immediateJob).length === 0)) {
         const message = isEnvelope<GeneratePayload>(body) ? normalizeText(body.error?.message) : '';
         if (message) {
-          throw new Error(normalizeWorkerErrorMessage(message, 200));
+          throw new Error(normalizeWorkerErrorMessage(message, generateResponse.status));
         }
       }
 
       if (!immediateJob) {
-        await sleep(700);
-        const recentHistory = await loadHistory();
-        const matched = recentHistory.find((item: JobRecord) => {
-          const samePrompt = normalizeText(item.requestSummary?.prompt || item.requestSummary?.promptPreview) === trimmedPrompt;
-          const sameModel = normalizeText(item.request?.modelId || item.request?.model) === nextForm.modelId;
-          return samePrompt || sameModel;
-        }) || recentHistory[0];
-
-        if (matched) {
-          immediateJob = {
-            ...matched,
-            requestSummary: {
-              model: nextForm.modelId,
-              prompt: trimmedPrompt,
-              promptPreview: trimmedPrompt.slice(0, 160),
-            },
-            request: {
-              ...matched.request,
-              model: nextForm.modelId,
-              modelId: nextForm.modelId,
-              provider: deriveProviderFromModelId(nextForm.modelId, currentModel?.company),
-              ratio: nextForm.ratio,
-              quality: nextForm.quality,
-              style: nextForm.style,
-              negativePrompt: nextForm.negativePrompt,
-              n: nextForm.n,
-            },
-          };
-        }
+        immediateJob = await rescueJobFromHistory(nextForm, trimmedPrompt, clientRequestId, 5);
       }
 
       if (!immediateJob) {
-        throw new Error('Worker yanıt verdi ama üretim kimliği veya çıktı URL’si bulunamadı. Worker sözleşmesini doğrula.');
+        immediateJob = buildSyntheticPendingJob(
+          nextForm,
+          trimmedPrompt,
+          deriveProviderFromModelId(nextForm.modelId, currentModel?.company),
+          clientRequestId,
+        );
       }
 
       if (!mountedRef.current) return;
@@ -1203,7 +1342,25 @@ export default function Image(): React.ReactElement {
       setCurrentJob(immediateJob);
       setLastSubmittedForm({ ...nextForm, prompt: trimmedPrompt });
 
-      if (TERMINAL_STATUSES.has(normalizeText(immediateJob.status)) || isLocalOnlyJob(immediateJob.jobId)) {
+      if (TERMINAL_STATUSES.has(normalizeText(immediateJob.status))) {
+        setSubmitting(false);
+        void loadHistory();
+        return;
+      }
+
+      if (isLocalOnlyJob(immediateJob.jobId)) {
+        const rescuedJob = await rescueJobFromHistory(nextForm, trimmedPrompt, normalizeText(immediateJob.clientRequestId || immediateJob.requestId), 6);
+        if (rescuedJob && mountedRef.current) {
+          setCurrentJob(rescuedJob);
+          if (TERMINAL_STATUSES.has(normalizeText(rescuedJob.status))) {
+            setSubmitting(false);
+            void loadHistory();
+            return;
+          }
+          void pollJob(rescuedJob.jobId);
+          return;
+        }
+
         setSubmitting(false);
         void loadHistory();
         return;
@@ -1214,7 +1371,7 @@ export default function Image(): React.ReactElement {
       setSubmitting(false);
       setError(submitError instanceof Error ? submitError.message : 'Üretim başlatılamadı.');
     }
-  }, [clearPollTimer, currentModel?.company, form, loadHistory, pollJob]);
+  }, [clearPollTimer, currentModel?.company, form, loadHistory, pollJob, preferApiExecution, rescueJobFromHistory, workerSupportsGenerate]);
 
   const cancelJob = useCallback(async () => {
     if (!currentJob?.jobId || isLocalOnlyJob(currentJob.jobId)) return;
@@ -1222,10 +1379,15 @@ export default function Image(): React.ReactElement {
     setError('');
 
     try {
-      const cancelled = await requestWorker<JobRecord>('/jobs/cancel', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: currentJob.jobId }),
-      });
+      const cancelled = preferApiExecution || !workerSupportsCancel
+        ? await requestApiFallback<JobRecord>('/jobs/cancel', {
+            method: 'POST',
+            body: JSON.stringify({ jobId: currentJob.jobId }),
+          })
+        : await requestWorker<JobRecord>('/jobs/cancel', {
+            method: 'POST',
+            body: JSON.stringify({ jobId: currentJob.jobId }),
+          });
       const normalized = normalizeJobRecord(cancelled);
       if (!normalized) {
         throw new Error('İptal cevabı beklenmeyen biçimde döndü.');
@@ -1240,7 +1402,7 @@ export default function Image(): React.ReactElement {
       if (!mountedRef.current) return;
       setError(cancelError instanceof Error ? cancelError.message : 'İş iptal edilemedi.');
     }
-  }, [clearPollTimer, currentJob?.jobId, loadHistory]);
+  }, [clearPollTimer, currentJob?.jobId, loadHistory, preferApiExecution, workerSupportsCancel]);
 
   const retryLast = useCallback(async () => {
     const source = lastSubmittedForm || (currentJob ? {
