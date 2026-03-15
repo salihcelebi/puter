@@ -137,6 +137,12 @@ const QUALITY_OPTIONS = [
   { value: 'low', label: 'Düşük' },
 ];
 
+const QUICK_PROMPTS = [
+  'Gün doğumunda Kapadokya üzerinde süzülen sıcak hava balonları, sinematik geniş açı, ultra detaylı',
+  'İstanbul sokaklarında yağmurlu gecede neon yansımalar, cyberpunk atmosfer, yüksek kontrast',
+  'Minimal İskandinav salon tasarımı, doğal ışık, dergi çekimi kalitesi, fotogerçekçi',
+];
+
 const initialFormState = (): FormState => ({
   prompt: '',
   negativePrompt: '',
@@ -261,7 +267,56 @@ async function readJson<T>(response: Response): Promise<WorkerEnvelope<T> | T> {
 }
 
 async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${WORKER_BASE_URL}${path}`, {
+  try {
+    const response = await fetch(`${WORKER_BASE_URL}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(init?.headers || {}),
+      },
+    });
+
+    const body = await readJson<T>(response);
+    const envelope = body as WorkerEnvelope<T>;
+
+    if (!response.ok || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
+      const rawMessage = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
+      const message = normalizeWorkerErrorMessage(rawMessage, response.status);
+
+      if (shouldFallbackToApi(message, response.status)) {
+        return requestApiFallback<T>(path, init);
+      }
+
+      throw new Error(message);
+    }
+
+    if (typeof envelope?.ok === 'boolean') {
+      return (envelope.data as T) ?? ({} as T);
+    }
+
+    return body as T;
+  } catch (networkError) {
+    if (networkError instanceof Error && shouldFallbackToApi(networkError.message, 0)) {
+      return requestApiFallback<T>(path, init);
+    }
+    throw networkError;
+  }
+}
+
+function shouldFallbackToApi(message: string, status: number): boolean {
+  const lower = message.toLowerCase();
+  return (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('failed to fetch') ||
+    lower.includes('oturum doğrulaması başarısız')
+  );
+}
+
+async function requestApiFallback<T>(path: string, init?: RequestInit): Promise<T> {
+  const requestInit: RequestInit = {
     ...init,
     credentials: 'include',
     headers: {
@@ -269,22 +324,38 @@ async function requestWorker<T>(path: string, init?: RequestInit): Promise<T> {
       'Content-Type': 'application/json',
       ...(init?.headers || {}),
     },
-  });
+  };
 
-  const body = await readJson<T>(response);
-  const envelope = body as WorkerEnvelope<T>;
-
-  if (!response.ok || (typeof envelope?.ok === 'boolean' && !envelope.ok)) {
-    const rawMessage = envelope?.error?.message || `İstek başarısız oldu (${response.status}).`;
-    const message = normalizeWorkerErrorMessage(rawMessage, response.status);
-    throw new Error(message);
+  if (path.startsWith('/models')) {
+    const response = await fetch('/api/ai/models?feature=image&sort=price_asc', requestInit);
+    const items = (await response.json()) as ModelItem[];
+    return { items } as T;
   }
 
-  if (typeof envelope?.ok === 'boolean') {
-    return (envelope.data as T) ?? ({} as T);
+  if (path === '/generate') {
+    const response = await fetch('/api/ai/image', requestInit);
+    return (await response.json()) as T;
   }
 
-  return body as T;
+  if (path.startsWith('/jobs/status/')) {
+    const jobId = decodeURIComponent(path.replace('/jobs/status/', ''));
+    const response = await fetch(`/api/ai/jobs/${encodeURIComponent(jobId)}`, requestInit);
+    const payload = (await response.json()) as JobRecord;
+    if (payload.status === 'canceled') {
+      payload.status = 'cancelled';
+    }
+    return payload as T;
+  }
+
+  if (path.startsWith('/jobs/history')) {
+    return { items: [] } as T;
+  }
+
+  if (path === '/jobs/cancel') {
+    throw new Error('İptal işlemi bu oturumda desteklenmiyor.');
+  }
+
+  throw new Error('API fallback bu istek için tanımlı değil.');
 }
 
 
@@ -866,6 +937,18 @@ export default function Image(): JSX.Element {
               <div style={ui.formGrid}>
                 <label style={ui.labelWrap}>
                   <span style={ui.label}>Prompt</span>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {QUICK_PROMPTS.map((quickPrompt, idx) => (
+                      <button
+                        key={quickPrompt}
+                        type="button"
+                        style={{ ...ui.secondaryButton, padding: '8px 10px', fontSize: '12px' }}
+                        onClick={() => applyFormPatch({ prompt: quickPrompt })}
+                      >
+                        Hazır Prompt {idx + 1}
+                      </button>
+                    ))}
+                  </div>
                   <textarea
                     style={ui.textarea}
                     value={form.prompt}
