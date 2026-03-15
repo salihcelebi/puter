@@ -1,3 +1,22 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, BACKEND'İN ANA EXPRESS UYGULAMA FABRİKASIDIR.
+2) dotenv.config() İLE ENV YÜKLENİR VE UYGULAMA BAŞLANGICI HAZIRLANIR.
+3) authRouter, billingRouter, aiRouter, adminRouter, assetsRouter VE userRouter BU DOSYADA BİRLEŞTİRİLİR.
+4) fileSystem.init() ÇAĞRISI, DOSYA TABANLI DEPOLAMA KATMANINI BAŞLANGIÇTA HAZIR EDER.
+5) authService.ensureSystemUsersFromEnv() ÇAĞRISI, ENV TABANLI SİSTEM KULLANICILARINI OTOMATİK OLUŞTURMAK İÇİN KULLANILIR.
+6) ensureModelsSeeded() ÇAĞRISI, MODEL / FİYAT VERİSİNİN İLK BAŞLANGIÇTA SEED EDİLMESİNİ SAĞLAR.
+7) initPromise YAPISI, BAŞLATMA İŞLEMLERİNİN BİRDEN FAZLA KEZ DEĞİL TEK SEFER GÜVENLİ ÇALIŞMASINI SAĞLAR.
+8) createApiApp() İÇİNDE express.json() VE cookieParser() MIDDLEWARE'LERİ DEVREYE ALINIR.
+9) /api/health ENDPOINT'I, SADECE “SUNUCU AYAKTA MI?” DEĞİL, AYNI ZAMANDA AI RUNTIME DURUMU VE VISIBLE MODEL SAYISI GİBİ BİLGİLERİ DE DÖNER.
+10) aiService.isOwnerRuntimeConfigured() DEĞERİ, OWNER RUNTIME AYARININ HAZIR OLUP OLMADIĞINI GÖSTERİR.
+11) aiService.listVisibleModels() İLE HEALTH ÇIKTISINDA GÖRÜNÜR MODEL SAYISI PAYLAŞILIR.
+12) TÜM ANA ROUTE GRUPLARI /api/* ALTINDA MOUNT EDİLİR.
+13) /api ALTINDA TANIMSIZ BİR ENDPOINT GELİRSE JSON TABANLI API_NOT_FOUND HATASI DÖNÜLÜR.
+14) GLOBAL ERROR HANDLER, headersSent DEĞİLSE INTERNAL_SERVER_ERROR JSON'U DÖNER.
+15) KISACA: BU DOSYA, BAŞLATMA, ROUTE BAĞLAMA, HEALTH KONTROLÜ VE MERKEZİ HATA YÖNETİMİNİ TEK YERDE TOPLAYAN ANA BACKEND GİRİŞİDİR.
+█████████████████████████████████████████████
+*/
 import express from "express";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
