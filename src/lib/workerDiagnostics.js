@@ -1,3 +1,18 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, FRONTEND TARAFINDA WORKER SAĞLIK VE ERİŞİM TESTLERİNİ ÇALIŞTIRMAK İÇİN YAZILMIŞTIR.
+2) ANA_AI_WORKER, IS_DURUMU_WORKER VE YASAKLI_WORKERLAR SABİTLERİNİ workerApi DOSYASINDAN ALIR.
+3) puterHazirMi(), TARAYICIDA window.puter NESNESİNİN VARLIĞINI KONTROL EDER.
+4) workersExecHazirMi(), puter.workers.exec FONKSİYONUNUN KULLANIMA HAZIR OLUP OLMADIĞINI TEST EDER.
+5) govdeOku(), RESPONSE GÖVDESİNİ content-type BİLGİSİNE GÖRE JSON VEYA TEXT OLARAK GÜVENLİ OKUR.
+6) workerEndpointTestEt(), TEK BİR WORKER URL'SİNE İSTEK ATIP ok, status, payload VE error BİLGİLERİNİ RAPORLAR.
+7) anaWorkerTestleri(), ANA AI WORKER İÇİN root VE health TESTLERİNİ TOPLAR.
+8) isDurumuWorkerTestleri(), İŞ DURUMU WORKER'I İÇİN root, health VE SAHTE job status POST TESTİ ÇALIŞTIRIR.
+9) deprecatedWorkerTestleri(), YASAKLI / ESKİ WORKER'LARI TEK TEK DENEYİP SONUÇLARINI TOPLAR.
+10) tumWorkerTestleriniCalistir(), TÜM TESTLERİ TEK RAPOR NESNESİNDE BİRLEŞTİRİP genelDurum ÜRETİR.
+11) KISACA: BU DOSYA, “WORKER'LAR GERÇEKTEN AYAKTA MI, PUTER SDK HAZIR MI, YANLIŞ WORKER KULLANILIYOR MU?” SORULARINI TEK YERDE CEVAPLAR.
+█████████████████████████████████████████████
+*/
 /* ============================================================================
    DOSYA ADI: src/lib/workerDiagnostics.js
 
