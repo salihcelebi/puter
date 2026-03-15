@@ -1,7 +1,9 @@
 /*
-DOSYA: imd.js
- IMAGE ÜRETİMİ İÇİN MODELLERİN ÇAĞRILMASI İÇİN TÜM MODELLER  + DURUMLARIN GÖRÜLMESİ  + HISTORY + CANCEL ROUTELARI
-NOT: BU BÖLÜM MODELS WORKER KATALOĞUNU BOZMADAN TEK WORKER ICINDE GORSEL URETIM AKISINI EKLER.
+DOSYA: models-worker.js
+AMAÇ: EXCEL'DEN ÜRETİLMİŞ MODEL KATALOĞUNU GÜVENLİ JSON API OLARAK SUNMAK.
+NOT: BU WORKER TEK GÖREVLİDİR; SADECE MODEL KATALOĞU SERVİSİ VERİR.
+NOT: VERİLER /mnt/data/ai-model-catalog.xlsx DOSYASINDAN ÇIKARILMIŞ SNAPSHOT'TIR.
+NOT: PREMIUM FİYATLAR GÖSTERİLİR; 1.5X BİLGİSİ RESPONSE İÇİNDE YAZDIRILMAZ.
 */
 
 const APP_INFO = Object.freeze({
@@ -3207,435 +3209,213 @@ const APP_INFO = Object.freeze({
     };
   }
   
-  router.options('/*page', ({ request }) => {
-    return new Response(null, {
-      status: 204,
-      headers: buildCorsHeaders(request),
-    });
-  });
   
-  router.get('/', async ({ request }) => {
-    const startedAt = nowMs();
-    const requestId = createId('info');
-    const traceId = createId('trace');
-  
-    try {
-      return jsonResponse(
-        request,
-        successEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'WORKER_INFO',
-          data: {
-            worker: APP_INFO.worker,
-            version: APP_INFO.version,
-            protocolVersion: APP_INFO.protocolVersion,
-            purpose: APP_INFO.purpose,
-            routes: [
-              'GET /',
-              'GET /health',
-              'GET /models',
-            ],
-            supportedQuery: [
-              'search',
-              'company',
-              'badge',
-              'category',
-              'sort',
-              'limit',
-              'offset',
-              'modelId',
-            ],
-          },
-          meta: {
-            totalModels: MODEL_CATALOG.length,
-            sourceType: APP_INFO.sourceType,
-          },
-        })
-      );
-    } catch (error) {
-      const safe = sanitizeError(error);
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: safe.code || 'WORKER_INFO_FAILED',
-          message: safe.message || 'WORKER BİLGİSİ OLUŞTURULAMADI.',
-          status: 500,
-        }),
-        500
-      );
-    }
-  });
-  
-  router.get('/health', async ({ request }) => {
-    const startedAt = nowMs();
-    const requestId = createId('health');
-    const traceId = createId('trace');
-  
-    try {
-      return jsonResponse(
-        request,
-        successEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'HEALTH_OK',
-          data: {
-            status: 'ok',
-            worker: APP_INFO.worker,
-            totalModels: MODEL_CATALOG.length,
-            sourceType: APP_INFO.sourceType,
-            time: nowIso(),
-          },
-        })
-      );
-    } catch (error) {
-      const safe = sanitizeError(error);
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: safe.code || 'HEALTH_FAILED',
-          message: safe.message || 'HEALTH CEVABI OLUŞTURULAMADI.',
-          status: 500,
-        }),
-        500
-      );
-    }
-  });
-  
-  router.get('/models', async ({ request }) => {
-    const startedAt = nowMs();
-    const requestId = createId('models');
-    const traceId = createId('trace');
-  
-    try {
-      let query;
-      try {
-        query = parseQuery(request);
-      } catch (parseError) {
-        const safeParseError = sanitizeError(parseError);
-        return jsonResponse(
-          request,
-          errorEnvelope({
-            requestId,
-            traceId,
-            startedAt,
-            code: safeParseError.code || 'QUERY_PARSE_FAILED',
-            message: safeParseError.message || 'QUERY PARAMETRELERİ OKUNAMADI.',
-            status: 400,
-          }),
-          400
-        );
-      }
-  
-      let payload;
-      try {
-        payload = buildListPayload(query);
-      } catch (payloadError) {
-        const safePayloadError = sanitizeError(payloadError);
-        return jsonResponse(
-          request,
-          errorEnvelope({
-            requestId,
-            traceId,
-            startedAt,
-            code: safePayloadError.code || 'CATALOG_BUILD_FAILED',
-            message: safePayloadError.message || 'MODEL KATALOĞU OLUŞTURULAMADI.',
-            details: { filters: query },
-            status: 500,
-          }),
-          500
-        );
-      }
-  
-      return jsonResponse(
-        request,
-        successEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: 'MODELS_OK',
-          data: payload,
-          meta: {
-            totalModels: MODEL_CATALOG.length,
-            returnedItems: payload.items.length,
-          },
-        })
-      );
-    } catch (error) {
-      const safe = sanitizeError(error);
-      return jsonResponse(
-        request,
-        errorEnvelope({
-          requestId,
-          traceId,
-          startedAt,
-          code: safe.code || 'MODELS_FAILED',
-          message: safe.message || 'MODEL KATALOĞU İSTEĞİ BAŞARISIZ.',
-          status: 500,
-        }),
-        500
-      );
-    }
-  });
-  
-
-/*
-EK BÖLÜM: IMAGE + DURUM + HISTORY + CANCEL ROUTELARI
-NOT: BU BÖLÜM MODELS WORKER KATALOĞUNU BOZMADAN TEK WORKER ICINDE GORSEL URETIM AKISINI EKLER.
-NOT: ISTEMCI, /models UCUNU ESKISI GIBI KULLANABİLİR; GORSEL ICIN /generate VE /jobs/* UCLARI VARDIR.
-*/
-
-const IDM_CONFIG = Object.freeze({
-  jobKeyPrefix: 'idm:job:',
-  historyLimit: 20,
-  kvTtlSeconds: 60 * 60 * 24 * 7,
-  storagePreviewMaxChars: 120000,
+const RUNTIME_APP_INFO = Object.freeze({
+  ...APP_INFO,
+  worker: 'idm',
+  version: '2.0.0',
+  protocolVersion: '2026-03-15',
+  purpose: 'MODEL CATALOG + IMAGE GENERATION API',
+  supportsCatalog: true,
+  supportsImageGeneration: true,
+  supportsJobs: true,
 });
 
-function idmNowIso() {
-  return new Date().toISOString();
-}
+const IMAGE_DEFAULTS = Object.freeze({
+  modelId: 'black-forest-labs/flux-1-schnell',
+  quality: 'high',
+  ratio: '1:1',
+  n: 1,
+  maxN: 4,
+  jobHistoryLimit: 20,
+});
 
-function idmNowMs() {
-  return Date.now();
-}
+const IMAGE_ALLOWED_QUALITIES = new Set(['low', 'medium', 'high']);
+const IMAGE_ALLOWED_RATIOS = new Set(['1:1', '16:9', '9:16', '4:5', '3:2', '2:3']);
+const JOB_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const JOB_MEMORY_KEY = '__IDM_JOB_MEMORY__';
+const JOB_MEMORY_HISTORY_KEY = '__IDM_JOB_MEMORY_HISTORY__';
+const MEMORY_JOBS = globalThis[JOB_MEMORY_KEY] || (globalThis[JOB_MEMORY_KEY] = new Map());
+const MEMORY_HISTORY = globalThis[JOB_MEMORY_HISTORY_KEY] || (globalThis[JOB_MEMORY_HISTORY_KEY] = []);
 
-function idmCreateId(prefix = 'idm') {
-  return `${prefix}_${idmNowMs()}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function idmSafeString(value, fallback = '') {
-  return typeof value === 'string' ? value : value == null ? fallback : String(value);
-}
-
-function idmSafeNumber(value, fallback = 0) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function idmClamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function idmHeaders(request, extra = {}) {
-  const origin = request?.headers?.get?.('origin') || '*';
+function buildCorsHeaders(request) {
+  const origin = request.headers.get('origin') || '*';
   return {
     'access-control-allow-origin': origin,
     'access-control-allow-headers': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-credentials': 'true',
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
     vary: 'origin',
+  };
+}
+
+function buildJsonHeaders(request, extra = {}) {
+  const cacheControl = extra['cache-control'] || extra['Cache-Control'] || 'no-store';
+  return {
+    ...buildCorsHeaders(request),
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': cacheControl,
     ...extra,
   };
 }
 
-function idmJson(request, body, status = 200, extraHeaders = {}) {
+function createEnvelopeBase(requestId, traceId, startedAt) {
+  return {
+    worker: RUNTIME_APP_INFO.worker,
+    version: RUNTIME_APP_INFO.version,
+    protocolVersion: RUNTIME_APP_INFO.protocolVersion,
+    billingMode: RUNTIME_APP_INFO.billingMode,
+    requestId,
+    traceId,
+    time: nowIso(),
+    durationMs: Math.max(0, nowMs() - startedAt),
+  };
+}
+
+function jsonResponse(request, body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body, null, 2), {
     status,
-    headers: idmHeaders(request, extraHeaders),
+    headers: buildJsonHeaders(request, extra),
   });
 }
 
-function idmEnvelopeBase(requestId, startedAt) {
-  return {
-    ok: true,
-    worker: 'image-durum-model',
-    version: '1.0.0',
-    billingMode: 'owner_pays',
-    requestId,
-    time: idmNowIso(),
-    durationMs: Math.max(0, idmNowMs() - startedAt),
-  };
-}
-
-function idmOk(request, requestId, startedAt, code, data, meta = null, status = 200) {
-  return idmJson(request, {
-    ...idmEnvelopeBase(requestId, startedAt),
-    ok: true,
-    code,
-    data,
-    error: null,
-    meta,
-  }, status);
-}
-
-function idmErr(request, requestId, startedAt, code, message, details = null, status = 400, retryable = false) {
-  return idmJson(request, {
-    ...idmEnvelopeBase(requestId, startedAt),
-    ok: false,
-    code,
-    data: null,
-    error: {
-      message: idmSafeString(message, 'Beklenmeyen hata.'),
-      details,
-      retryable: Boolean(retryable),
-    },
-    meta: null,
-    status,
-  }, status);
-}
-
-function idmFormValue(formData, key, fallback = '') {
-  const value = formData.get(key);
-  if (typeof value === 'string') return value;
-  return fallback;
-}
-
-async function idmReadBody(request) {
-  const contentType = (request.headers.get('content-type') || '').toLowerCase();
-
-  if (contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded')) {
-    const formData = await request.formData();
-    const attachments = [];
-    for (const [key, value] of formData.entries()) {
-      if (typeof File !== 'undefined' && value instanceof File) {
-        attachments.push({ key, file: value, name: value.name || key });
-      }
-    }
-    return {
-      type: 'form-data',
-      contentType,
-      formData,
-      json: null,
-      attachments,
-    };
-  }
-
-  if (contentType.includes('application/json')) {
-    let json = {};
-    try {
-      json = await request.json();
-    } catch {
-      json = {};
-    }
-    return {
-      type: 'json',
-      contentType,
-      json,
-      formData: null,
-      attachments: [],
-    };
-  }
-
-  return {
-    type: 'unknown',
-    contentType,
-    json: {},
-    formData: null,
-    attachments: [],
-  };
-}
-
-function idmParseMetadata(raw) {
-  if (!raw) return {};
-  if (typeof raw === 'object') return raw;
-  if (typeof raw !== 'string') return {};
+function safeJsonParse(text, fallback = null) {
   try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    return JSON.parse(text);
   } catch {
-    return {};
+    return fallback;
   }
 }
 
-function idmNormalizeAspect(ratio, size) {
-  const cleanRatio = idmSafeString(ratio, '1:1').trim();
-  const predefined = {
-    '1:1': { w: 1024, h: 1024 },
-    '16:9': { w: 1536, h: 864 },
-    '9:16': { w: 864, h: 1536 },
-    '4:3': { w: 1152, h: 864 },
-    '3:4': { w: 864, h: 1152 },
-    '3:2': { w: 1216, h: 832 },
-    '2:3': { w: 832, h: 1216 },
+function mapSortKey(sortKey, feature) {
+  const clean = safeString(sortKey, feature === 'image' ? 'price_asc' : 'company_asc');
+  if (clean === 'price_asc') return feature === 'image' ? 'image_price_asc' : 'input_price_asc';
+  if (clean === 'price_desc') return feature === 'image' ? 'image_price_desc' : 'input_price_desc';
+  return clean;
+}
+
+function isImageCatalogModel(item) {
+  const category = safeString(item.categoryRaw).toLocaleLowerCase('tr');
+  const modelId = safeString(item.modelId).toLocaleLowerCase('tr');
+  const badges = Array.isArray(item.badges) ? item.badges.join(' ').toLocaleLowerCase('tr') : '';
+  return (
+    item?.prices?.image != null ||
+    category.includes('image') ||
+    category.includes('görsel') ||
+    badges.includes('görsel') ||
+    badges.includes('image') ||
+    modelId.includes('flux') ||
+    modelId.includes('gpt-image') ||
+    modelId.includes('recraft') ||
+    modelId.includes('ideogram') ||
+    modelId.includes('stable-diffusion')
+  );
+}
+
+function serializeModelForClient(item) {
+  return {
+    ...item,
+    inputPrice: item?.prices?.input ?? null,
+    outputPrice: item?.prices?.output ?? null,
+    imagePrice: item?.prices?.image ?? null,
   };
+}
 
-  if (predefined[cleanRatio]) return { ...predefined[cleanRatio], ratioLabel: cleanRatio };
+function parseQuery(request) {
+  const url = new URL(request.url);
+  const feature = safeString(url.searchParams.get('feature')).toLocaleLowerCase('tr');
+  return {
+    search: safeString(url.searchParams.get('search')),
+    company: safeString(url.searchParams.get('company')),
+    badge: safeString(url.searchParams.get('badge')).toUpperCase(),
+    category: safeString(url.searchParams.get('category')),
+    sort: mapSortKey(url.searchParams.get('sort'), feature),
+    limit: clampLimit(url.searchParams.get('limit')),
+    offset: clampOffset(url.searchParams.get('offset')),
+    modelId: safeString(url.searchParams.get('modelId')),
+    feature,
+  };
+}
 
-  const match = /^\s*(\d{2,5})\s*[xX]\s*(\d{2,5})\s*$/.exec(idmSafeString(size));
-  if (match) {
-    return {
-      w: idmClamp(parseInt(match[1], 10), 256, 2048),
-      h: idmClamp(parseInt(match[2], 10), 256, 2048),
-      ratioLabel: `${match[1]}x${match[2]}`,
-    };
+function buildListPayload(query) {
+  let items = MODEL_CATALOG.filter((item) =>
+    matchesSearch(item, query.search) &&
+    matchesCompany(item, query.company) &&
+    matchesBadge(item, query.badge) &&
+    matchesCategory(item, query.category)
+  );
+
+  if (query.feature === 'image') {
+    items = items.filter(isImageCatalogModel);
   }
 
-  return { w: 1024, h: 1024, ratioLabel: '1:1' };
-}
+  items = sortModels(items, query.sort);
 
-function idmInferProvider(model, providerHint = '') {
-  const text = `${idmSafeString(providerHint)} ${idmSafeString(model)}`.toLowerCase();
-  if (text.includes('grok') || text.includes('xai')) return 'xai';
-  if (text.includes('gemini') || text.includes('google')) return 'gemini';
-  if (text.includes('together') || text.includes('black-forest-labs') || text.includes('flux') || text.includes('stable-diffusion') || text.includes('sdxl')) return 'together';
-  return 'openai-image-generation';
-}
-
-async function idmFileToBase64(file) {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  if (query.modelId) {
+    items = items.filter((item) => item.modelId === query.modelId || item.id === query.modelId);
   }
-  return btoa(binary);
-}
 
-function idmJoinPrompt(prompt, style, negativePrompt) {
-  const parts = [idmSafeString(prompt).trim()];
-  if (idmSafeString(style).trim()) parts.push(`Style: ${idmSafeString(style).trim()}`);
-  if (idmSafeString(negativePrompt).trim()) parts.push(`Negative prompt: ${idmSafeString(negativePrompt).trim()}`);
-  return parts.filter(Boolean).join('\n');
-}
-
-async function idmNormalizeInput(request) {
-  const parsed = await idmReadBody(request);
-  const json = parsed.json || {};
-  const formData = parsed.formData;
-
-  const prompt = formData ? idmFormValue(formData, 'prompt') : idmSafeString(json.prompt);
-  const model = formData ? idmFormValue(formData, 'model') : idmSafeString(json.model);
-  const modelId = formData ? idmFormValue(formData, 'modelId', model) : idmSafeString(json.modelId || json.model);
-  const ratio = formData ? idmFormValue(formData, 'ratio', '1:1') : idmSafeString(json.ratio, '1:1');
-  const size = formData ? idmFormValue(formData, 'size') : idmSafeString(json.size);
-  const quality = formData ? idmFormValue(formData, 'quality', 'high') : idmSafeString(json.quality, 'high');
-  const style = formData ? idmFormValue(formData, 'style') : idmSafeString(json.style);
-  const negativePrompt = formData ? idmFormValue(formData, 'negativePrompt') : idmSafeString(json.negativePrompt);
-  const metadataRaw = formData ? idmFormValue(formData, 'metadata') : json.metadata;
-  const metadata = idmParseMetadata(metadataRaw);
-  const clientRequestId = formData ? idmFormValue(formData, 'clientRequestId') : idmSafeString(json.clientRequestId);
-  const providerHint = formData ? idmFormValue(formData, 'provider') : idmSafeString(json.provider);
-  const nRaw = formData ? idmFormValue(formData, 'n', '1') : json.n;
-  const n = idmClamp(idmSafeNumber(nRaw, 1), 1, 8);
-  const testModeRaw = formData ? idmFormValue(formData, 'testMode', 'false') : json.testMode;
-  const responseFormat = formData ? idmFormValue(formData, 'responseFormat', 'url') : idmSafeString(json.responseFormat, 'url');
-  const guidanceRaw = formData ? idmFormValue(formData, 'guidance') : json.guidance;
-  const guidance = guidanceRaw === '' || guidanceRaw == null ? null : idmSafeNumber(guidanceRaw, null);
-  const seedRaw = formData ? idmFormValue(formData, 'seed') : json.seed;
-  const seed = seedRaw === '' || seedRaw == null ? null : idmSafeNumber(seedRaw, null);
-  const provider = idmInferProvider(modelId || model, providerHint);
-  const aspect = idmNormalizeAspect(ratio, size);
+  const total = items.length;
+  const paginated = items.slice(query.offset, query.offset + query.limit).map(serializeModelForClient);
 
   return {
-    prompt: idmJoinPrompt(prompt, style, negativePrompt),
-    rawPrompt: idmSafeString(prompt),
-    model: modelId || model,
-    modelId: modelId || model,
-    provider,
-    ratio: idmSafeString(ratio, '1:1'),
-    size: idmSafeString(size),
+    items: paginated,
+    total,
+    limit: query.limit,
+    offset: query.offset,
+    hasMore: query.offset + query.limit < total,
+    facets: MODEL_FACETS,
+    source: {
+      type: RUNTIME_APP_INFO.sourceType,
+      totalModels: MODEL_CATALOG.length,
+      sourceUrl: MODEL_CATALOG[0]?.sourceUrl || '',
+    },
+    filters: {
+      search: query.search,
+      company: query.company,
+      badge: query.badge,
+      category: query.category,
+      sort: query.sort,
+      modelId: query.modelId,
+      feature: query.feature,
+    },
+  };
+}
+
+function buildPromptPreview(text, max = 140) {
+  const clean = safeString(text);
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1)}…`;
+}
+
+function normalizeImageRequest(body) {
+  const prompt = safeString(body?.prompt);
+  if (!prompt) {
+    const error = new Error('PROMPT ZORUNLU.');
+    error.code = 'PROMPT_REQUIRED';
+    throw error;
+  }
+
+  const model = safeString(body?.model || body?.modelId, IMAGE_DEFAULTS.modelId);
+  const qualityInput = safeString(body?.quality, IMAGE_DEFAULTS.quality).toLowerCase();
+  const quality = IMAGE_ALLOWED_QUALITIES.has(qualityInput) ? qualityInput : IMAGE_DEFAULTS.quality;
+  const ratioInput = safeString(body?.ratio || body?.size, IMAGE_DEFAULTS.ratio);
+  const ratio = IMAGE_ALLOWED_RATIOS.has(ratioInput) ? ratioInput : IMAGE_DEFAULTS.ratio;
+  const n = Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(body?.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n)));
+  const style = safeString(body?.style);
+  const negativePrompt = safeString(body?.negativePrompt);
+  const clientRequestId = safeString(body?.clientRequestId);
+  const responseFormat = safeString(body?.responseFormat, 'url');
+  const guidance = safeString(body?.guidance);
+  const seed = safeString(body?.seed);
+  const metadata = body && typeof body.metadata === 'object' && body.metadata ? body.metadata : {};
+
+  return {
+    prompt,
+    model,
+    modelId: model,
+    ratio,
+    size: ratio,
     quality,
     style,
     negativePrompt,
@@ -3643,143 +3423,14 @@ async function idmNormalizeInput(request) {
     responseFormat,
     guidance,
     seed,
+    clientRequestId,
     metadata,
-    clientRequestId: clientRequestId || idmCreateId('client'),
-    testMode: String(testModeRaw).toLowerCase() == 'true',
-    attachments: parsed.attachments || [],
-    aspect,
+    attachmentCount: safeNumber(body?.attachmentCount, 0),
   };
 }
 
-function idmJobKey(jobId) {
-  return `${IDM_CONFIG.jobKeyPrefix}${jobId}`;
-}
-
-function idmPreviewUrls(urls) {
-  const list = Array.isArray(urls) ? urls : [];
-  return list.map((url) => {
-    const text = idmSafeString(url);
-    if (!text) return null;
-    if (text.length <= IDM_CONFIG.storagePreviewMaxChars) return text;
-    return null;
-  }).filter(Boolean);
-}
-
-async function idmSaveJob(me, job) {
-  await me.puter.kv.set(idmJobKey(job.jobId), job);
-  return job;
-}
-
-async function idmLoadJob(me, jobId) {
-  if (!jobId) return null;
-  const data = await me.puter.kv.get(idmJobKey(jobId));
-  return data || null;
-}
-
-async function idmUpdateJob(me, jobId, patch) {
-  const current = (await idmLoadJob(me, jobId)) || {};
-  const next = {
-    ...current,
-    ...patch,
-    updatedAt: idmNowIso(),
-  };
-  await idmSaveJob(me, next);
-  return next;
-}
-
-async function idmListJobs(me, limit = IDM_CONFIG.historyLimit) {
-  const result = await me.puter.kv.list({
-    pattern: `${IDM_CONFIG.jobKeyPrefix}*`,
-    returnValues: true,
-    limit: idmClamp(limit, 1, 100),
-  });
-
-  const items = Array.isArray(result) ? result : Array.isArray(result?.items) ? result.items : [];
-  return items
-    .map((item) => item && typeof item === 'object' ? (item.value || item) : null)
-    .filter(Boolean)
-    .sort((a, b) => idmSafeString(b.createdAt).localeCompare(idmSafeString(a.createdAt)));
-}
-
-function idmExtractUrl(candidate) {
-  if (!candidate) return null;
-  if (typeof candidate === 'string') return candidate;
-  if (Array.isArray(candidate)) {
-    for (const item of candidate) {
-      const found = idmExtractUrl(item);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof candidate === 'object') {
-    if (typeof candidate.src === 'string' && candidate.src) return candidate.src;
-    if (typeof candidate.url === 'string' && candidate.url) return candidate.url;
-    if (candidate.data && typeof candidate.data === 'object') return idmExtractUrl(candidate.data);
-    if (candidate.image) return idmExtractUrl(candidate.image);
-    if (candidate.images) return idmExtractUrl(candidate.images);
-  }
-  return null;
-}
-
-async function idmGenerateUrls(me, input, jobId) {
-  const urls = [];
-  const aspect = input.aspect || { w: 1024, h: 1024, ratioLabel: '1:1' };
-  let attachmentInfo = null;
-
-  if (Array.isArray(input.attachments) && input.attachments.length > 0) {
-    const primary = input.attachments[0]?.file;
-    if (primary) {
-      attachmentInfo = {
-        base64: await idmFileToBase64(primary),
-        mime: idmSafeString(primary.type || 'image/png', 'image/png'),
-      };
-    }
-  }
-
-  for (let index = 0; index < input.n; index += 1) {
-    const generationOptions = {
-      prompt: input.prompt,
-      model: input.modelId || input.model,
-      provider: input.provider,
-      test_mode: input.testMode,
-    };
-
-    if (input.provider === 'openai-image-generation') {
-      generationOptions.quality = input.quality || 'high';
-      generationOptions.ratio = { w: aspect.w, h: aspect.h };
-    } else if (input.provider === 'gemini') {
-      generationOptions.ratio = { w: 1024, h: 1024 };
-      if (attachmentInfo) {
-        generationOptions.input_image = attachmentInfo.base64;
-        generationOptions.input_image_mime_type = attachmentInfo.mime;
-      }
-    } else if (input.provider === 'together') {
-      generationOptions.width = aspect.w;
-      generationOptions.height = aspect.h;
-      generationOptions.aspect_ratio = input.ratio || aspect.ratioLabel;
-      if (input.seed != null) generationOptions.seed = input.seed;
-      if (input.guidance != null) generationOptions.guidance = input.guidance;
-    }
-
-    const result = await me.puter.ai.txt2img(generationOptions);
-    const url = idmExtractUrl(result);
-    if (!url) {
-      throw new Error('Puter görsel yanıtından kullanılabilir URL çıkarılamadı.');
-    }
-
-    urls.push(url);
-
-    await idmUpdateJob(me, jobId, {
-      progress: Math.round(((index + 1) / input.n) * 100),
-      step: index + 1 >= input.n ? 'finalizing' : `render_${index + 1}`,
-    });
-  }
-
-  return urls;
-}
-
-function idmCreateJobRecord(input) {
-  const jobId = idmCreateId('job');
+function buildImageJobRecord(jobId, requestPayload) {
+  const createdAt = nowIso();
   return {
     jobId,
     feature: 'image',
@@ -3792,202 +3443,702 @@ function idmCreateJobRecord(input) {
     outputUrls: [],
     url: null,
     urls: [],
-    retryable: false,
+    retryable: true,
     cancelRequested: false,
     requestSummary: {
-      model: input.modelId || input.model,
-      prompt: input.rawPrompt,
-      promptPreview: idmSafeString(input.rawPrompt).slice(0, 160),
+      model: requestPayload.modelId,
+      prompt: requestPayload.prompt,
+      promptPreview: buildPromptPreview(requestPayload.prompt),
     },
     request: {
-      model: input.model,
-      modelId: input.modelId,
-      provider: input.provider,
-      ratio: input.ratio,
-      size: input.size,
-      quality: input.quality,
-      style: input.style,
-      negativePrompt: input.negativePrompt,
-      n: input.n,
-      responseFormat: input.responseFormat,
-      metadata: input.metadata,
-      clientRequestId: input.clientRequestId,
-      attachmentCount: Array.isArray(input.attachments) ? input.attachments.length : 0,
+      model: requestPayload.model,
+      modelId: requestPayload.modelId,
+      ratio: requestPayload.ratio,
+      size: requestPayload.size,
+      quality: requestPayload.quality,
+      style: requestPayload.style,
+      negativePrompt: requestPayload.negativePrompt,
+      n: requestPayload.n,
+      responseFormat: requestPayload.responseFormat,
+      metadata: requestPayload.metadata,
+      clientRequestId: requestPayload.clientRequestId,
+      attachmentCount: requestPayload.attachmentCount,
     },
     error: null,
-    createdAt: idmNowIso(),
-    updatedAt: idmNowIso(),
+    createdAt,
+    updatedAt: createdAt,
     finishedAt: null,
   };
 }
 
-router.options('/generate', ({ request }) => new Response(null, { status: 204, headers: idmHeaders(request) }));
-router.options('/jobs/status/:id', ({ request }) => new Response(null, { status: 204, headers: idmHeaders(request) }));
-router.options('/jobs/history', ({ request }) => new Response(null, { status: 204, headers: idmHeaders(request) }));
-router.options('/jobs/cancel', ({ request }) => new Response(null, { status: 204, headers: idmHeaders(request) }));
+function hasKvNamespace(env) {
+  return !!(env && env.IDM_JOBS && typeof env.IDM_JOBS.get === 'function' && typeof env.IDM_JOBS.put === 'function');
+}
 
-router.post('/generate', async ({ request, me }) => {
-  const startedAt = idmNowMs();
-  const requestId = idmCreateId('generate');
-  let input = null;
-  let job = null;
+function jobStorageKey(jobId) {
+  return `job:${jobId}`;
+}
+
+function historyStorageKey(job) {
+  const created = safeString(job?.createdAt, nowIso());
+  return `history:${created}:${job.jobId}`;
+}
+
+async function saveJob(env, job) {
+  const normalized = {
+    ...job,
+    updatedAt: safeString(job.updatedAt, nowIso()),
+  };
+
+  MEMORY_JOBS.set(normalized.jobId, normalized);
+  const existingHistoryIndex = MEMORY_HISTORY.findIndex((item) => item.jobId === normalized.jobId);
+  if (existingHistoryIndex >= 0) {
+    MEMORY_HISTORY.splice(existingHistoryIndex, 1);
+  }
+  MEMORY_HISTORY.unshift({ jobId: normalized.jobId, createdAt: normalized.createdAt || normalized.updatedAt || nowIso() });
+  if (MEMORY_HISTORY.length > 200) {
+    MEMORY_HISTORY.splice(200);
+  }
+
+  if (hasKvNamespace(env)) {
+    const payload = JSON.stringify(normalized);
+    await env.IDM_JOBS.put(jobStorageKey(normalized.jobId), payload);
+    await env.IDM_JOBS.put(historyStorageKey(normalized), payload);
+  }
+
+  return normalized;
+}
+
+async function readJob(env, jobId) {
+  if (!jobId) return null;
+  if (hasKvNamespace(env)) {
+    const text = await env.IDM_JOBS.get(jobStorageKey(jobId));
+    if (text) {
+      const parsed = safeJsonParse(text, null);
+      if (parsed && typeof parsed === 'object') {
+        MEMORY_JOBS.set(jobId, parsed);
+        return parsed;
+      }
+    }
+  }
+  return MEMORY_JOBS.get(jobId) || null;
+}
+
+async function listJobs(env, limit = IMAGE_DEFAULTS.jobHistoryLimit) {
+  const clampedLimit = Math.max(1, Math.min(50, Math.floor(safeNumber(limit, IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
+
+  if (hasKvNamespace(env) && typeof env.IDM_JOBS.list === 'function') {
+    const listed = await env.IDM_JOBS.list({ prefix: 'history:', limit: Math.max(clampedLimit * 3, clampedLimit) });
+    const jobs = [];
+    for (const key of listed.keys || []) {
+      const value = await env.IDM_JOBS.get(key.name);
+      const parsed = safeJsonParse(value, null);
+      if (parsed && typeof parsed === 'object') {
+        jobs.push(parsed);
+      }
+    }
+    jobs.sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)));
+    return jobs.slice(0, clampedLimit);
+  }
+
+  return MEMORY_HISTORY
+    .map((item) => MEMORY_JOBS.get(item.jobId))
+    .filter(Boolean)
+    .sort((a, b) => safeString(b.createdAt).localeCompare(safeString(a.createdAt)))
+    .slice(0, clampedLimit);
+}
+
+async function updateJob(env, jobId, updater) {
+  const current = (await readJob(env, jobId)) || { jobId };
+  const next = updater({ ...current });
+  return saveJob(env, { ...next, jobId, updatedAt: nowIso() });
+}
+
+function collectStringCandidates(value, bag) {
+  if (value == null) return;
+  if (typeof value === 'string') {
+    const clean = value.trim();
+    if (clean) bag.push(clean);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringCandidates(item, bag);
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const key of ['src', 'url', 'href', 'outputUrl']) {
+      if (typeof value[key] === 'string' && value[key].trim()) {
+        bag.push(value[key].trim());
+      }
+    }
+    for (const key of ['urls', 'outputUrls', 'images', 'items', 'results', 'data']) {
+      if (value[key] != null) {
+        collectStringCandidates(value[key], bag);
+      }
+    }
+  }
+}
+
+function extractImageUrls(raw) {
+  const bag = [];
+  collectStringCandidates(raw, bag);
+  return [...new Set(bag.filter(Boolean))];
+}
+
+function getImageGeneratorCandidates(env) {
+  return [
+    env?.me?.puter?.ai?.txt2img,
+    env?.me?.ai?.txt2img,
+    env?.puter?.ai?.txt2img,
+    globalThis?.me?.puter?.ai?.txt2img,
+    globalThis?.me?.ai?.txt2img,
+    globalThis?.puter?.ai?.txt2img,
+    globalThis?.Puter?.ai?.txt2img,
+  ].filter((candidate) => typeof candidate === 'function');
+}
+
+async function runTxt2Img(env, prompt, options) {
+  const candidates = getImageGeneratorCandidates(env);
+  if (!candidates.length) {
+    const error = new Error('WORKER İÇİNDE txt2img FONKSİYONU BULUNAMADI. me.puter / puter AI BAĞLANTISI TANIMLI DEĞİL.');
+    error.code = 'TXT2IMG_UNAVAILABLE';
+    throw error;
+  }
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return await candidate(prompt, options);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('txt2img ÇAĞRISI BAŞARISIZ OLDU.');
+}
+
+function buildTxt2ImgOptions(job) {
+  const request = job.request || {};
+  return {
+    model: safeString(request.modelId || request.model, IMAGE_DEFAULTS.modelId),
+    quality: safeString(request.quality, IMAGE_DEFAULTS.quality),
+    ratio: safeString(request.ratio || request.size, IMAGE_DEFAULTS.ratio),
+    size: safeString(request.size || request.ratio, IMAGE_DEFAULTS.ratio),
+    n: Math.max(1, Math.min(IMAGE_DEFAULTS.maxN, Math.floor(safeNumber(request.n, IMAGE_DEFAULTS.n) || IMAGE_DEFAULTS.n))),
+    style: safeString(request.style),
+    negativePrompt: safeString(request.negativePrompt),
+    responseFormat: 'url',
+    metadata: request.metadata || {},
+    guidance: safeString(request.guidance),
+    seed: safeString(request.seed),
+  };
+}
+
+async function processImageJob(env, jobId) {
+  const initialJob = await readJob(env, jobId);
+  if (!initialJob) return;
+  if (JOB_TERMINAL_STATUSES.has(initialJob.status)) return;
+  if (initialJob.cancelRequested) {
+    await updateJob(env, jobId, (job) => ({
+      ...job,
+      status: 'cancelled',
+      progress: job.progress || 0,
+      step: 'cancelled',
+      finishedAt: nowIso(),
+      error: null,
+    }));
+    return;
+  }
+
+  await updateJob(env, jobId, (job) => ({
+    ...job,
+    status: 'processing',
+    progress: Math.max(5, safeNumber(job.progress, 0)),
+    step: 'processing',
+    retryable: true,
+    error: null,
+  }));
 
   try {
-    input = await idmNormalizeInput(request);
-    if (!idmSafeString(input.rawPrompt).trim()) {
-      return idmErr(request, requestId, startedAt, 'PROMPT_REQUIRED', 'Prompt boş olamaz.', null, 400, false);
+    const currentJob = await readJob(env, jobId);
+    if (!currentJob) return;
+
+    const result = await runTxt2Img(env, currentJob.requestSummary?.prompt || currentJob.request?.prompt || '', buildTxt2ImgOptions(currentJob));
+    const urls = extractImageUrls(result);
+
+    if (!urls.length) {
+      const error = new Error('GÖRSEL ÜRETİMİ TAMAMLANDI AMA URL ÇIKMADI.');
+      error.code = 'IMAGE_URL_MISSING';
+      throw error;
     }
-    if (!idmSafeString(input.modelId || input.model).trim()) {
-      return idmErr(request, requestId, startedAt, 'MODEL_REQUIRED', 'Model alanı boş olamaz.', null, 400, false);
+
+    const latestJob = await readJob(env, jobId);
+    if (latestJob?.cancelRequested) {
+      await updateJob(env, jobId, (job) => ({
+        ...job,
+        status: 'cancelled',
+        progress: Math.max(safeNumber(job.progress, 0), 90),
+        step: 'cancelled',
+        finishedAt: nowIso(),
+        outputUrl: null,
+        outputUrls: [],
+        url: null,
+        urls: [],
+        error: null,
+      }));
+      return;
     }
 
-    job = idmCreateJobRecord(input);
-    await idmSaveJob(me, job);
-
-    await idmUpdateJob(me, job.jobId, {
-      status: 'processing',
-      progress: 10,
-      step: 'processing',
-    });
-
-    const urls = await idmGenerateUrls(me, input, job.jobId);
-    const storedUrls = idmPreviewUrls(urls);
-
-    const completed = await idmUpdateJob(me, job.jobId, {
+    await updateJob(env, jobId, (job) => ({
+      ...job,
       status: 'completed',
       progress: 100,
       step: 'completed',
-      outputUrl: storedUrls[0] || null,
-      outputUrls: storedUrls,
-      url: storedUrls[0] || null,
-      urls: storedUrls,
-      finishedAt: idmNowIso(),
-    });
-
-    return idmOk(request, requestId, startedAt, 'IMAGE_GENERATED', {
-      jobId: completed.jobId,
-      status: completed.status,
-      progress: completed.progress,
-      step: completed.step,
-      url: urls[0] || null,
-      urls,
+      finishedAt: nowIso(),
+      retryable: false,
       outputUrl: urls[0] || null,
       outputUrls: urls,
-      modelId: input.modelId || input.model,
-      provider: input.provider,
-      requestId: input.clientRequestId,
-      metadata: input.metadata,
-      responseFormat: input.responseFormat,
-    });
+      url: urls[0] || null,
+      urls,
+      error: null,
+    }));
   } catch (error) {
-    const message = error && error.message ? error.message : 'Görsel üretimi başarısız oldu.';
-    if (job && job.jobId) {
-      try {
-        await idmUpdateJob(me, job.jobId, {
-          status: 'failed',
-          progress: 100,
-          step: 'failed',
-          retryable: true,
-          finishedAt: idmNowIso(),
-          error: {
-            message,
-            retryable: true,
-          },
-        });
-      } catch {
-        // failure kaydı yazılamasa da asıl hatayı gölgelememeli
-      }
-    }
-    return idmErr(request, requestId, startedAt, 'IMAGE_GENERATION_FAILED', message, job && job.jobId ? { jobId: job.jobId } : null, 500, true);
+    const safe = sanitizeError(error);
+    await updateJob(env, jobId, (job) => ({
+      ...job,
+      status: 'failed',
+      progress: Math.max(safeNumber(job.progress, 0), 100),
+      step: 'failed',
+      finishedAt: nowIso(),
+      retryable: true,
+      error: {
+        message: safe.message || 'GÖRSEL ÜRETİMİ BAŞARISIZ.',
+        retryable: true,
+      },
+    }));
   }
-});
+}
 
-router.get('/jobs/status/:id', async ({ request, params, me }) => {
-  const startedAt = idmNowMs();
-  const requestId = idmCreateId('status');
+async function parseRequestJson(request) {
+  const text = await request.text();
+  if (!text.trim()) return {};
+  const parsed = safeJsonParse(text, null);
+  if (!parsed || typeof parsed !== 'object') {
+    const error = new Error('JSON BODY GEÇERSİZ.');
+    error.code = 'INVALID_JSON';
+    throw error;
+  }
+  return parsed;
+}
+
+async function handleOptions(request) {
+  return new Response(null, {
+    status: 204,
+    headers: buildCorsHeaders(request),
+  });
+}
+
+async function handleRoot(request) {
+  const startedAt = nowMs();
+  const requestId = createId('info');
+  const traceId = createId('trace');
+
+  return jsonResponse(
+    request,
+    successEnvelope({
+      requestId,
+      traceId,
+      startedAt,
+      code: 'WORKER_INFO',
+      data: {
+        worker: RUNTIME_APP_INFO.worker,
+        version: RUNTIME_APP_INFO.version,
+        protocolVersion: RUNTIME_APP_INFO.protocolVersion,
+        purpose: RUNTIME_APP_INFO.purpose,
+        supportsCatalog: true,
+        supportsImageGeneration: true,
+        supportsJobs: true,
+        routes: [
+          'GET /',
+          'GET /health',
+          'GET /models',
+          'POST /generate',
+          'GET /jobs/status/:id',
+          'GET /jobs/history',
+          'POST /jobs/cancel',
+        ],
+        supportedQuery: [
+          'search',
+          'company',
+          'badge',
+          'category',
+          'sort',
+          'limit',
+          'offset',
+          'modelId',
+          'feature',
+        ],
+      },
+      meta: {
+        totalModels: MODEL_CATALOG.length,
+        sourceType: RUNTIME_APP_INFO.sourceType,
+      },
+    })
+  );
+}
+
+async function handleHealth(request) {
+  const startedAt = nowMs();
+  const requestId = createId('health');
+  const traceId = createId('trace');
+
+  return jsonResponse(
+    request,
+    successEnvelope({
+      requestId,
+      traceId,
+      startedAt,
+      code: 'HEALTH_OK',
+      data: {
+        status: 'ok',
+        worker: RUNTIME_APP_INFO.worker,
+        totalModels: MODEL_CATALOG.length,
+        sourceType: RUNTIME_APP_INFO.sourceType,
+        supportsImageGeneration: true,
+        supportsJobs: true,
+        time: nowIso(),
+      },
+    })
+  );
+}
+
+async function handleModels(request) {
+  const startedAt = nowMs();
+  const requestId = createId('models');
+  const traceId = createId('trace');
 
   try {
-    const jobId = idmSafeString(params?.id);
-    if (!jobId) {
-      return idmErr(request, requestId, startedAt, 'JOB_ID_REQUIRED', 'jobId zorunludur.', null, 400, false);
-    }
-
-    const job = await idmLoadJob(me, jobId);
-    if (!job) {
-      return idmErr(request, requestId, startedAt, 'JOB_NOT_FOUND', 'İstenen iş kaydı bulunamadı.', { jobId }, 404, false);
-    }
-
-    return idmOk(request, requestId, startedAt, 'JOB_STATUS_OK', job);
+    const query = parseQuery(request);
+    const payload = buildListPayload(query);
+    return jsonResponse(
+      request,
+      successEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: 'MODELS_OK',
+        data: payload,
+        meta: {
+          totalModels: MODEL_CATALOG.length,
+          returnedItems: payload.items.length,
+        },
+      }),
+      200,
+      { 'cache-control': `public, max-age=${DEFAULTS.cacheSeconds}` }
+    );
   } catch (error) {
-    const message = error && error.message ? error.message : 'Job durumu alınamadı.';
-    return idmErr(request, requestId, startedAt, 'JOB_STATUS_FAILED', message, null, 500, true);
+    const safe = sanitizeError(error);
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: safe.code || 'MODELS_FAILED',
+        message: safe.message || 'MODEL KATALOĞU İSTEĞİ BAŞARISIZ.',
+        status: 500,
+      }),
+      500
+    );
   }
-});
+}
 
-router.get('/jobs/history', async ({ request, me }) => {
-  const startedAt = idmNowMs();
-  const requestId = idmCreateId('history');
+async function handleGenerate(request, env, ctx) {
+  const startedAt = nowMs();
+  const requestId = createId('generate');
+  const traceId = createId('trace');
+
+  try {
+    const body = await parseRequestJson(request);
+    const imageRequest = normalizeImageRequest(body);
+    const jobId = createId('img');
+    const job = buildImageJobRecord(jobId, imageRequest);
+    await saveJob(env, job);
+    ctx.waitUntil(processImageJob(env, jobId));
+
+    return jsonResponse(
+      request,
+      successEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: 'IMAGE_JOB_QUEUED',
+        data: {
+          jobId,
+          status: 'queued',
+          progress: 0,
+          step: 'queued',
+          modelId: imageRequest.modelId,
+          requestId,
+        },
+        meta: {
+          feature: 'image',
+        },
+      }),
+      202
+    );
+  } catch (error) {
+    const safe = sanitizeError(error);
+    const status = safe.code === 'PROMPT_REQUIRED' || safe.code === 'INVALID_JSON' ? 400 : 500;
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: safe.code || 'IMAGE_GENERATE_FAILED',
+        message: safe.message || 'GÖRSEL ÜRETİMİ BAŞLATILAMADI.',
+        status,
+      }),
+      status
+    );
+  }
+}
+
+async function handleJobStatus(request, env, jobId) {
+  const startedAt = nowMs();
+  const requestId = createId('status');
+  const traceId = createId('trace');
+
+  try {
+    const job = await readJob(env, jobId);
+    if (!job) {
+      return jsonResponse(
+        request,
+        errorEnvelope({
+          requestId,
+          traceId,
+          startedAt,
+          code: 'JOB_NOT_FOUND',
+          message: 'JOB BULUNAMADI.',
+          status: 404,
+        }),
+        404
+      );
+    }
+
+    return jsonResponse(
+      request,
+      successEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: 'JOB_STATUS_OK',
+        data: job,
+        meta: {
+          feature: 'image',
+        },
+      })
+    );
+  } catch (error) {
+    const safe = sanitizeError(error);
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: safe.code || 'JOB_STATUS_FAILED',
+        message: safe.message || 'JOB DURUMU OKUNAMADI.',
+        status: 500,
+      }),
+      500
+    );
+  }
+}
+
+async function handleJobHistory(request, env) {
+  const startedAt = nowMs();
+  const requestId = createId('history');
+  const traceId = createId('trace');
 
   try {
     const url = new URL(request.url);
-    const feature = idmSafeString(url.searchParams.get('feature'), 'image');
-    const limit = idmClamp(idmSafeNumber(url.searchParams.get('limit'), IDM_CONFIG.historyLimit), 1, 100);
-    const jobs = await idmListJobs(me, limit);
-    const filtered = jobs.filter((job) => !feature || idmSafeString(job.feature) === feature);
-
-    return idmOk(request, requestId, startedAt, 'JOB_HISTORY_OK', {
-      items: filtered.slice(0, limit),
-      total: filtered.length,
-      limit,
-      feature,
-    });
+    const limit = Math.max(1, Math.min(50, Math.floor(safeNumber(url.searchParams.get('limit'), IMAGE_DEFAULTS.jobHistoryLimit) || IMAGE_DEFAULTS.jobHistoryLimit)));
+    const items = await listJobs(env, limit);
+    return jsonResponse(
+      request,
+      successEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: 'JOB_HISTORY_OK',
+        data: {
+          items,
+          total: items.length,
+          limit,
+          feature: 'image',
+        },
+      })
+    );
   } catch (error) {
-    const message = error && error.message ? error.message : 'İş geçmişi alınamadı.';
-    return idmErr(request, requestId, startedAt, 'JOB_HISTORY_FAILED', message, null, 500, true);
+    const safe = sanitizeError(error);
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: safe.code || 'JOB_HISTORY_FAILED',
+        message: safe.message || 'JOB GEÇMİŞİ OKUNAMADI.',
+        status: 500,
+      }),
+      500
+    );
   }
-});
+}
 
-router.post('/jobs/cancel', async ({ request, me }) => {
-  const startedAt = idmNowMs();
-  const requestId = idmCreateId('cancel');
+async function handleJobCancel(request, env) {
+  const startedAt = nowMs();
+  const requestId = createId('cancel');
+  const traceId = createId('trace');
 
   try {
-    const body = await idmReadBody(request);
-    const json = body.json || {};
-    const jobId = idmSafeString(json.jobId || json.id);
+    const body = await parseRequestJson(request);
+    const jobId = safeString(body?.jobId);
     if (!jobId) {
-      return idmErr(request, requestId, startedAt, 'JOB_ID_REQUIRED', 'İptal için jobId zorunludur.', null, 400, false);
+      return jsonResponse(
+        request,
+        errorEnvelope({
+          requestId,
+          traceId,
+          startedAt,
+          code: 'JOB_ID_REQUIRED',
+          message: 'jobId ZORUNLU.',
+          status: 400,
+        }),
+        400
+      );
     }
 
-    const job = await idmLoadJob(me, jobId);
-    if (!job) {
-      return idmErr(request, requestId, startedAt, 'JOB_NOT_FOUND', 'İptal edilecek iş kaydı bulunamadı.', { jobId }, 404, false);
+    const current = await readJob(env, jobId);
+    if (!current) {
+      return jsonResponse(
+        request,
+        errorEnvelope({
+          requestId,
+          traceId,
+          startedAt,
+          code: 'JOB_NOT_FOUND',
+          message: 'JOB BULUNAMADI.',
+          status: 404,
+        }),
+        404
+      );
     }
 
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-      return idmOk(request, requestId, startedAt, 'JOB_CANCEL_NOOP', {
-        jobId,
-        status: job.status,
-        cancelRequested: false,
-        message: 'İş zaten terminal durumda olduğu için iptal uygulanmadı.',
-      });
-    }
-
-    const cancelled = await idmUpdateJob(me, jobId, {
-      status: 'cancelled',
-      cancelRequested: true,
-      retryable: true,
-      step: 'cancelled',
-      finishedAt: idmNowIso(),
-      error: {
-        message: 'İş kullanıcı isteğiyle iptal edildi.',
-        retryable: true,
-      },
+    const job = await updateJob(env, jobId, (jobState) => {
+      if (JOB_TERMINAL_STATUSES.has(jobState.status)) {
+        return {
+          ...jobState,
+          cancelRequested: true,
+        };
+      }
+      return {
+        ...jobState,
+        cancelRequested: true,
+        status: 'cancelled',
+        step: 'cancelled',
+        finishedAt: nowIso(),
+      };
     });
 
-    return idmOk(request, requestId, startedAt, 'JOB_CANCELLED', cancelled);
+    return jsonResponse(
+      request,
+      successEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: 'JOB_CANCELLED',
+        data: job,
+      })
+    );
   } catch (error) {
-    const message = error && error.message ? error.message : 'İptal isteği işlenemedi.';
-    return idmErr(request, requestId, startedAt, 'JOB_CANCEL_FAILED', message, null, 500, true);
+    const safe = sanitizeError(error);
+    const status = safe.code === 'INVALID_JSON' ? 400 : 500;
+    return jsonResponse(
+      request,
+      errorEnvelope({
+        requestId,
+        traceId,
+        startedAt,
+        code: safe.code || 'JOB_CANCEL_FAILED',
+        message: safe.message || 'JOB İPTAL EDİLEMEDİ.',
+        status,
+      }),
+      status
+    );
   }
-});
+}
+
+async function handleNotFound(request) {
+  const startedAt = nowMs();
+  const requestId = createId('route');
+  const traceId = createId('trace');
+  return jsonResponse(
+    request,
+    errorEnvelope({
+      requestId,
+      traceId,
+      startedAt,
+      code: 'ROUTE_NOT_FOUND',
+      message: 'ROUTE BULUNAMADI.',
+      status: 404,
+    }),
+    404
+  );
+}
+
+async function dispatchRequest(request, env, ctx) {
+  const url = new URL(request.url);
+  const pathname = url.pathname.replace(/\/+$/, '') || '/';
+  const method = request.method.toUpperCase();
+
+  if (method === 'OPTIONS') return handleOptions(request);
+  if (method === 'GET' && pathname === '/') return handleRoot(request);
+  if (method === 'GET' && pathname === '/health') return handleHealth(request);
+  if (method === 'GET' && pathname === '/models') return handleModels(request);
+  if (method === 'POST' && pathname === '/generate') return handleGenerate(request, env, ctx);
+  if (method === 'GET' && pathname.startsWith('/jobs/status/')) {
+    const jobId = decodeURIComponent(pathname.slice('/jobs/status/'.length));
+    return handleJobStatus(request, env, jobId);
+  }
+  if (method === 'GET' && pathname === '/jobs/history') return handleJobHistory(request, env);
+  if (method === 'POST' && pathname === '/jobs/cancel') return handleJobCancel(request, env);
+  return handleNotFound(request);
+}
+
+export default {
+  async fetch(request, env = {}, ctx = { waitUntil() {} }) {
+    try {
+      return await dispatchRequest(request, env, ctx);
+    } catch (error) {
+      const startedAt = nowMs();
+      const requestId = createId('fatal');
+      const traceId = createId('trace');
+      const safe = sanitizeError(error);
+      return jsonResponse(
+        request,
+        errorEnvelope({
+          requestId,
+          traceId,
+          startedAt,
+          code: safe.code || 'UNEXPECTED_ERROR',
+          message: safe.message || 'BEKLENMEYEN HATA OLUŞTU.',
+          status: 500,
+        }),
+        500
+      );
+    }
+  },
+};
