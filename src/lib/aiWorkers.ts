@@ -1,6 +1,25 @@
 // ===============================
 // src/lib/aiWorkers.ts
 // Bu yardımcı katman, katalog ve chat worker sözleşmesini tek yerde toplar.
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, FRONTEND TARAFINDAKİ AI WORKER İLETİŞİM KATMANIDIR.
+2) CHAT_WORKER_URL VE MODEL_WORKER_URL SABİTLERİ, CHAT VE MODEL KATALOĞU SERVİSLERİNİN TEK MERKEZDEN TANIMLANMASINI SAĞLAR.
+3) CREDIT_RATE DEĞERİ, USD TABANLI FİYATI KREDİ BİRİMİNE ÇEVİRMEK İÇİN KULLANILIR.
+4) WorkerEnvelope TİPİ, TÜM WORKER YANITLARINI ok, code, data, error, meta, requestId, traceId YAPISINDA STANDARTLAŞTIRIR.
+5) ModelCatalogItem VE ModelCatalogPayload TİPLERİ, MODEL KATALOĞUNUN FRONTEND TARAFINDA GÜVENLİ KULLANILMASINI SAĞLAR.
+6) ModelCatalogQuery, search, company, badge, category, sort, limit, offset VE modelId FİLTRELERİNİ DESTEKLER.
+7) toQueryString() FONKSİYONU, BU FİLTRELERİ URL PARAMETRELERİNE ÇEVİRİR.
+8) fetchModelCatalog() FONKSİYONU, MODEL WORKER'A GET İSTEĞİ ATIP PARSE EDİLMİŞ DATA DÖNER.
+9) fetchChatModelById(), TEK BİR MODELİ modelId ÜZERİNDEN KATALOGDAN BULMAK İÇİN KULLANILIR.
+10) sendChatWorker(), CHAT WORKER'A JSON POST GÖNDEREREK NORMAL CHAT SONUCUNU ALIR.
+11) streamChatWorker(), SSE TABANLI STREAM YANITLARI ready, chunk VE done EVENT'LERİYLE PARÇALI OLARAK İŞLER.
+12) parseSseFrame() VE handleParsedFrame MANTIĞI, STREAM AKIŞINI FRONTEND CALLBACK'LERİNE DÖNÜŞTÜRÜR.
+13) readJsonResponse(), BOŞ VEYA GEÇERSİZ JSON YANITLARI İNSAN OKUNUR HATA MESAJINA ÇEVİRİR.
+14) priceToCredits(), formatUsd(), formatCredits() VE summarizeModel() GİBİ YARDIMCILAR UI SUNUMUNU KOLAYLAŞTIRIR.
+15) KISACA: BU DOSYA, AI MODEL KATALOĞU VE CHAT WORKER'LARI İÇİN TİPLİ, HATA KONTROLLÜ VE STREAM DESTEKLİ ANA FRONTEND KÖPRÜSÜDÜR.
+█████████████████████████████████████████████
+*/
 // ===============================
 export const CHAT_WORKER_URL = 'https://chat.puter.work/chat';
 export const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
