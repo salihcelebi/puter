@@ -1,3 +1,17 @@
+/*
+█████████████████████████████████████████████
+1) BU DOSYA, PAKET, CHECKOUT VE WEBHOOK ODAKLI ÖDEME ROUTE'LARINI YÖNETEN DOSYADIR.
+2) billingRouter, EXPRESS ROUTER ÜZERİNDEN TANIMLANIR.
+3) billingService, FİYAT PAKETLERİ VE ÖDEME İŞLEMLERİNİN ASIL SERVİS KATMANINI TAŞIR.
+4) GET /packages ENDPOINT'I, SATILABİLİR KREDİ VEYA PAKET BİLGİLERİNİ DÖNDÜRMEK İÇİN KULLANILIR.
+5) POST /checkout ENDPOINT'I, GİRİŞ YAPMIŞ KULLANICIDAN packageId VE provider ALARAK ÖDEME BAŞLATIR.
+6) requireAuth KULLANIMI, CHECKOUT'UN SADECE OTURUMLU KULLANICIYA AÇIK OLMASINI SAĞLAR.
+7) createPayment ÇAĞRISI, payment VE checkoutUrl DÖNEREK HARİCİ ÖDEME AKIŞINI BAŞLATIR.
+8) POST /webhook/:provider ENDPOINT'I, ÖDEME SAĞLAYICISINDAN GELEN GERİ BİLDİRİMLERİ İŞLEMEK İÇİN TASARLANMIŞTIR.
+9) DOSYADA “GERÇEK UYGULAMADA İMZA DOĞRULA” NOTU VARDIR; YANİ WEBHOOK GÜVENLİĞİ DAHA DA GÜÇLENDİRİLECEK ALANDIR.
+10) KISACA: BU DOSYA, PAKET GÖRÜNTÜLEME, ÖDEME BAŞLATMA VE SAĞLAYICI WEBHOOK İŞLEME KAPISIDIR.
+█████████████████████████████████████████████
+*/
 import { Router } from 'express';
 import { billingService } from '../services/billingService.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
