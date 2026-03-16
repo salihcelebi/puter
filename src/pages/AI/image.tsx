@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 /*
 KISA AÇIKLAMA:
-Bu React sayfası sadece worker API ile konuşur, modeli tarayıcıda çalıştırmaz.
+Bu React sayfası worker API ile konuşur.
+20 farklı fetch stratejisini sırayla dener.
+Başarılı stratejiyi hafızaya alır ve sonra önce onu kullanır.
 */
 
 const WORKER_BASE_URL = 'https://idm.puter.work';
@@ -28,6 +30,8 @@ const DEFAULT_RATIO = '1:1';
 const DEFAULT_QUALITY = 'standard';
 const POLL_INTERVAL_MS = 2500;
 const HISTORY_LIMIT = 20;
+const STRATEGY_STORAGE_KEY = 'idm_fetch_strategy_success_v1';
+const DEBUG_LOG_LIMIT = 120;
 
 const RATIO_OPTIONS = [
   { value: '1:1', label: '1:1 Kare' },
@@ -75,25 +79,6 @@ function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-function pickJobImages(job, inlinePreview) {
-  const bag = [];
-
-  const pushIf = (v) => {
-    const clean = safeText(v);
-    if (clean && !bag.includes(clean)) bag.push(clean);
-  };
-
-  pushIf(job?.outputUrl);
-  pushIf(job?.url);
-
-  normalizeArray(job?.outputUrls).forEach(pushIf);
-  normalizeArray(job?.urls).forEach(pushIf);
-
-  pushIf(inlinePreview);
-
-  return bag;
-}
-
 function formatDateTime(value) {
   const text = safeText(value);
   if (!text) return '-';
@@ -124,6 +109,23 @@ function statusTone(status) {
   return '#64748b';
 }
 
+function pickJobImages(job, inlinePreview) {
+  const bag = [];
+
+  function pushIf(v) {
+    const clean = safeText(v);
+    if (clean && !bag.includes(clean)) bag.push(clean);
+  }
+
+  pushIf(job?.outputUrl);
+  pushIf(job?.url);
+  normalizeArray(job?.outputUrls).forEach(pushIf);
+  normalizeArray(job?.urls).forEach(pushIf);
+  pushIf(inlinePreview);
+
+  return bag;
+}
+
 async function readJson(response) {
   const text = await response.text();
   try {
@@ -142,7 +144,14 @@ async function readJson(response) {
   }
 }
 
-function normalizeWorkerErrorMessage(payload, response) {
+function normalizeWorkerErrorMessage(payload, response, rawErrorMessage) {
+  const raw = safeText(rawErrorMessage);
+  if (raw) {
+    if (raw.includes('Failed to fetch')) return 'Worker erişimi başarısız oldu. Ağ, CORS veya domain sorunu olabilir.';
+    if (raw.includes('NetworkError')) return 'Ağ bağlantısı kurulamadı.';
+    if (raw.includes('Load failed')) return 'İstek yüklenemedi.';
+  }
+
   const message = safeText(payload?.error?.message, '');
   if (message) return message;
 
@@ -152,6 +161,7 @@ function normalizeWorkerErrorMessage(payload, response) {
   if (code === 'IMAGE_NOT_READY') return 'Görsel henüz hazır değil.';
   if (code === 'JOB_ID_REQUIRED') return 'Job kimliği eksik.';
   if (response?.status === 404) return 'Worker rotası bulunamadı.';
+  if (response?.status === 405) return 'Method izinli değil.';
   if (response?.status === 429) return 'Çok sık istek atıldı.';
   if (response?.status >= 500) return 'Sunucu tarafında hata oluştu.';
   return 'İstek başarısız oldu.';
@@ -204,16 +214,93 @@ async function requestWorker(path, options = {}) {
     throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
   }
 
-  const payload = await readJson(response);
+  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = window.setTimeout(() => controller.abort(), 60000);
 
-  if (!response.ok || payload?.ok === false) {
-    const error = new Error(normalizeWorkerErrorMessage(payload, response));
-    error.payload = payload;
-    error.status = response.status;
-    throw error;
+      response = await fetch(`${WORKER_BASE_URL}${path}`, {
+        method: options.method || 'GET',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+        credentials: 'include',
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+
+      if (response.status >= 500 && attempt <= retryCount + 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+      } else {
+        break;
+      }
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt > retryCount) {
+        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+        throw new Error(
+          isAbort
+            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
+            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
   }
 
-  return payload;
+  if (!response) {
+    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
+  }
+
+  let lastError = null;
+
+  for (const strategy of ordered) {
+    try {
+      if (pushDebugLog) {
+        pushDebugLog(`DENENİYOR → ${strategy.name} → ${strategy.url}`);
+      }
+
+      const response = await strategy.run();
+      const payload = await readJson(response);
+
+      if (!response.ok || payload?.ok === false) {
+        const message = normalizeWorkerErrorMessage(payload, response, '');
+        lastError = new Error(`[${strategy.name}] ${message}`);
+        lastError.payload = payload;
+        lastError.status = response.status;
+
+        if (pushDebugLog) {
+          pushDebugLog(`BAŞARISIZ → ${strategy.name} → HTTP ${response.status} → ${message}`);
+        }
+        continue;
+      }
+
+      setStoredWinningStrategyName(strategy.name);
+
+      if (pushDebugLog) {
+        pushDebugLog(`BAŞARILI → ${strategy.name} → ${strategy.url}`);
+      }
+
+      return payload;
+    } catch (error) {
+      lastError = error;
+
+      if (pushDebugLog) {
+        pushDebugLog(`HATA → ${strategy.name} → ${strategy.url} → ${safeText(error?.message, 'Bilinmeyen hata')}`);
+      }
+    }
+  }
+
+  const finalPayload = lastError?.payload || null;
+  const finalMessage = normalizeWorkerErrorMessage(finalPayload, null, safeText(lastError?.message, ''));
+  const err = new Error(finalMessage);
+  err.payload = finalPayload;
+  err.originalError = lastError;
+  throw err;
 }
 
 export default function IDMImagePage() {
@@ -227,6 +314,7 @@ export default function IDMImagePage() {
   const [loadingInfo, setLoadingInfo] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [debugLogs, setDebugLogs] = useState([]);
 
   const pollRef = useRef(null);
 
@@ -238,6 +326,11 @@ export default function IDMImagePage() {
     quality: DEFAULT_QUALITY,
     style: '',
   });
+
+  const pushDebugLog = useCallback((text) => {
+    const line = `${new Date().toLocaleTimeString('tr-TR')} - ${text}`;
+    setDebugLogs((prev) => [line, ...prev].slice(0, DEBUG_LOG_LIMIT));
+  }, []);
 
   const clearPoll = useCallback(() => {
     if (pollRef.current) {
@@ -251,10 +344,14 @@ export default function IDMImagePage() {
     setActiveImageUrls(images);
   }, []);
 
+  const requestWorker = useCallback(async (path, options = {}) => {
+    return requestWorkerWith20Strategies(path, options, pushDebugLog);
+  }, [pushDebugLog]);
+
   const loadWorkerInfo = useCallback(async () => {
     const payload = await requestWorker('/');
     setWorkerInfo(payload?.data || null);
-  }, []);
+  }, [requestWorker]);
 
   const loadModels = useCallback(async () => {
     const items = IMAGE_MODELS.map((item) => ({
@@ -289,15 +386,15 @@ export default function IDMImagePage() {
               urls: [freshUrl],
             };
           }
-        } catch {
-          // Hata olsa bile history kartı çökmemeli.
+        } catch (error) {
+          pushDebugLog(`HISTORY IMAGE FAIL → ${job.jobId} → ${safeText(error?.message, 'bilinmeyen hata')}`);
         }
       }
 
       next.push(job);
     }
     return next;
-  }, []);
+  }, [pushDebugLog, requestWorker]);
 
   const loadHistory = useCallback(async () => {
     setLoadingHistory(true);
@@ -309,7 +406,7 @@ export default function IDMImagePage() {
     } finally {
       setLoadingHistory(false);
     }
-  }, [hydrateHistoryImages]);
+  }, [hydrateHistoryImages, requestWorker]);
 
   const stopIfTerminal = useCallback((job) => {
     const s = safeText(job?.status).toLowerCase();
@@ -338,14 +435,14 @@ export default function IDMImagePage() {
             urls: [freshUrl],
           };
         }
-      } catch {
-        // Sessiz fallback.
+      } catch (error) {
+        pushDebugLog(`ACTIVE IMAGE FAIL → ${job.jobId} → ${safeText(error?.message, 'bilinmeyen hata')}`);
       }
     }
 
     mergeActiveImages(nextJob, inlinePreview);
     return nextJob;
-  }, [mergeActiveImages]);
+  }, [mergeActiveImages, pushDebugLog, requestWorker]);
 
   const pollJob = useCallback((jobId) => {
     clearPoll();
@@ -370,19 +467,22 @@ export default function IDMImagePage() {
         setPageError(error.message || 'Job durumu okunamadı.');
       }
     }, POLL_INTERVAL_MS);
-  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, resolveCompletedImageIfNeeded, stopIfTerminal]);
+  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, requestWorker, resolveCompletedImageIfNeeded, stopIfTerminal]);
 
   const boot = useCallback(async () => {
     setLoadingInfo(true);
     setPageError('');
+    pushDebugLog('BOOT BAŞLADI');
     try {
       await Promise.all([loadWorkerInfo(), loadModels(), loadHistory()]);
+      pushDebugLog('BOOT TAMAMLANDI');
     } catch (error) {
       setPageError(error.message || 'Sayfa başlatılamadı.');
+      pushDebugLog(`BOOT HATA → ${safeText(error?.message, 'bilinmeyen hata')}`);
     } finally {
       setLoadingInfo(false);
     }
-  }, [loadHistory, loadModels, loadWorkerInfo]);
+  }, [loadHistory, loadModels, loadWorkerInfo, pushDebugLog]);
 
   useEffect(() => {
     boot();
@@ -447,7 +547,7 @@ export default function IDMImagePage() {
     } finally {
       setSubmitting(false);
     }
-  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, resolveCompletedImageIfNeeded, stopIfTerminal]);
+  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, requestWorker, resolveCompletedImageIfNeeded, stopIfTerminal]);
 
   const handleCancel = useCallback(async () => {
     const jobId = safeText(activeJob?.jobId);
@@ -465,7 +565,7 @@ export default function IDMImagePage() {
     } catch (error) {
       setPageError(error.message || 'İptal işlemi başarısız oldu.');
     }
-  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages]);
+  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages, requestWorker]);
 
   const handleRefreshHistory = useCallback(async () => {
     setPageError('');
@@ -476,6 +576,15 @@ export default function IDMImagePage() {
     }
   }, [loadHistory]);
 
+  const handleResetStrategy = useCallback(() => {
+    try {
+      localStorage.removeItem(STRATEGY_STORAGE_KEY);
+      pushDebugLog('KAZANAN STRATEJİ SIFIRLANDI');
+    } catch {
+      pushDebugLog('STRATEJİ SIFIRLAMA BAŞARISIZ');
+    }
+  }, [pushDebugLog]);
+
   const activeStatus = safeText(activeJob?.status).toLowerCase();
   const activeStep = safeText(activeJob?.step, '-');
   const activePrompt = safeText(activeJob?.requestSummary?.promptPreview || activeJob?.requestSummary?.prompt || '');
@@ -483,13 +592,14 @@ export default function IDMImagePage() {
   const canCancel = activeStatus === 'queued' || activeStatus === 'processing';
 
   const renderedHistory = useMemo(() => history.slice(0, HISTORY_LIMIT), [history]);
+  const rememberedStrategy = useMemo(() => getStoredWinningStrategyName(), [debugLogs]);
 
   return (
     <div style={styles.page}>
       <div style={styles.hero}>
         <div>
           <div style={styles.eyebrow}>IMAGE WORKER</div>
-          <h1 style={styles.title}>Tek worker üstünden görsel üretim</h1>
+          <h1 style={styles.title}>20 stratejili worker istemcisi</h1>
           <p style={styles.subtitle}>
             Bu sayfa sadece <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
             Modeller kataloğundaki image model listesini kullanır. Depolama mantığı me.puter üstündedir.
@@ -502,6 +612,17 @@ export default function IDMImagePage() {
             {['/models', '/generate', '/jobs/status/:id', '/jobs/history', '/jobs/cancel', '/jobs/image/:id'].map((item) => (
               <span key={item} style={styles.routePill}>{item}</span>
             ))}
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <div style={styles.metaLabel}>HATIRLANAN STRATEJİ</div>
+            <div style={styles.metaValue}>{rememberedStrategy || 'Henüz yok'}</div>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <button type="button" onClick={handleResetStrategy} style={styles.secondaryButton}>
+              Stratejiyi Sıfırla
+            </button>
           </div>
         </div>
       </div>
@@ -661,7 +782,6 @@ export default function IDMImagePage() {
               {activeStatus === 'failed_storage' ? (
                 <div style={styles.warnBox}>
                   Görsel üretimi tamamlandı ama kalıcı depolama başarısız oldu.
-                  Bu durumda completed görünmez. Bu beklenen koruma davranışıdır.
                 </div>
               ) : null}
 
@@ -742,6 +862,23 @@ export default function IDMImagePage() {
             </div>
           )}
         </section>
+      </div>
+
+      <div style={{ ...styles.panel, marginTop: 24 }}>
+        <div style={styles.panelHead}>
+          <h2 style={styles.panelTitle}>Debug log</h2>
+          <div style={styles.metaValue}>{loadingInfo ? 'Başlatılıyor...' : 'Hazır'}</div>
+        </div>
+
+        <div style={styles.debugBox}>
+          {debugLogs.length ? (
+            debugLogs.map((line, index) => (
+              <div key={`${line}-${index}`} style={styles.debugLine}>{line}</div>
+            ))
+          ) : (
+            <div style={styles.emptyText}>Henüz log yok.</div>
+          )}
+        </div>
       </div>
 
       <div style={styles.footerInfo}>
@@ -1073,5 +1210,22 @@ const styles = {
     gap: '16px',
     color: '#94a3b8',
     fontSize: '13px',
+  },
+  debugBox: {
+    maxHeight: '320px',
+    overflow: 'auto',
+    borderRadius: '16px',
+    border: '1px solid rgba(255,255,255,0.08)',
+    background: '#05060a',
+    padding: '12px',
+  },
+  debugLine: {
+    fontSize: '12px',
+    lineHeight: 1.6,
+    color: '#cbd5e1',
+    borderBottom: '1px solid rgba(255,255,255,0.04)',
+    paddingBottom: '6px',
+    marginBottom: '6px',
+    wordBreak: 'break-word',
   },
 };
