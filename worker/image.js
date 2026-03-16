@@ -1,16 +1,16 @@
-// imgs.js — v20.0.0
+// imgs.js — v21.0.0
 // me.puter owner-pays image worker
 // Model catalog source: https://models-worker.puter.work/models
 // Storage strategy: try multiple candidate folders in order, use first successful real path
 
 const WORKER_NAME = 'imgs';
-const WORKER_VERSION = '20.0.0';
+const WORKER_VERSION = '21.0.0';
 const JOB_PREFIX = 'ai_job:';
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
 const URL_EXPIRES_MS = 24 * 60 * 60 * 1000;
 const POLL_INTERVAL_HINT_MS = 1800;
-const MAX_GENERATION_ATTEMPTS = 4;
+const MAX_GENERATION_ATTEMPTS = 1;
 const MODELS_WORKER_URL = 'https://models-worker.puter.work/models?limit=250';
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
@@ -23,6 +23,109 @@ const STORAGE_ROOT_CANDIDATES = Object.freeze([
   'idm_images'
 ]);
 const ALLOWED_IMAGE_PROVIDERS = new Set(['openai-image-generation', 'together', 'gemini', 'xai']);
+
+const FUNCTION_MESSAGE_CATALOG = Object.freeze({
+  nowIso: {
+    title: 'ISO zaman damgası üretimi',
+    successMessage: 'nowIso fonksiyonu geçerli ISO zaman damgasını başarıyla üretti. Olay kayıtlarının kronolojik sıralanması güvenilir hale geldi.',
+    errorMessage: 'nowIso fonksiyonu zaman damgası üretirken beklenmeyen bir sorun yaşadı. Olay kayıtlarının sıralaması şu anda risk altına girdi.'
+  },
+  nowMs: {
+    title: 'Milisaniye zaman üretimi',
+    successMessage: 'nowMs fonksiyonu milisaniye cinsinden zaman değerini doğru hesapladı. Süre ölçümlerinin tutarlı ilerlemesi mümkün hale geldi.',
+    errorMessage: 'nowMs fonksiyonu zaman değerini üretirken başarısız oldu. Süre hesaplamaları bu aşamada güvenilir biçimde yapılamıyor.'
+  },
+  uid: {
+    title: 'Benzersiz kimlik üretimi',
+    successMessage: 'uid fonksiyonu benzersiz bir kimlik oluşturdu. Yeni işin diğer kayıtlarla karışmadan izlenebilmesi sağlandı.',
+    errorMessage: 'uid fonksiyonu benzersiz kimlik üretemedi. Bu durum yeni kaydın başka işlemlerle çakışma riskini artırdı.'
+  },
+  ss: {
+    title: 'Güvenli metin dönüştürme',
+    successMessage: 'ss fonksiyonu verilen değeri güvenli metin biçimine dönüştürdü. Veri işleme sırasında tip kaynaklı karışıklıklar önlendi.',
+    errorMessage: 'ss fonksiyonu değeri güvenli metne dönüştüremedi. Sonraki işlemlerde veri biçimi uyumsuzluğu oluşabilir.'
+  },
+  ci: {
+    title: 'Sayısal sınırlandırma okuması',
+    successMessage: 'ci fonksiyonu metin karşılaştırmasını büyük küçük harf duyarsız biçimde tamamladı. Eşleştirme doğruluğu korunmuş oldu.',
+    errorMessage: 'ci fonksiyonu metinleri karşılaştırırken beklenmeyen bir sorun yaşadı. Eşleşme sonucu güvenilir üretilemedi.'
+  },
+  clamp: {
+    title: 'Sınır aralığı düzeltme',
+    successMessage: 'clamp fonksiyonu sayıyı izin verilen sınırlar içine başarıyla çekti. Ayar değerinin taşması güvenli biçimde engellendi.',
+    errorMessage: 'clamp fonksiyonu sınırlandırma işlemini tamamlayamadı. Geçersiz sayı değeri iş akışını bozabilir.'
+  },
+  normalizeError: {
+    title: 'Hata standardizasyonu',
+    successMessage: 'normalizeError fonksiyonu ham hatayı okunabilir tek biçime çevirdi. Hata kayıtlarının anlaşılması belirgin şekilde kolaylaştı.',
+    errorMessage: 'normalizeError fonksiyonu hatayı standart biçime dönüştüremedi. Ayrıntılar arayüzde eksik veya bozuk görünebilir.'
+  },
+  fetchModelsFromWorker: {
+    title: 'Model worker erişimi',
+    successMessage: 'fetchModelsFromWorker fonksiyonu model worker kaynağından verileri çekti. Güncel katalog başarıyla elde edildi.',
+    errorMessage: 'fetchModelsFromWorker fonksiyonu model worker kaynağına erişemedi. Güncel model listesi alınamadı.'
+  },
+  getImageCatalog: {
+    title: 'Görsel model kataloğu üretimi',
+    successMessage: 'getImageCatalog fonksiyonu yalnızca görsel üretim modellerini ayıkladı. Arayüz için temiz katalog oluşturuldu.',
+    errorMessage: 'getImageCatalog fonksiyonu görsel model kataloğunu kuramadı. Seçilebilir model listesi eksik kaldı.'
+  },
+  findRequestedModel: {
+    title: 'İstenen model seçimi',
+    successMessage: 'findRequestedModel fonksiyonu istenen modeli başarıyla buldu. Üretim için geçerli model kesinleşti.',
+    errorMessage: 'findRequestedModel fonksiyonu istenen modeli bulamadı. Üretim geçersiz model seçimi nedeniyle ilerleyemedi.'
+  },
+  buildPromptText: {
+    title: 'Nihai prompt oluşturma',
+    successMessage: 'buildPromptText fonksiyonu kullanıcı girdilerinden nihai prompt metnini kurdu. Modele gönderilecek içerik hazırlandı.',
+    errorMessage: 'buildPromptText fonksiyonu nihai prompt metnini oluşturamadı. Üretim isteği anlamlı biçimde hazırlanamadı.'
+  },
+  buildGenerationAttemptPlans: {
+    title: 'Üretim deneme planı hazırlama',
+    successMessage: 'buildGenerationAttemptPlans fonksiyonu alternatif üretim planlarını hazırladı. Başarısızlık halinde güvenli deneme sırası oluştu.',
+    errorMessage: 'buildGenerationAttemptPlans fonksiyonu alternatif planları kuramadı. Üretim için yeterli fallback stratejisi oluşmadı.'
+  },
+  sourceToBlob: {
+    title: 'Kaynağı Blob nesnesine çevirme',
+    successMessage: 'sourceToBlob fonksiyonu üretim çıktısını Blob nesnesine çevirdi. Depolama katmanına uygun veri hazırlandı.',
+    errorMessage: 'sourceToBlob fonksiyonu üretim çıktısını Blob nesnesine çeviremedi. Yazılabilir dosya verisi oluşmadı.'
+  },
+  tryWriteToStorageCandidate: {
+    title: 'Aday depolama yoluna yazma',
+    successMessage: 'tryWriteToStorageCandidate fonksiyonu aday depolama yoluna başarıyla yazdı. Geçerli kök güvenli biçimde doğrulandı.',
+    errorMessage: 'tryWriteToStorageCandidate fonksiyonu aday depolama yoluna yazamadı. Sistem sıradaki root denemesine geçti.'
+  },
+  persistGeneratedImage: {
+    title: 'Görseli kalıcı depolama',
+    successMessage: 'persistGeneratedImage fonksiyonu görseli kalıcı depolamaya yazdı. Erişim bağlantısı güvenilir biçimde hazırlandı.',
+    errorMessage: 'persistGeneratedImage fonksiyonu görseli kalıcı depolamaya yazamadı. Üretim sonucu kullanıcıya sunulamadı.'
+  },
+  baseJobRecord: {
+    title: 'Başlangıç job kaydı üretimi',
+    successMessage: 'baseJobRecord fonksiyonu başlangıç iş kaydını oluşturdu. Sürecin izlenebilir temel yapısı güvenle hazırlandı.',
+    errorMessage: 'baseJobRecord fonksiyonu başlangıç iş kaydını kuramadı. Süreç kayıtları tutarsız başlayabilir.'
+  },
+  jobWrite: {
+    title: 'Job kaydı yazma',
+    successMessage: 'jobWrite fonksiyonu yeni iş kaydını başarıyla oluşturdu. Takip edilebilir süreç resmi olarak başlatıldı.',
+    errorMessage: 'jobWrite fonksiyonu yeni iş kaydını oluşturamadı. Süreç kalıcı izleme sistemine alınamadı.'
+  },
+  jobUpdate: {
+    title: 'Job kaydı güncelleme',
+    successMessage: 'jobUpdate fonksiyonu iş kaydını güncelledi. Yeni aşama bilgisi arayüz için görünür hale geldi.',
+    errorMessage: 'jobUpdate fonksiyonu iş kaydını güncelleyemedi. Son durum bilgisi kullanıcıya yansıtılamadı.'
+  },
+  ensureFreshReadUrl: {
+    title: 'Taze erişim URL üretimi',
+    successMessage: 'ensureFreshReadUrl fonksiyonu güncel erişim URL’si üretti. Dosyanın görüntülenebilir bağlantısı hazırlandı.',
+    errorMessage: 'ensureFreshReadUrl fonksiyonu güncel erişim URL’si üretemedi. Dosya bağlantısı güvenle sunulamadı.'
+  },
+  runGeneration: {
+    title: 'Görsel üretim süreci',
+    successMessage: 'runGeneration fonksiyonu üretim sürecini tamamladı, dosyayı sakladı ve sonucu kullanıcıya sunulabilir hale getirdi.',
+    errorMessage: 'runGeneration fonksiyonu üretim veya depolama sürecini tamamlayamadı. İş güvenilir biçimde sonuçlandırılamadı.'
+  }
+});
 
 let modelsCache = {
   fetchedAt: 0,
@@ -258,6 +361,35 @@ async function readJsonResponse(response) {
   return JSON.parse(text);
 }
 
+function messageFor(functionName, status) {
+  const entry = FUNCTION_MESSAGE_CATALOG[functionName] || {};
+  const title = entry.title || functionName;
+  const message = status === 'success'
+    ? (entry.successMessage || `${functionName} başarıyla tamamlandı.`)
+    : (entry.errorMessage || `${functionName} başarısız oldu.`);
+  return { title, message };
+}
+
+function makeEvent(functionName, status, extra = {}) {
+  const pair = messageFor(functionName, status);
+  return {
+    at: nowIso(),
+    functionName,
+    title: pair.title,
+    status,
+    message: status === 'success' ? pair.message : pair.message,
+    code: ss(extra.code),
+    stage: ss(extra.stage),
+    line: ss(extra.line),
+    details: Array.isArray(extra.details) ? extra.details : [],
+    summary: ss(extra.summary)
+  };
+}
+
+function buildStorageStepLine(payload) {
+  return `STORAGE_STEP, jobId=${ss(payload.jobId)}, inputPath=${ss(payload.inputPath)}, resolvedPath=${ss(payload.resolvedPath)}, writeOk=${payload.writeOk === true}, statOk=${payload.statOk === true}, readUrlOk=${payload.readUrlOk === true}, failCode=${ss(payload.failCode, 'NONE')}`;
+}
+
 async function fetchModelsFromWorker() {
   const response = await fetch(MODELS_WORKER_URL, {
     method: 'GET',
@@ -343,12 +475,11 @@ function makeStageError(stage, code, message, bullets = [], retryable = true, ht
 function buildProviderBaseOptions(model, body) {
   const provider = normalizeProviderRegistry(model?.provider, model?.model);
   const modelId = ss(model?.model || model?.modelId, DEFAULT_IMAGE_MODEL);
-  const base = {
+  return {
     provider,
     model: modelId,
     test_mode: Boolean(body?.test_mode === true)
   };
-  return base;
 }
 
 function buildOpenAiImageOptions(model, body) {
@@ -388,8 +519,7 @@ function buildGeminiImageOptions(model, body) {
 }
 
 function buildXaiImageOptions(model, body) {
-  const base = buildProviderBaseOptions(model, body);
-  return base;
+  return buildProviderBaseOptions(model, body);
 }
 
 function buildProviderSpecificOptions(model, body) {
@@ -406,63 +536,12 @@ function buildProviderSpecificOptions(model, body) {
 
 function buildGenerationAttemptPlans(model, body) {
   const provider = normalizeProviderRegistry(model?.provider, model?.model);
-  const plans = [];
-  const requestedRatio = body?.ratio || '1:1';
-  const requestedQuality = body?.quality || 'medium';
-  const fallbackRatios = [requestedRatio, '1:1'];
-  const fallbackQualities = [requestedQuality, 'medium', 'high', 'low'];
-
-  if (provider === 'openai-image-generation') {
-    for (const q of fallbackQualities) {
-      for (const r of fallbackRatios) {
-        const draftBody = { ...body, quality: q, ratio: r };
-        plans.push({
-          index: plans.length + 1,
-          timeoutMs: 26000 + plans.length * 2500,
-          prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
-          options: buildProviderSpecificOptions(model, draftBody)
-        });
-        if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
-      }
-    }
-  } else if (provider === 'together') {
-    const togetherBodies = [
-      { ...body },
-      { ...body, ratio: requestedRatio || '1:1' },
-      { ...body, ratio: '1:1' }
-    ];
-    for (const draftBody of togetherBodies) {
-      plans.push({
-        index: plans.length + 1,
-        timeoutMs: 28000 + plans.length * 3000,
-        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
-        options: buildProviderSpecificOptions(model, draftBody)
-      });
-      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
-    }
-  } else if (provider === 'gemini') {
-    const geminiBodies = [
-      { ...body },
-      { ...body, ratio: '1:1' }
-    ];
-    for (const draftBody of geminiBodies) {
-      plans.push({
-        index: plans.length + 1,
-        timeoutMs: 30000 + plans.length * 3500,
-        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
-        options: buildProviderSpecificOptions(model, draftBody)
-      });
-      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
-    }
-  } else {
-    plans.push({
-      index: 1,
-      timeoutMs: 26000,
-      prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
-      options: buildProviderSpecificOptions(model, body)
-    });
-  }
-  return plans;
+  return [{
+    index: 1,
+    timeoutMs: provider === 'gemini' ? 30000 : 26000,
+    prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+    options: buildProviderSpecificOptions(model, body)
+  }];
 }
 
 function dataUrlToBlob(dataUrl) {
@@ -480,6 +559,14 @@ function dataUrlToBlob(dataUrl) {
     const text = decodeURIComponent(dataPart);
     bytes = new TextEncoder().encode(text);
   }
+  return new Blob([bytes], { type: mime });
+}
+
+function base64ToBlob(base64, mime = 'application/octet-stream') {
+  const clean = ss(base64).replace(/^data:[^,]+,/, '');
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mime });
 }
 
@@ -525,58 +612,6 @@ function attachBullets(error, bullets) {
   return error;
 }
 
-
-function storageLogLine(jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode) {
-  return [
-    'STORAGE_STEP',
-    ss(jobId, '-'),
-    ss(inputPath, '-'),
-    ss(resolvedPath, '-'),
-    writeOk ? 'true' : 'false',
-    statOk ? 'true' : 'false',
-    readUrlOk ? 'true' : 'false',
-    ss(failCode, 'OK')
-  ].join(', ');
-}
-
-function storageStepMeta(jobId, inputPath, resolvedPath = '', writeOk = false, statOk = false, readUrlOk = false, failCode = 'OK', extraBullets = []) {
-  const line = storageLogLine(jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode);
-  console.log(line);
-  return {
-    line,
-    bullets: [
-      line,
-      ...((Array.isArray(extraBullets) ? extraBullets : []).filter(Boolean))
-    ]
-  };
-}
-
-function normalizeBase64ToBlob(base64Value, mimeType = 'image/png') {
-  const cleaned = ss(base64Value).replace(/^data:[^,]+,/, '').replace(/\s+/g, '');
-  if (!cleaned) throw new Error('Boş base64 veri');
-  const binary = atob(cleaned);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mimeType });
-}
-
-function getStorageFailCode(error) {
-  const code = ss(error?.code);
-  if (code) return code;
-  return 'STORAGE_FAILED';
-}
-
-async function mkdirIfPossible(path) {
-  try {
-    if (typeof me?.puter?.fs?.mkdir !== 'function') return false;
-    await me.puter.fs.mkdir(path, { recursive: true });
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-
 async function withTimeout(promise, ms) {
   let timer;
   const timeoutPromise = new Promise((_, reject) => {
@@ -601,6 +636,8 @@ function slimJobForKv(job) {
   delete j.rawDataUrl;
   if (j.step && j.step.length > 2000) j.step = j.step.slice(0, 2000);
   if (j.error?.message && j.error.message.length > 1200) j.error.message = j.error.message.slice(0, 1200);
+  if (Array.isArray(j.events) && j.events.length > 80) j.events = j.events.slice(-80);
+  if (Array.isArray(j.storageLogs) && j.storageLogs.length > 80) j.storageLogs = j.storageLogs.slice(-80);
   let str = JSON.stringify(j);
   if (str.length <= KV_SAFE_LIMIT) return j;
   if (j.requestSummary) j.requestSummary.promptPreview = '';
@@ -629,7 +666,9 @@ function slimJobForKv(job) {
     error: j.error,
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
-    finishedAt: j.finishedAt
+    finishedAt: j.finishedAt,
+    events: Array.isArray(j.events) ? j.events.slice(-40) : [],
+    storageLogs: Array.isArray(j.storageLogs) ? j.storageLogs.slice(-40) : []
   };
 }
 
@@ -664,6 +703,51 @@ async function jobUpdate(jobId, updater) {
   return jobWrite(next);
 }
 
+async function pushJobEvent(jobId, functionName, status, extra = {}) {
+  try {
+    await jobUpdate(jobId, async (job) => {
+      const nextEvents = Array.isArray(job.events) ? [...job.events] : [];
+      nextEvents.push(makeEvent(functionName, status, extra));
+      if (nextEvents.length > 80) nextEvents.splice(0, nextEvents.length - 80);
+      if (extra.summary) job.step = ss(extra.summary, job.step);
+      return {
+        ...job,
+        events: nextEvents
+      };
+    });
+  } catch (_) {}
+}
+
+async function pushStorageLog(jobId, payload) {
+  const line = buildStorageStepLine(payload);
+  try {
+    await jobUpdate(jobId, async (job) => {
+      const nextLogs = Array.isArray(job.storageLogs) ? [...job.storageLogs] : [];
+      nextLogs.push(line);
+      if (nextLogs.length > 80) nextLogs.splice(0, nextLogs.length - 80);
+      const nextEvents = Array.isArray(job.events) ? [...job.events] : [];
+      nextEvents.push({
+        at: nowIso(),
+        functionName: 'storage.step',
+        title: 'Depolama adım kaydı',
+        status: payload.failCode && payload.failCode !== 'NONE' ? 'error' : 'success',
+        message: line,
+        code: ss(payload.failCode),
+        stage: 'storage',
+        line,
+        details: []
+      });
+      if (nextEvents.length > 80) nextEvents.splice(0, nextEvents.length - 80);
+      return {
+        ...job,
+        storageLogs: nextLogs,
+        events: nextEvents
+      };
+    });
+  } catch (_) {}
+  return line;
+}
+
 async function listJobs(limit = HISTORY_LIMIT) {
   const keys = await kvList(JOB_PREFIX);
   const jobs = [];
@@ -693,21 +777,10 @@ async function ensureFreshReadUrl(job) {
 }
 
 async function sourceToBlob(src) {
-  if (src instanceof Blob) {
-    if (!src.size) throw new Error('Blob boş döndü');
-    return src;
-  }
-  if (src instanceof Uint8Array) {
-    if (!src.byteLength) throw new Error('Uint8Array boş döndü');
-    return new Blob([src], { type: 'image/png' });
-  }
-  if (src instanceof ArrayBuffer) {
-    if (!src.byteLength) throw new Error('ArrayBuffer boş döndü');
-    return new Blob([src], { type: 'image/png' });
-  }
-  if (typeof src === 'object' && src?.base64) {
-    return normalizeBase64ToBlob(src.base64, ss(src.mimeType, 'image/png'));
-  }
+  if (src instanceof Blob) return src;
+  if (src instanceof Uint8Array) return new Blob([src], { type: 'application/octet-stream' });
+  if (src instanceof ArrayBuffer) return new Blob([src], { type: 'application/octet-stream' });
+  if (src && typeof src === 'object' && src.type && src.size != null && typeof src.arrayBuffer === 'function') return src;
   if (typeof src === 'string' && src.startsWith('data:')) return dataUrlToBlob(src);
   if (typeof src === 'string' && /^https?:\/\//i.test(src)) {
     const response = await withTimeout(fetch(src), 20000);
@@ -716,85 +789,103 @@ async function sourceToBlob(src) {
     if (!blob || !blob.size) throw new Error('Uzak görsel boş döndü');
     return blob;
   }
-  if (typeof src === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(src) && src.length > 64) {
-    return normalizeBase64ToBlob(src, 'image/png');
+  if (typeof src === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(src) && src.length > 80) {
+    return base64ToBlob(src, 'image/png');
+  }
+  if (src && typeof src === 'object') {
+    if (typeof src.dataUrl === 'string') return dataUrlToBlob(src.dataUrl);
+    if (typeof src.base64 === 'string') return base64ToBlob(src.base64, ss(src.mimeType, 'image/png'));
+    if (typeof src.url === 'string') return sourceToBlob(src.url);
+    if (src.bytes instanceof Uint8Array) return new Blob([src.bytes], { type: ss(src.mimeType, 'application/octet-stream') });
+    if (src.buffer instanceof ArrayBuffer) return new Blob([src.buffer], { type: ss(src.mimeType, 'application/octet-stream') });
   }
   throw new Error('Geçersiz görsel kaynağı');
 }
 
-async function tryWriteToStorageCandidate(jobId, root, relativePath, blob) {
+async function tryWriteToStorageCandidate(root, relativePath, blob) {
   const attemptedPath = joinFsPath(root, relativePath);
-  const parentPath = attemptedPath.split('/').slice(0, -1).join('/');
-  let writeResult = null;
   let resolvedPath = attemptedPath;
-  let statInfo = null;
-  let readUrl = null;
   let writeOk = false;
   let statOk = false;
   let readUrlOk = false;
-
-  await mkdirIfPossible(parentPath);
-
-  try {
-    writeResult = await me.puter.fs.write(attemptedPath, blob, {
-      overwrite: true,
-      createMissingParents: true,
-      dedupeName: false
-    });
-    resolvedPath = ss(writeResult?.path || writeResult?.item?.path || attemptedPath, attemptedPath);
-    writeOk = true;
-  } catch (writeError) {
-    const meta = storageStepMeta(jobId, attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, 'WRITE_FAIL', [
-      `root=${root}`,
-      normalizeError(writeError)
-    ]);
-    throw makeStageError('storage', 'WRITE_FAIL', `Dosya yazılamadı: ${normalizeError(writeError)}`, meta.bullets, true, 500);
-  }
+  let statInfo = null;
+  let readUrl = '';
+  let failCode = 'NONE';
 
   try {
-    statInfo = await me.puter.fs.stat(resolvedPath);
-    statOk = true;
-  } catch (statError) {
     try {
-      statInfo = await me.puter.fs.stat(attemptedPath);
-      statOk = true;
-      resolvedPath = ss(statInfo?.path || resolvedPath, resolvedPath);
-    } catch (fallbackStatError) {
-      const meta = storageStepMeta(jobId, attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, 'STAT_FAIL', [
-        `root=${root}`,
-        `primaryStat=${normalizeError(statError)}`,
-        `fallbackStat=${normalizeError(fallbackStatError)}`
-      ]);
-      throw makeStageError('storage', 'STAT_FAIL', `Dosya doğrulanamadı: ${normalizeError(statError)}`, meta.bullets, true, 500);
+      await me.puter.fs.mkdir(root, { createMissingParents: true });
+    } catch (_) {}
+
+    let writeResult;
+    try {
+      writeResult = await me.puter.fs.write(attemptedPath, blob, {
+        overwrite: true,
+        createMissingParents: true,
+        dedupeName: false
+      });
+      resolvedPath = ss(writeResult?.path || writeResult?.item?.path || attemptedPath, attemptedPath);
+      writeOk = true;
+    } catch (writeError) {
+      failCode = 'WRITE_FAIL';
+      const err = makeStageError('storage', 'WRITE_FAIL', `fs.write başarısız: ${normalizeError(writeError)}`, [
+        `attemptedPath=${attemptedPath}`,
+        `resolvedPath=${resolvedPath}`
+      ], true, 500);
+      err.storageDebug = { attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, failCode };
+      throw err;
     }
+
+    try {
+      statInfo = await me.puter.fs.stat(resolvedPath);
+      statOk = true;
+    } catch (statError) {
+      failCode = 'STAT_FAIL';
+      const err = makeStageError('storage', 'STAT_FAIL', `fs.stat başarısız: ${normalizeError(statError)}`, [
+        `attemptedPath=${attemptedPath}`,
+        `resolvedPath=${resolvedPath}`
+      ], true, 500);
+      err.storageDebug = { attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, failCode };
+      throw err;
+    }
+
+    const finalPath = ss(statInfo?.path || resolvedPath, resolvedPath);
+    resolvedPath = finalPath;
+
+    try {
+      readUrl = await me.puter.fs.getReadURL(finalPath, URL_EXPIRES_MS);
+      readUrlOk = true;
+    } catch (readUrlError) {
+      failCode = 'READ_URL_FAIL';
+      const err = makeStageError('storage', 'READ_URL_FAIL', `fs.getReadURL başarısız: ${normalizeError(readUrlError)}`, [
+        `attemptedPath=${attemptedPath}`,
+        `resolvedPath=${resolvedPath}`
+      ], true, 500);
+      err.storageDebug = { attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, failCode };
+      throw err;
+    }
+
+    return {
+      attemptedPath,
+      resolvedPath,
+      readUrl,
+      root,
+      statInfo,
+      writeOk,
+      statOk,
+      readUrlOk,
+      failCode
+    };
+  } catch (error) {
+    if (!error.storageDebug) {
+      error.storageDebug = { attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, failCode: failCode || 'STORAGE_FAILED' };
+    }
+    throw error;
   }
-
-  const finalPath = ss(statInfo?.path || resolvedPath, resolvedPath);
-
-  try {
-    readUrl = await me.puter.fs.getReadURL(finalPath, URL_EXPIRES_MS);
-    readUrlOk = Boolean(readUrl);
-    if (!readUrlOk) throw new Error('Boş read URL');
-  } catch (readUrlError) {
-    const meta = storageStepMeta(jobId, attemptedPath, finalPath, writeOk, statOk, readUrlOk, 'READ_URL_FAIL', [
-      `root=${root}`,
-      normalizeError(readUrlError)
-    ]);
-    throw makeStageError('storage', 'READ_URL_FAIL', `Okuma URL alınamadı: ${normalizeError(readUrlError)}`, meta.bullets, true, 500);
-  }
-
-  const meta = storageStepMeta(jobId, attemptedPath, finalPath, writeOk, statOk, readUrlOk, 'OK', [`root=${root}`]);
-  return {
-    attemptedPath,
-    resolvedPath: finalPath,
-    readUrl,
-    root,
-    statInfo,
-    logLine: meta.line
-  };
 }
 
 async function persistGeneratedImage(jobId, source) {
+  await pushJobEvent(jobId, 'sourceToBlob', 'success', { stage: 'storage', summary: 'Depolama girdisi hazırlanıyor' });
   const blob = await sourceToBlob(source);
   const ext = typeof source === 'string' && source.startsWith('data:')
     ? guessExtensionFromDataUrl(source)
@@ -804,8 +895,36 @@ async function persistGeneratedImage(jobId, source) {
   const attempts = [];
 
   for (const root of getStorageRootCandidates()) {
+    const payloadBase = {
+      jobId,
+      inputPath: joinFsPath(root, relativePath),
+      resolvedPath: '',
+      writeOk: false,
+      statOk: false,
+      readUrlOk: false,
+      failCode: 'NONE'
+    };
     try {
-      const stored = await tryWriteToStorageCandidate(jobId, root, relativePath, blob);
+      const stored = await tryWriteToStorageCandidate(root, relativePath, blob);
+      await pushStorageLog(jobId, {
+        ...payloadBase,
+        inputPath: stored.attemptedPath,
+        resolvedPath: stored.resolvedPath,
+        writeOk: stored.writeOk,
+        statOk: stored.statOk,
+        readUrlOk: stored.readUrlOk,
+        failCode: stored.failCode
+      });
+      await pushJobEvent(jobId, 'tryWriteToStorageCandidate', 'success', {
+        stage: 'storage',
+        code: 'STORAGE_OK',
+        summary: 'Depolama başarılı',
+        details: [
+          `attemptedPath=${stored.attemptedPath}`,
+          `resolvedPath=${stored.resolvedPath}`,
+          `storageRoot=${root}`
+        ]
+      });
       const fileName = stored.resolvedPath.split('/').pop();
       return {
         path: stored.resolvedPath,
@@ -815,31 +934,56 @@ async function persistGeneratedImage(jobId, source) {
         mimeType,
         readUrl: stored.readUrl,
         expiresAt: new Date(nowMs() + URL_EXPIRES_MS).toISOString(),
-        triedRoots: attempts.map((item) => item.root),
-        logLine: stored.logLine
+        triedRoots: attempts.map((item) => item.root)
       };
     } catch (error) {
-      attempts.push({ root, error: normalizeError(error), code: getStorageFailCode(error) });
+      const debug = error.storageDebug || payloadBase;
+      await pushStorageLog(jobId, {
+        ...payloadBase,
+        inputPath: debug.attemptedPath || payloadBase.inputPath,
+        resolvedPath: debug.resolvedPath || '',
+        writeOk: debug.writeOk === true,
+        statOk: debug.statOk === true,
+        readUrlOk: debug.readUrlOk === true,
+        failCode: ss(debug.failCode, ss(error?.code, 'STORAGE_FAILED'))
+      });
+      await pushJobEvent(jobId, 'tryWriteToStorageCandidate', 'error', {
+        stage: 'storage',
+        code: ss(error?.code, 'STORAGE_FAILED'),
+        summary: 'Depolama adımı başarısız oldu',
+        details: [
+          `attemptedPath=${ss(debug.attemptedPath)}`,
+          `resolvedPath=${ss(debug.resolvedPath)}`,
+          `failCode=${ss(debug.failCode, ss(error?.code, 'STORAGE_FAILED'))}`,
+          normalizeError(error)
+        ]
+      });
+      attempts.push({ root, error: normalizeError(error), failCode: ss(debug.failCode, ss(error?.code, 'STORAGE_FAILED')) });
     }
   }
 
-  const bullets = attempts.map((item, index) => `${index + 1}. ${item.root} → [${item.code}] ${item.error}`);
-  const lastCode = attempts.length ? attempts[attempts.length - 1].code : 'STORAGE_FAILED';
-  const err = makeStageError('storage', lastCode, 'Görsel üretildi ancak me.puter depolama klasörlerinin hiçbirine yazılamadı.', bullets, true, 500);
+  const bullets = attempts.map((item, index) => `${index + 1}. ${item.root} → ${item.failCode} → ${item.error}`);
+  const err = makeStageError('storage', attempts[0]?.failCode || 'STORAGE_FAILED', 'Görsel üretildi ancak me.puter depolama klasörlerinin hiçbirine yazılamadı.', bullets, true, 500);
   throw err;
 }
 
-function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model) {
+function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model, requestBody = {}) {
+  const displayName = ss(requestBody?.displayName || model?.displayName || model?.modelName || model?.model || model?.modelId);
   return {
     jobId,
     feature: 'image',
     status: 'queued',
-    progress: 5,
-    step: 'İstek alındı',
+    progress: 1,
+    step: 'İstek sıraya alındı',
     retryable: true,
     cancelRequested: false,
     model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
     modelInfo: model || null,
+    selectedModelCore: {
+      displayName,
+      provider: normalizeProviderRegistry(requestBody?.provider || model?.provider, model?.model || model?.modelId),
+      model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL
+    },
     storage: {
       path: null,
       attemptedPath: null,
@@ -848,11 +992,26 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
       mimeType: null,
       fileName: null
     },
+    storageLogs: [],
+    events: [
+      makeEvent('baseJobRecord', 'success', {
+        stage: 'queue',
+        code: 'JOB_QUEUED',
+        summary: 'İş sıraya alındı',
+        details: [
+          `displayName=${displayName}`,
+          `provider=${normalizeProviderRegistry(requestBody?.provider || model?.provider, model?.model || model?.modelId)}`,
+          `model=${model?.model || model?.modelId || DEFAULT_IMAGE_MODEL}`
+        ]
+      })
+    ],
     outputUrl: null,
     outputUrlExpiresAt: null,
     outputUrls: [],
     requestSummary: {
       model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
+      displayName,
+      provider: normalizeProviderRegistry(requestBody?.provider || model?.provider, model?.model || model?.modelId),
       promptPreview: prompt.length <= 160 ? prompt : `${prompt.slice(0, 157)}...`,
       ratio: ss(ratio, '1:1'),
       quality: ss(quality, ''),
@@ -861,7 +1020,8 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
     },
     request: {
       modelId: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
-      provider: normalizeProviderRegistry(model?.provider, model?.model || model?.modelId),
+      displayName,
+      provider: normalizeProviderRegistry(requestBody?.provider || model?.provider, model?.model || model?.modelId),
       ratio: ss(ratio, '1:1'),
       quality: ss(quality, ''),
       style: ss(style, ''),
@@ -873,6 +1033,19 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
     updatedAt: nowIso(),
     finishedAt: null
   };
+}
+
+async function assertNotCancelled(jobId, summaryText) {
+  const job = await jobRead(jobId);
+  if (job?.cancelRequested === true) {
+    await pushJobEvent(jobId, 'runGeneration', 'error', {
+      stage: 'cancel',
+      code: 'CANCELLED',
+      summary: summaryText || 'İş iptal edildi',
+      details: ['cancelRequested=true']
+    });
+    throw makeStageError('cancel', 'CANCELLED', 'İş kullanıcı tarafından iptal edildi.', ['cancelRequested=true'], false, 409);
+  }
 }
 
 async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body = {}) {
@@ -893,16 +1066,23 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
     progress: 12,
     step: `Model hazırlanıyor (${provider})`
   }));
+  await pushJobEvent(jobId, 'buildGenerationAttemptPlans', 'success', {
+    stage: 'generation',
+    code: 'GENERATION_PREPARED',
+    summary: `Model hazırlanıyor (${provider})`,
+    details: [
+      `displayName=${ss(body?.displayName || model?.displayName)}`,
+      `provider=${provider}`,
+      `model=${ss(model?.model || model?.modelId)}`
+    ]
+  });
 
   const plans = buildGenerationAttemptPlans(model, requestedBody);
   const attemptErrors = [];
   let src = null;
 
   for (const plan of plans) {
-    const currentJob = await jobRead(jobId);
-    if (currentJob?.cancelRequested) {
-      throw makeStageError('generation', 'JOB_CANCELLED', 'İş kullanıcı tarafından iptal edildi.', [], false, 409);
-    }
+    await assertNotCancelled(jobId, 'İş üretim öncesi iptal edildi');
     const progress = Math.min(64, 18 + Math.floor((plan.index / Math.max(1, plans.length)) * 42));
     await jobUpdate(jobId, async (job) => ({
       ...job,
@@ -910,6 +1090,16 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
       progress,
       step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`
     }));
+    await pushJobEvent(jobId, 'buildPromptText', 'success', {
+      stage: 'generation',
+      code: 'GENERATION_ATTEMPT_STARTED',
+      summary: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`,
+      details: [
+        `attempt=${plan.index}`,
+        `provider=${provider}`,
+        `model=${ss(model?.model || model?.modelId)}`
+      ]
+    });
 
     try {
       const imageResult = await withTimeout(me.puter.ai.txt2img(plan.prompt, plan.options), plan.timeoutMs);
@@ -917,10 +1107,22 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
       if (!src) {
         throw new Error('AI sonuç döndürdü ancak görsel kaynağı bulunamadı');
       }
+      await pushJobEvent(jobId, 'runGeneration', 'success', {
+        stage: 'generation',
+        code: 'GENERATION_SUCCESS',
+        summary: 'Görsel üretimi başarılı',
+        details: [`attempt=${plan.index}`]
+      });
       break;
     } catch (error) {
       const message = normalizeError(error);
       attemptErrors.push(`Deneme ${plan.index}: ${message}`);
+      await pushJobEvent(jobId, 'runGeneration', 'error', {
+        stage: 'generation',
+        code: /field_invalid|model is invalid|valid model name/i.test(message) ? 'MODEL_INVALID' : 'GENERATION_ATTEMPT_FAILED',
+        summary: 'Görsel üretimi denemesi başarısız oldu',
+        details: [`attempt=${plan.index}`, message]
+      });
       if (/field_invalid|model is invalid|valid model name/i.test(message)) {
         throw makeStageError(
           'generation',
@@ -945,12 +1147,19 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
     );
   }
 
+  await assertNotCancelled(jobId, 'İş depolama öncesi iptal edildi');
   await jobUpdate(jobId, async (job) => ({
     ...job,
     status: 'storing',
     progress: 72,
     step: 'Görsel depolamaya yazılıyor'
   }));
+  await pushJobEvent(jobId, 'persistGeneratedImage', 'success', {
+    stage: 'storage',
+    code: 'STORAGE_STARTED',
+    summary: 'Görsel depolamaya yazılıyor',
+    details: []
+  });
 
   const stored = await persistGeneratedImage(jobId, src);
 
@@ -974,12 +1183,23 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
       outputUrlExpiresAt: stored.expiresAt,
       error: null
     }));
+    await pushJobEvent(jobId, 'runGeneration', 'success', {
+      stage: 'complete',
+      code: 'JOB_COMPLETED',
+      summary: 'İş başarıyla tamamlandı',
+      details: [
+        `storagePath=${stored.path}`,
+        `readUrlReady=${Boolean(stored.readUrl)}`
+      ]
+    });
   } catch (kvError) {
-    throw makeStageError('storage', 'KV_FAIL', `KV tamamlandı kaydı yazılamadı: ${normalizeError(kvError)}`, [
-      ss(stored?.logLine),
-      `storagePath=${ss(stored?.path)}`,
-      normalizeError(kvError)
-    ], true, 500);
+    await pushJobEvent(jobId, 'jobUpdate', 'error', {
+      stage: 'kv',
+      code: 'KV_FAIL',
+      summary: 'Tamamlandı kaydı KV içine yazılamadı',
+      details: [normalizeError(kvError)]
+    });
+    throw makeStageError('kv', 'KV_FAIL', 'Görsel üretildi ve depolandı ancak final KV kaydı yazılamadı.', [normalizeError(kvError)], true, 500);
   }
 
   return {
@@ -1004,7 +1224,8 @@ router.get('/', async ({ request }) => {
       totalModels: catalog.items.length,
       modelsSource: catalog.source,
       pollIntervalMs: POLL_INTERVAL_HINT_MS,
-      storageCandidates: getStorageRootCandidates()
+      storageCandidates: getStorageRootCandidates(),
+      maxGenerationAttempts: MAX_GENERATION_ATTEMPTS
     }), 200, 'no-store', request);
   } catch (error) {
     return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'WORKER_INFO_FAILED', normalizeError(error), [], 500), 500, 'no-store', request);
@@ -1020,7 +1241,8 @@ router.get('/health', async ({ request }) => {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
     storageMode: 'me.puter.fs',
-    modelSource: MODELS_WORKER_URL
+    modelSource: MODELS_WORKER_URL,
+    diagnostics: 'events+storageLogs'
   }), 200, 'no-store', request);
 });
 
@@ -1080,7 +1302,7 @@ router.post('/generate', async ({ request }) => {
     }
 
     jobId = uid('img');
-    await jobWrite(baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model));
+    await jobWrite(baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model, body));
 
     try {
       const result = await runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body);
@@ -1096,12 +1318,14 @@ router.post('/generate', async ({ request }) => {
       const stage = ss(generationError?.stage, 'generation');
       const code = ss(generationError?.code, stage === 'storage' ? 'STORAGE_FAILED' : 'GENERATION_FAILED');
       const httpStatus = ci(generationError?.httpStatus, 400, 599, stage === 'storage' ? 500 : 500);
-      const failedStatus = code === 'JOB_CANCELLED' ? 'cancelled' : stage === 'storage' ? 'failed_storage' : 'failed';
-      const failedStep = code === 'JOB_CANCELLED'
-        ? 'İş iptal edildi'
-        : stage === 'storage'
-          ? 'Görsel üretildi ancak depolama başarısız oldu'
-          : 'Görsel üretimi başarısız oldu';
+      const failedStatus = stage === 'storage' ? 'failed_storage' : (stage === 'cancel' ? 'cancelled' : 'failed');
+      const failedStep = stage === 'storage'
+        ? 'Görsel üretildi ancak depolama başarısız oldu'
+        : stage === 'kv'
+          ? 'Depolama tamamlandı ancak final kayıt yazılamadı'
+          : stage === 'cancel'
+            ? 'İş iptal edildi'
+            : 'Görsel üretimi başarısız oldu';
 
       await jobUpdate(jobId, async (job) => ({
         ...job,
@@ -1115,14 +1339,30 @@ router.post('/generate', async ({ request }) => {
           bullets
         }
       }));
+      if (stage !== 'cancel') {
+        await pushJobEvent(jobId, 'runGeneration', 'error', {
+          stage,
+          code,
+          summary: failedStep,
+          details: bullets
+        });
+      }
       const failedJob = await jobRead(jobId);
       const publicMessage = code === 'MODEL_INVALID'
         ? 'Seçilen model Puter image registry içinde bulunamadı.'
-        : code === 'JOB_CANCELLED'
-          ? 'İş kullanıcı tarafından iptal edildi.'
-          : stage === 'storage'
-            ? 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.'
-            : 'Görsel üretimi tamamlanamadı.';
+        : code === 'WRITE_FAIL'
+          ? 'Görsel üretildi ancak fs.write aşamasında depolama başarısız oldu.'
+          : code === 'STAT_FAIL'
+            ? 'Görsel üretildi ancak fs.stat doğrulaması başarısız oldu.'
+            : code === 'READ_URL_FAIL'
+              ? 'Görsel üretildi ancak erişim URL’si alınamadı.'
+              : code === 'KV_FAIL'
+                ? 'Görsel üretildi ve depolandı ancak final KV kaydı yazılamadı.'
+                : stage === 'storage'
+                  ? 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.'
+                  : stage === 'cancel'
+                    ? 'İş kullanıcı tarafından iptal edildi.'
+                    : 'Görsel üretimi tamamlanamadı.';
       return jsonResponse(
         errEnvelope(requestId, traceId, startedAt, code, publicMessage, bullets, httpStatus, {
           feature: 'image',
@@ -1225,7 +1465,8 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
       mimeType: job.storage.mimeType,
       fileName: job.storage.fileName,
       storageRoot: job.storage.storageRoot,
-      attemptedPath: job.storage.attemptedPath
+      attemptedPath: job.storage.attemptedPath,
+      storageLogs: Array.isArray(job.storageLogs) ? job.storageLogs : []
     }, { feature: 'image' }), 200, 'no-store', request);
   } catch (error) {
     return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
@@ -1249,10 +1490,14 @@ router.post('/jobs/cancel', async ({ request }) => {
     const updated = await jobUpdate(jobId, async (job) => ({
       ...job,
       cancelRequested: true,
-      status: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? 'cancelled' : job.status,
-      step: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? 'İptal edildi' : job.step,
-      finishedAt: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? nowIso() : job.finishedAt
+      step: job.status === 'completed' ? job.step : 'İptal isteği alındı'
     }));
+    await pushJobEvent(jobId, 'runGeneration', 'error', {
+      stage: 'cancel',
+      code: 'CANCEL_REQUESTED',
+      summary: 'İptal isteği alındı',
+      details: ['cancelRequested=true']
+    });
     return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'JOB_CANCEL_OK', updated), 200, 'no-store', request);
   } catch (error) {
     return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
