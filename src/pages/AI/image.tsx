@@ -6,12 +6,8 @@ type WorkerEnvelope<T> = {
   ok: boolean;
   code: string;
   data: T;
-  error: { message?: string; bullets?: string[]; retryable?: boolean } | null;
+  error?: { message?: string; bullets?: string[]; retryable?: boolean } | null;
   meta?: Record<string, unknown> | null;
-  requestId?: string;
-  traceId?: string;
-  time?: string;
-  durationMs?: number;
 };
 
 type ModelItem = {
@@ -22,16 +18,21 @@ type ModelItem = {
   company?: string;
   categoryRaw?: string;
   badges?: string[];
-  pricing?: {
-    usdPerImage?: number | null;
-  };
+  imagePrice?: number | null;
+  pricing?: { usdPerImage?: number | null };
+  speedLabel?: string;
+  standoutFeature?: string;
+  useCase?: string;
+  traits?: string[];
+  style?: { accent?: string; brandKey?: string };
+  [key: string]: unknown;
 };
 
 type ModelsPayload = {
-  items: ModelItem[];
-  total: number;
-  feature?: string;
+  items?: ModelItem[];
+  total?: number;
   source?: string;
+  feature?: string;
 };
 
 type JobRecord = {
@@ -49,6 +50,8 @@ type JobRecord = {
     promptPreview?: string;
     ratio?: string;
     quality?: string;
+    style?: string;
+    negativePromptPreview?: string;
   };
   request?: {
     modelId?: string;
@@ -60,32 +63,36 @@ type JobRecord = {
   };
   storage?: {
     path?: string | null;
+    attemptedPath?: string | null;
+    storageRoot?: string | null;
     mimeType?: string | null;
     fileName?: string | null;
     verified?: boolean;
   };
   error?: {
     message?: string;
+    bullets?: string[];
     retryable?: boolean;
   } | null;
 };
 
 type HistoryPayload = {
-  items: JobRecord[];
-  total: number;
-  limit: number;
+  items?: JobRecord[];
+  total?: number;
+  limit?: number;
   feature?: string;
 };
 
-const WORKER_BASE_URL = 'https://imgs.puter.work';
+const MODELS_BASE_URL = 'https://models-worker.puter.work';
+const IMGS_BASE_URL = 'https://imgs.puter.work';
 const POLL_MS = 1800;
-const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed_storage']);
+const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:5', '3:4', '3:2', '2:3'];
 const QUALITY_OPTIONS = ['standard', 'hd'];
 const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'];
-const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed_storage']);
 
-function joinUrl(path: string): string {
-  return `${WORKER_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+function buildUrl(base: string, path: string): string {
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 function modelKey(model: ModelItem): string {
@@ -93,9 +100,13 @@ function modelKey(model: ModelItem): string {
 }
 
 function modelLabel(model: ModelItem): string {
-  const provider = model.provider || model.company || 'Model';
-  const name = model.modelName || model.modelId || model.id || 'Bilinmeyen model';
+  const provider = String(model.provider || model.company || 'Model');
+  const name = String(model.modelName || model.modelId || model.id || 'Bilinmeyen model');
   return `${provider} · ${name}`;
+}
+
+function isImageModel(model: ModelItem): boolean {
+  return String(model.categoryRaw || '').trim().toLowerCase() === 'image generation';
 }
 
 function pickImages(job: JobRecord | null): string[] {
@@ -110,10 +121,7 @@ function pickImages(job: JobRecord | null): string[] {
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   try {
-    return new Intl.DateTimeFormat('tr-TR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    }).format(new Date(value));
+    return new Intl.DateTimeFormat('tr-TR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
   } catch {
     return value;
   }
@@ -131,39 +139,44 @@ function statusText(status?: JobStatus): string {
   }
 }
 
-async function readJson<T>(response: Response): Promise<WorkerEnvelope<T>> {
+function workerErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof DOMException && error.name === 'AbortError') return 'İstek zaman aşımına uğradı.';
+  if (error instanceof Error) return error.message || fallback;
+  return fallback;
+}
+
+async function readEnvelope<T>(response: Response): Promise<WorkerEnvelope<T>> {
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new Error('Worker boş cevap döndürdü.');
+  }
   try {
-    return (await response.json()) as WorkerEnvelope<T>;
+    return JSON.parse(text) as WorkerEnvelope<T>;
   } catch {
     throw new Error('Worker geçerli JSON döndürmedi.');
   }
 }
 
-async function requestWorker<T>(path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
+async function requestJson<T>(base: string, path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
   let lastError: unknown = null;
-
   for (let attempt = 0; attempt <= retry; attempt += 1) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 60000);
-
     try {
-      const response = await fetch(joinUrl(path), {
+      const response = await fetch(buildUrl(base, path), {
         ...init,
         signal: controller.signal,
         headers: {
-          'content-type': 'application/json',
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
           ...(init?.headers || {}),
         },
       });
-
       window.clearTimeout(timer);
-      const payload = await readJson<T>(response);
-
-      if (!response.ok || !payload.ok) {
-        const msg = payload.error?.message || `Worker isteği başarısız oldu (${response.status}).`;
-        throw new Error(msg);
+      const payload = await readEnvelope<T>(response);
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error?.message || `İstek başarısız oldu (${response.status}).`);
       }
-
       return payload;
     } catch (error) {
       window.clearTimeout(timer);
@@ -172,14 +185,7 @@ async function requestWorker<T>(path: string, init?: RequestInit, retry = 1): Pr
       await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
-
-  if (lastError instanceof DOMException && lastError.name === 'AbortError') {
-    throw new Error('Worker zaman aşımına uğradı.');
-  }
-  if (lastError instanceof Error) {
-    throw lastError;
-  }
-  throw new Error('Worker isteği başarısız oldu.');
+  throw lastError instanceof Error ? lastError : new Error('İstek başarısız oldu.');
 }
 
 export default function ImagePage(): JSX.Element {
@@ -201,11 +207,11 @@ export default function ImagePage(): JSX.Element {
   const [workerInfo, setWorkerInfo] = useState('');
   const pollRef = useRef<number | null>(null);
 
-  const activeImages = useMemo(() => pickImages(activeJob), [activeJob]);
   const selectedModel = useMemo(
     () => models.find((item) => modelKey(item) === selectedModelId) || null,
     [models, selectedModelId],
   );
+  const activeImages = useMemo(() => pickImages(activeJob), [activeJob]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
@@ -214,54 +220,54 @@ export default function ImagePage(): JSX.Element {
     }
   }, []);
 
-  const refreshHistory = useCallback(async () => {
-    setLoadingHistory(true);
-    try {
-      const envelope = await requestWorker<HistoryPayload>('/jobs/history?limit=12', undefined, 0);
-      setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }, []);
-
-  const loadWorkerInfo = useCallback(async () => {
-    try {
-      const envelope = await requestWorker<{ worker: string; version: string; totalModels: number }>('/', undefined, 0);
-      setWorkerInfo(`${envelope.data.worker} · v${envelope.data.version}`);
-    } catch {
-      setWorkerInfo('imgs worker');
-    }
-  }, []);
-
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     setError('');
     try {
-      const envelope = await requestWorker<ModelsPayload>('/models?feature=image&sort=price_asc&limit=100', undefined, 1);
-      const items = Array.isArray(envelope.data?.items) ? envelope.data.items : [];
+      const envelope = await requestJson<ModelsPayload>(MODELS_BASE_URL, '/models?limit=250', undefined, 1);
+      const items = (Array.isArray(envelope.data?.items) ? envelope.data.items : []).filter(isImageModel);
       setModels(items);
-      setModelsSource(envelope.data?.source || 'worker:/models');
+      setModelsSource(`${MODELS_BASE_URL}/models`);
       setSelectedModelId((current) => current || modelKey(items[0]) || '');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Modeller alınamadı.');
+      if (!items.length) {
+        setError('models-worker içinde görsel modeli bulunamadı.');
+      }
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'Modeller alınamadı.'));
     } finally {
       setModelsLoading(false);
     }
   }, []);
 
-  const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
-    if (pickImages(job).length > 0 || !job.jobId) return job;
+  const loadWorkerInfo = useCallback(async () => {
     try {
-      const envelope = await requestWorker<{ outputUrl?: string | null }>('/jobs/image/' + encodeURIComponent(job.jobId), undefined, 0);
+      const envelope = await requestJson<{ worker?: string; version?: string; modelsSource?: string }>(IMGS_BASE_URL, '/', undefined, 0);
+      const info = envelope.data || {};
+      setWorkerInfo(`${info.worker || 'imgs'} · v${info.version || '-'}`);
+    } catch {
+      setWorkerInfo('imgs worker');
+    }
+  }, []);
+
+  const refreshHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const envelope = await requestJson<HistoryPayload>(IMGS_BASE_URL, '/jobs/history?limit=12', undefined, 0);
+      setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
+    } catch (requestError) {
+      console.error(requestError);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, []);
+
+  const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
+    if (!job.jobId || pickImages(job).length > 0) return job;
+    try {
+      const envelope = await requestJson<{ outputUrl?: string | null }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
       const outputUrl = envelope.data?.outputUrl || null;
       if (!outputUrl) return job;
-      return {
-        ...job,
-        outputUrl,
-        outputUrls: outputUrl ? [outputUrl] : [],
-      };
+      return { ...job, outputUrl, outputUrls: [outputUrl] };
     } catch {
       return job;
     }
@@ -270,25 +276,23 @@ export default function ImagePage(): JSX.Element {
   const pollJob = useCallback(async (jobId: string) => {
     stopPolling();
     try {
-      const envelope = await requestWorker<JobRecord>('/jobs/status/' + encodeURIComponent(jobId), undefined, 1);
+      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 1);
       let nextJob = envelope.data;
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
       }
       setActiveJob(nextJob);
-
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
         await refreshHistory();
         return;
       }
-
       pollRef.current = window.setTimeout(() => {
         void pollJob(jobId);
       }, POLL_MS);
-    } catch (err) {
+    } catch (requestError) {
       setSubmitting(false);
-      setError(err instanceof Error ? err.message : 'Job durumu alınamadı.');
+      setError(workerErrorMessage(requestError, 'Job durumu alınamadı.'));
     }
   }, [ensureImageUrl, refreshHistory, stopPolling]);
 
@@ -308,30 +312,31 @@ export default function ImagePage(): JSX.Element {
       setError('Model seçmelisin.');
       return;
     }
-
     stopPolling();
     setSubmitting(true);
     setError('');
     setActiveJob(null);
 
     try {
-      const envelope = await requestWorker<JobRecord>(
+      const envelope = await requestJson<JobRecord>(
+        IMGS_BASE_URL,
         '/generate',
         {
           method: 'POST',
           body: JSON.stringify({
             prompt: prompt.trim(),
             negativePrompt: negativePrompt.trim(),
-            model: selectedModelId,
             modelId: selectedModelId,
+            model: selectedModelId,
             ratio,
             quality,
             style,
-            n: count,
+            n: Math.max(1, Math.min(1, count)),
             responseFormat: 'url',
             metadata: {
               page: 'src/pages/AI/image.tsx',
-              worker: WORKER_BASE_URL,
+              modelsSource: `${MODELS_BASE_URL}/models`,
+              worker: IMGS_BASE_URL,
             },
           }),
         },
@@ -341,11 +346,7 @@ export default function ImagePage(): JSX.Element {
       let nextJob = envelope.data;
       const inlinePreview = typeof envelope.meta?.inlinePreview === 'string' ? envelope.meta.inlinePreview : null;
       if (inlinePreview && pickImages(nextJob).length === 0) {
-        nextJob = {
-          ...nextJob,
-          outputUrl: inlinePreview,
-          outputUrls: [inlinePreview],
-        };
+        nextJob = { ...nextJob, outputUrl: inlinePreview, outputUrls: [inlinePreview] };
       }
       setActiveJob(nextJob);
 
@@ -353,24 +354,22 @@ export default function ImagePage(): JSX.Element {
         throw new Error('Worker jobId döndürmedi.');
       }
 
+      await refreshHistory();
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
-        await refreshHistory();
         return;
       }
-
-      await refreshHistory();
       await pollJob(nextJob.jobId);
-    } catch (err) {
+    } catch (requestError) {
       setSubmitting(false);
-      setError(err instanceof Error ? err.message : 'Görsel üretimi başlatılamadı.');
+      setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
     }
   }, [count, negativePrompt, pollJob, prompt, quality, ratio, refreshHistory, selectedModelId, stopPolling, style]);
 
   const handleCancel = useCallback(async () => {
     if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
     try {
-      const envelope = await requestWorker<JobRecord>('/jobs/cancel', {
+      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, '/jobs/cancel', {
         method: 'POST',
         body: JSON.stringify({ jobId: activeJob.jobId }),
       }, 0);
@@ -378,8 +377,8 @@ export default function ImagePage(): JSX.Element {
       setSubmitting(false);
       setActiveJob(envelope.data);
       await refreshHistory();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'İptal işlemi başarısız oldu.');
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'İptal işlemi başarısız oldu.'));
     }
   }, [activeJob, refreshHistory, stopPolling]);
 
@@ -387,7 +386,7 @@ export default function ImagePage(): JSX.Element {
     setError('');
     stopPolling();
     try {
-      const envelope = await requestWorker<JobRecord>('/jobs/status/' + encodeURIComponent(jobId), undefined, 0);
+      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
       let nextJob = envelope.data;
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
@@ -399,8 +398,8 @@ export default function ImagePage(): JSX.Element {
       } else {
         setSubmitting(false);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Geçmiş kaydı açılamadı.');
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'Geçmiş kaydı açılamadı.'));
     }
   }, [ensureImageUrl, pollJob, stopPolling]);
 
@@ -411,7 +410,7 @@ export default function ImagePage(): JSX.Element {
           <div>
             <h1 className="text-3xl font-bold">Görsel Üretim</h1>
             <p className="mt-2 text-sm text-slate-300">
-              Tek kaynak: <strong>{WORKER_BASE_URL}</strong> · Model kaynağı: <strong>/models</strong>
+              Model kaynağı: <strong>{MODELS_BASE_URL}</strong> · Üretim worker: <strong>{IMGS_BASE_URL}</strong>
             </p>
             <p className="mt-1 text-xs text-slate-400">
               Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
@@ -419,7 +418,10 @@ export default function ImagePage(): JSX.Element {
           </div>
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
             <div>Seçili model: {selectedModel ? modelLabel(selectedModel) : 'yok'}</div>
-            <div className="mt-1 text-xs text-slate-400">Fiyat: {selectedModel?.pricing?.usdPerImage ?? '-'} USD / görsel</div>
+            <div className="mt-1 text-xs text-slate-400">
+              Fiyat: {selectedModel?.pricing?.usdPerImage ?? selectedModel?.imagePrice ?? '-'} USD / görsel
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Kategori: {selectedModel?.categoryRaw || '-'}</div>
           </div>
         </div>
       </div>
@@ -508,6 +510,14 @@ export default function ImagePage(): JSX.Element {
               />
             </label>
 
+            {selectedModel ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <div className="font-semibold text-slate-900">Model özeti</div>
+                <div className="mt-2">{selectedModel.standoutFeature || selectedModel.useCase || 'Özel bilgi yok.'}</div>
+                {selectedModel.speedLabel ? <div className="mt-2 text-xs text-slate-500">Hız: {selectedModel.speedLabel}</div> : null}
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
@@ -539,10 +549,7 @@ export default function ImagePage(): JSX.Element {
                   <span className="text-slate-500">Job: {activeJob.jobId}</span>
                 </div>
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className="h-full rounded-full bg-slate-900 transition-all duration-500"
-                    style={{ width: `${Math.max(0, Math.min(100, activeJob.progress || 0))}%` }}
-                  />
+                  <div className="h-full rounded-full bg-slate-900 transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, activeJob.progress || 0))}%` }} />
                 </div>
                 <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
                   <span>{activeJob.step || 'Bekleniyor'}</span>
@@ -552,19 +559,19 @@ export default function ImagePage(): JSX.Element {
 
               {activeJob.error?.message ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                  {activeJob.error.message}
+                  <div>{activeJob.error.message}</div>
+                  {Array.isArray(activeJob.error.bullets) && activeJob.error.bullets.length > 0 ? (
+                    <div className="mt-3 space-y-1 text-xs">
+                      {activeJob.error.bullets.map((bullet) => <div key={bullet}>• {bullet}</div>)}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
               {activeImages.length > 0 ? (
                 <div className="grid gap-4">
                   {activeImages.map((src) => (
-                    <img
-                      key={src}
-                      src={src}
-                      alt="Üretilen görsel"
-                      className="w-full rounded-2xl border border-slate-200 object-cover shadow-sm"
-                    />
+                    <img key={src} src={src} alt="Üretilen görsel" className="w-full rounded-2xl border border-slate-200 object-cover shadow-sm" />
                   ))}
                 </div>
               ) : (
@@ -572,6 +579,14 @@ export default function ImagePage(): JSX.Element {
                   Görsel hazır olduğunda burada görünecek.
                 </div>
               )}
+
+              {activeJob.storage?.path ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+                  <div>Storage path: {activeJob.storage.path}</div>
+                  {activeJob.storage.storageRoot ? <div>Storage root: {activeJob.storage.storageRoot}</div> : null}
+                  {activeJob.storage.attemptedPath ? <div>Attempted path: {activeJob.storage.attemptedPath}</div> : null}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="mt-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
