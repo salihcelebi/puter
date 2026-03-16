@@ -1,3 +1,4 @@
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type JobStatus = 'queued' | 'running' | 'storing' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
@@ -136,6 +137,12 @@ type HistoryPayload = {
 
 type RatioObject = { w: number; h: number };
 
+type StageRule = {
+  title: string;
+  success: string;
+  failure: string;
+};
+
 const MODELS_BASE_URL = 'https://models-worker.puter.work';
 const IMGS_BASE_URL = 'https://imgs.puter.work';
 const POLL_MS = 1800;
@@ -143,13 +150,27 @@ const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed
 const DEFAULT_RATIO: RatioObject = { w: 1024, h: 1024 };
 const DEFAULT_QUALITY = 'medium';
 const DEFAULT_STYLE = '';
-const QUALITY_OPTIONS = ['high', 'medium', 'low'];
-const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'];
-const QUICK_PROMPTS = [
-  'Sisli İstanbul sokaklarında yağmur sonrası gece sahnesi, neon yansımalar, sinematik ışık, detaylı mimari, yüksek atmosfer, gerçekçi kompozisyon',
-  'Lüks ürün çekimi, yumuşak stüdyo ışığı, siyah arka plan, premium ambalaj, ultra net detay, reklam kalitesi',
-  'Anime kahraman, güçlü poz, dinamik saç, parlayan gözler, yüksek kontrast, detaylı kostüm, etkileyici arka plan',
-];
+
+const STAGE_RULES: Record<string, StageRule> = {
+  GENERATE_REQUEST: { title: 'İstek alma', success: 'Generate isteği başarıyla alındı.', failure: 'Generate isteği alınamadı.' },
+  JOB_CREATED: { title: 'Job açma', success: 'Job kaydı başarıyla açıldı.', failure: 'Job kaydı açılamadı.' },
+  GENERATION_PREPARED: { title: 'Üretim planı', success: 'Üretim planı başarıyla hazırlandı.', failure: 'Üretim planı hazırlanamadı.' },
+  GENERATION_STARTED: { title: 'Üretim başlangıcı', success: 'Üretim denemesi başarıyla başladı.', failure: 'Üretim denemesi başlayamadı.' },
+  GENERATION_SUCCESS: { title: 'Üretim sonucu', success: 'Görsel üretimi başarıyla tamamlandı.', failure: 'Görsel üretimi tamamlanamadı.' },
+  GENERATION_FAIL: { title: 'Üretim sonucu', success: 'Görsel üretimi başarıyla tamamlandı.', failure: 'Görsel üretimi tamamlanamadı.' },
+  STORAGE_WRITE_STARTED: { title: 'Storage başlangıcı', success: 'Storage zinciri başarıyla başlatıldı.', failure: 'Storage zinciri başlatılamadı.' },
+  STORAGE_WRITE_OK: { title: 'fs.write', success: 'Görsel başarıyla yazıldı.', failure: 'Görsel yazılamadı.' },
+  STORAGE_WRITE_FAIL: { title: 'fs.write', success: 'Görsel başarıyla yazıldı.', failure: 'Görsel yazılamadı.' },
+  STORAGE_STAT_OK: { title: 'fs.stat', success: 'Yazılan dosya başarıyla doğrulandı.', failure: 'Yazılan dosya doğrulanamadı.' },
+  STORAGE_STAT_FAIL: { title: 'fs.stat', success: 'Yazılan dosya başarıyla doğrulandı.', failure: 'Yazılan dosya doğrulanamadı.' },
+  STORAGE_READURL_OK: { title: 'getReadURL', success: 'Erişim linki başarıyla alındı.', failure: 'Erişim linki alınamadı.' },
+  STORAGE_READURL_FAIL: { title: 'getReadURL', success: 'Erişim linki başarıyla alındı.', failure: 'Erişim linki alınamadı.' },
+  KV_COMPLETED_OK: { title: 'KV completed', success: 'İş kaydı başarıyla completed oldu.', failure: 'İş kaydı completed olamadı.' },
+  KV_COMPLETED_FAIL: { title: 'KV completed', success: 'İş kaydı başarıyla completed oldu.', failure: 'İş kaydı completed olamadı.' },
+  FINAL_STATUS_COMPLETED: { title: 'Nihai durum', success: 'Akış başarıyla tamamlandı.', failure: 'Akış tamamlanamadı.' },
+  FINAL_STATUS_FAILED: { title: 'Nihai durum', success: 'Akış başarıyla tamamlandı.', failure: 'Akış başarısız oldu.' },
+  FINAL_STATUS_CANCELLED: { title: 'Nihai durum', success: 'İş başarıyla iptal edildi.', failure: 'İş iptal edilemedi.' }
+};
 
 function buildUrl(base: string, path: string): string {
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -236,37 +257,6 @@ function buildTemplate(provider: ProviderRegistry, model: string): Record<string
 }
 
 function buildProfile(provider: ProviderRegistry, model: string): Record<string, unknown> {
-  if (model === 'black-forest-labs/flux.1-schnell') {
-    return {
-      provider: 'together',
-      model,
-      prompt: 'zorunlu metin alanı',
-      test_mode: 'true | false',
-      ratio: { ...DEFAULT_RATIO },
-      response_format: 'url | b64_json',
-    };
-  }
-  if (model === 'google/imagen-4.0-ultra') {
-    return {
-      provider: 'gemini',
-      model,
-      prompt: 'zorunlu metin alanı',
-      test_mode: 'true | false',
-      ratio: { ...DEFAULT_RATIO },
-      response_format: 'url',
-    };
-  }
-  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image') {
-    return {
-      provider: 'gemini',
-      model,
-      prompt: 'zorunlu metin alanı',
-      test_mode: 'true | false',
-      ratio: { ...DEFAULT_RATIO },
-      input_image: 'opsiyonel',
-      input_image_mime_type: 'opsiyonel',
-    };
-  }
   return {
     provider,
     model,
@@ -277,7 +267,7 @@ function buildProfile(provider: ProviderRegistry, model: string): Record<string,
 }
 
 function buildOverride(provider: ProviderRegistry, model: string): Record<string, unknown> {
-  if (model === 'black-forest-labs/flux.1-schnell' || model === 'google/imagen-4.0-ultra') {
+  if (provider === 'together' || provider === 'gemini') {
     return {
       model,
       width: true,
@@ -287,21 +277,7 @@ function buildOverride(provider: ProviderRegistry, model: string): Record<string
       seed: true,
       negative_prompt: true,
       n: true,
-      image_url: true,
-      image_base64: true,
-      mask_image_url: true,
-      mask_image_base64: true,
-      prompt_strength: true,
-      disable_safety_checker: true,
       response_format: true,
-    };
-  }
-  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image') {
-    return {
-      model,
-      ratio: true,
-      input_image: true,
-      input_image_mime_type: true,
     };
   }
   return { provider, model };
@@ -342,10 +318,6 @@ function modelKey(model: ModelItem): string {
   return safeText(model.model);
 }
 
-function modelLabel(model: ModelItem): string {
-  return safeText(model.displayName, `${model.providerLabel} · ${safeText(model.modelName, model.model)}`);
-}
-
 function pickImages(job: JobRecord | null): string[] {
   if (!job) return [];
   const raw = [
@@ -353,14 +325,6 @@ function pickImages(job: JobRecord | null): string[] {
     ...(job.outputUrl ? [job.outputUrl] : []),
   ].filter(Boolean);
   return [...new Set(raw)];
-}
-
-function prettyJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return '{}';
-  }
 }
 
 function ratioLabelFromObject(ratio: RatioObject): string {
@@ -386,15 +350,21 @@ function workerFailureFromEnvelope<T>(payload: WorkerEnvelope<T>, statusCode: nu
   return error;
 }
 
-function eventStatusBadge(status?: string): string {
-  if (status === 'success') return 'Başarılı';
-  if (status === 'error') return 'Hata';
-  return safeText(status, 'Olay');
-}
-
 function collectFailureBullets(error: unknown): string[] {
   const workerError = error as WorkerFailure;
   return normalizeArray<string>(workerError?.envelope?.error?.bullets);
+}
+
+function stageRule(code?: string): StageRule {
+  return STAGE_RULES[safeText(code)] || {
+    title: safeText(code, 'Aşama'),
+    success: 'Bu aşama başarıyla tamamlandı.',
+    failure: 'Bu aşama başarısız oldu.'
+  };
+}
+
+function stageTone(status?: string): boolean {
+  return status === 'success';
 }
 
 async function requestJson<T>(base: string, path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
@@ -428,7 +398,7 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, re
   throw lastError instanceof Error ? lastError : new Error('İstek başarısız oldu.');
 }
 
-export default function ImagePage(): JSX.Element {
+export default function TTS(): JSX.Element {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [modelsSource, setModelsSource] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -439,7 +409,6 @@ export default function ImagePage(): JSX.Element {
   const [quality, setQuality] = useState(DEFAULT_QUALITY);
   const [style, setStyle] = useState(DEFAULT_STYLE);
   const [testMode, setTestMode] = useState(false);
-  const [count, setCount] = useState(1);
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [history, setHistory] = useState<JobRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -564,24 +533,6 @@ export default function ImagePage(): JSX.Element {
     return () => stopPolling();
   }, [loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
 
-  useEffect(() => {
-    if (!selectedModel) return;
-    const profile = (selectedModel.profile || {}) as Record<string, unknown>;
-    const template = (selectedModel.template || {}) as Record<string, unknown>;
-    const ratioCandidate = profile.ratio || template.ratio;
-    if (ratioCandidate && typeof ratioCandidate === 'object' && ratioCandidate !== null) {
-      const nextRatio = {
-        w: Math.max(1, safeNumber((ratioCandidate as RatioObject).w, DEFAULT_RATIO.w)),
-        h: Math.max(1, safeNumber((ratioCandidate as RatioObject).h, DEFAULT_RATIO.h)),
-      };
-      setRatioObject(nextRatio);
-    }
-    const qualityCandidate = safeText(profile.quality || template.quality || DEFAULT_QUALITY, DEFAULT_QUALITY);
-    if (qualityCandidate) {
-      setQuality(qualityCandidate);
-    }
-  }, [selectedModel]);
-
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) {
       setError('Prompt zorunlu.');
@@ -619,10 +570,10 @@ export default function ImagePage(): JSX.Element {
             quality,
             style,
             test_mode: testMode,
-            n: Math.max(1, Math.min(1, count)),
+            n: 1,
             responseFormat: 'url',
             metadata: {
-              page: 'src/pages/AI/image.tsx',
+              page: 'src/pages/AI/TTS.tsx',
               modelsSource: `${MODELS_BASE_URL}/models`,
               worker: IMGS_BASE_URL,
               tagUi: selectedModel.tagUi,
@@ -657,7 +608,7 @@ export default function ImagePage(): JSX.Element {
       setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
       setErrorBullets(collectFailureBullets(requestError));
     }
-  }, [count, negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode]);
+  }, [negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode]);
 
   const handleCancel = useCallback(async () => {
     if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
@@ -670,12 +621,11 @@ export default function ImagePage(): JSX.Element {
       setError('');
       setErrorBullets([]);
       await refreshHistory();
-      void pollJob(activeJob.jobId);
     } catch (requestError) {
       setError(workerErrorMessage(requestError, 'İptal işlemi başarısız oldu.'));
       setErrorBullets(collectFailureBullets(requestError));
     }
-  }, [activeJob, refreshHistory, pollJob]);
+  }, [activeJob, refreshHistory]);
 
   const openHistoryJob = useCallback(async (jobId: string) => {
     setError('');
@@ -705,9 +655,9 @@ export default function ImagePage(): JSX.Element {
       <div className="rounded-3xl border border-slate-800 bg-slate-950 p-6 text-slate-100 shadow-2xl">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Görsel Üretim</h1>
+            <h1 className="text-3xl font-bold">Görsel Üretim Test Sayfası</h1>
             <p className="mt-2 text-sm text-slate-300">
-              Model kaynağı: <strong>{MODELS_BASE_URL}</strong> · Üretim worker: <strong>{IMGS_BASE_URL}</strong>
+              Test sayfası: <strong>src/pages/AI/TTS.tsx</strong> · Model kaynağı: <strong>{MODELS_BASE_URL}</strong> · Üretim worker: <strong>{IMGS_BASE_URL}</strong>
             </p>
             <p className="mt-1 text-xs text-slate-400">
               Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
@@ -715,10 +665,8 @@ export default function ImagePage(): JSX.Element {
           </div>
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
             <div>Seçili model: {selectedModel ? selectedModel.displayName : 'yok'}</div>
-            <div className="mt-1 text-xs text-slate-400">
-              Fiyat: {selectedModel?.imagePriceUsd ?? '-'} USD / görsel
-            </div>
-            <div className="mt-1 text-xs text-slate-500">Kategori: {selectedModel?.categoryRaw || '-'}</div>
+            <div className="mt-1 text-xs text-slate-400">Provider: {selectedModel?.provider || '-'}</div>
+            <div className="mt-1 text-xs text-slate-500">Model: {selectedModel?.model || '-'}</div>
           </div>
         </div>
       </div>
@@ -738,24 +686,8 @@ export default function ImagePage(): JSX.Element {
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Üretim ayarları</h2>
           <div className="mt-4 grid gap-4">
-            <div className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Hazır promptlar</span>
-              <div className="flex flex-wrap gap-2">
-                {QUICK_PROMPTS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setPrompt(item)}
-                    className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
-                  >
-                    {item.length > 26 ? `${item.slice(0, 26)}...` : item}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Prompt (zorunlu metin alanı)</span>
+              <span className="text-sm font-medium text-slate-700">Prompt</span>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -766,7 +698,7 @@ export default function ImagePage(): JSX.Element {
             </label>
 
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Negatif prompt (opsiyonel)</span>
+              <span className="text-sm font-medium text-slate-700">Negatif prompt</span>
               <textarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
@@ -779,7 +711,7 @@ export default function ImagePage(): JSX.Element {
             <div className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-slate-700">Modeller</span>
-                <span className="text-xs text-slate-500">Worker’dan gelen modeller burada görünür.</span>
+                <span className="text-xs text-slate-500">{modelsLoading ? 'Yükleniyor...' : `${models.length} model`}</span>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 {models.map((item) => {
@@ -791,27 +723,9 @@ export default function ImagePage(): JSX.Element {
                       onClick={() => setSelectedModelId(modelKey(item))}
                       className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-slate-900 bg-slate-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-400'}`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">{item.displayName}</div>
-                          <div className="mt-1 text-xs text-slate-500">{item.model}</div>
-                        </div>
-                        <span
-                          className="inline-flex items-center px-3 py-1 text-[11px] font-semibold"
-                          style={{
-                            backgroundColor: item.tagUi.bg,
-                            color: item.tagUi.fg,
-                            borderRadius: item.tagUi.rounded,
-                          }}
-                        >
-                          {item.tagUi.text}
-                        </span>
-                      </div>
-                      <div className="mt-3 space-y-1 text-xs text-slate-600">
-                        <div>Provider: {item.provider}</div>
-                        <div>Fiyat: {item.imagePriceUsd ?? '-'} USD / görsel</div>
-                        <div>Hız: {item.speedLabel || '-'}</div>
-                      </div>
+                      <div className="text-sm font-semibold text-slate-900">{item.displayName}</div>
+                      <div className="mt-1 text-xs text-slate-500">{item.model}</div>
+                      <div className="mt-3 text-xs text-slate-600">Provider: {item.provider}</div>
                     </button>
                   );
                 })}
@@ -820,7 +734,7 @@ export default function ImagePage(): JSX.Element {
 
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Test modu (opsiyonel)</span>
+                <span className="text-sm font-medium text-slate-700">Test modu</span>
                 <label className="inline-flex items-center gap-3 rounded-2xl border border-slate-300 px-4 py-3 text-sm text-slate-700">
                   <input type="checkbox" checked={testMode} onChange={(e) => setTestMode(e.target.checked)} />
                   <span>{testMode ? 'true' : 'false'}</span>
@@ -828,14 +742,14 @@ export default function ImagePage(): JSX.Element {
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Kalite (opsiyonel)</span>
+                <span className="text-sm font-medium text-slate-700">Kalite</span>
                 <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {QUALITY_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {['high', 'medium', 'low'].map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Oran nesnesi (opsiyonel) · w</span>
+                <span className="text-sm font-medium text-slate-700">Ratio w</span>
                 <input
                   type="number"
                   min={1}
@@ -847,7 +761,7 @@ export default function ImagePage(): JSX.Element {
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Oran nesnesi (opsiyonel) · h</span>
+                <span className="text-sm font-medium text-slate-700">Ratio h</span>
                 <input
                   type="number"
                   min={1}
@@ -859,64 +773,16 @@ export default function ImagePage(): JSX.Element {
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Stil (opsiyonel)</span>
-                <select value={style} onChange={(e) => setStyle(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {STYLE_OPTIONS.map((item) => <option key={item} value={item}>{item || 'Varsayılan'}</option>)}
-                </select>
+                <span className="text-sm font-medium text-slate-700">Stil</span>
+                <input
+                  type="text"
+                  value={style}
+                  onChange={(e) => setStyle(e.target.value)}
+                  className="rounded-2xl border border-slate-300 px-4 py-3"
+                  placeholder="opsiyonel"
+                />
               </label>
             </div>
-
-            <label className="grid gap-2 md:max-w-xs">
-              <span className="text-sm font-medium text-slate-700">Adet</span>
-              <input
-                type="number"
-                min={1}
-                max={1}
-                step={1}
-                value={count}
-                onChange={(e) => setCount(Math.max(1, Math.min(1, Number(e.target.value) || 1)))}
-                className="rounded-2xl border border-slate-300 px-4 py-3"
-              />
-            </label>
-
-            {selectedModel ? (
-              <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="font-semibold text-slate-900">Model özeti</div>
-                  <span
-                    className="inline-flex items-center px-3 py-1 text-[11px] font-semibold"
-                    style={{
-                      backgroundColor: selectedModel.tagUi.bg,
-                      color: selectedModel.tagUi.fg,
-                      borderRadius: selectedModel.tagUi.rounded,
-                    }}
-                  >
-                    {selectedModel.tagUi.text}
-                  </span>
-                </div>
-                <div>{selectedModel.standoutFeature || selectedModel.useCase || 'Özel bilgi yok.'}</div>
-                <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
-                  <div><strong>displayName:</strong> {selectedModel.displayName}</div>
-                  <div><strong>provider:</strong> {selectedModel.provider}</div>
-                  <div><strong>model:</strong> {selectedModel.model}</div>
-                  <div><strong>tagUi:</strong> {selectedModel.tagUi.text}</div>
-                </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">template</div>
-                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.template)}</pre>
-                  </div>
-                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">profile</div>
-                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.profile)}</pre>
-                  </div>
-                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">override</div>
-                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.override)}</pre>
-                  </div>
-                </div>
-              </div>
-            ) : null}
 
             <div className="flex flex-wrap gap-3">
               <button
@@ -981,30 +847,32 @@ export default function ImagePage(): JSX.Element {
               )}
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">Aşama günlüğü</div>
+                <div className="text-sm font-semibold text-slate-900">Aşama durumu</div>
                 <div className="mt-3 space-y-3">
                   {activeEvents.length === 0 ? (
                     <div className="text-xs text-slate-500">Henüz olay kaydı yok.</div>
-                  ) : activeEvents.map((event, index) => (
-                    <div key={`${event.at || 'event'}_${index}`} className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-xs font-semibold text-slate-900">{event.title || event.functionName || 'Olay'}</div>
-                        <div className="flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${event.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                            {eventStatusBadge(event.status)}
-                          </span>
-                          <span className="text-[10px] text-slate-400">{formatDate(event.at)}</span>
+                  ) : activeEvents.map((event, index) => {
+                    const rule = stageRule(event.code);
+                    const ok = stageTone(event.status);
+                    return (
+                      <div key={`${event.at || 'event'}_${index}`} className="rounded-2xl border border-slate-200 bg-white p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-xs font-semibold text-slate-900">{rule.title}</div>
+                          <div className={`rounded-full px-2 py-1 text-[10px] font-semibold ${ok ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                            {ok ? 'Başarılı' : 'Başarısız'}
+                          </div>
                         </div>
+                        <div className="mt-2 text-xs text-slate-700">{ok ? rule.success : rule.failure}</div>
+                        <div className="mt-1 text-[11px] text-slate-500">{event.summary || event.message || '-'}</div>
+                        {normalizeArray<string>(event.details).length > 0 ? (
+                          <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+                            {normalizeArray<string>(event.details).map((detail) => <div key={detail}>• {detail}</div>)}
+                          </div>
+                        ) : null}
+                        <div className="mt-2 text-[10px] text-slate-400">{formatDate(event.at)} · {safeText(event.code, '-')}</div>
                       </div>
-                      <div className="mt-2 text-xs text-slate-700">{event.summary || event.message || '-'}</div>
-                      {event.code ? <div className="mt-2 text-[11px] text-slate-500">Kod: {event.code}</div> : null}
-                      {normalizeArray<string>(event.details).length > 0 ? (
-                        <div className="mt-2 space-y-1 text-[11px] text-slate-500">
-                          {normalizeArray<string>(event.details).map((detail) => <div key={detail}>• {detail}</div>)}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1018,14 +886,6 @@ export default function ImagePage(): JSX.Element {
                   ))}
                 </div>
               </div>
-
-              {activeJob.storage?.path ? (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-                  <div>Storage path: {activeJob.storage.path}</div>
-                  {activeJob.storage.storageRoot ? <div>Storage root: {activeJob.storage.storageRoot}</div> : null}
-                  {activeJob.storage.attemptedPath ? <div>Attempted path: {activeJob.storage.attemptedPath}</div> : null}
-                </div>
-              ) : null}
             </div>
           ) : (
             <div className="mt-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
@@ -1067,5 +927,3 @@ export default function ImagePage(): JSX.Element {
     </div>
   );
 }
-
-/* YÖNETİCİ BU SAYFADA GÖRÜNEN OPSİYONEL ALANLARI TÜRKÇE OLARAK İLERİDE GÖSTERMEK İSTEDİĞİ ZAMAN AŞAĞIDAKİ SAYFA ÜZERİNDEN BUNLARI AYARLAYABİLMELİDİR: src/pages/Admin/Model-Gizle-Goster.tsx */
