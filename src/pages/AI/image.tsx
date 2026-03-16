@@ -167,6 +167,22 @@ function normalizeWorkerErrorMessage(payload, response, rawErrorMessage) {
   return 'İstek başarısız oldu.';
 }
 
+function getStoredWinningStrategyName() {
+  try {
+    return localStorage.getItem(STRATEGY_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setStoredWinningStrategyName(name) {
+  try {
+    localStorage.setItem(STRATEGY_STORAGE_KEY, name);
+  } catch {
+    // ignore
+  }
+}
+
 async function requestWorker(path, options = {}) {
   const retryCount = Math.max(0, Math.min(20, safeNumber(options.retryCount, 2)));
   let response;
@@ -214,135 +230,17 @@ async function requestWorker(path, options = {}) {
     throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
   }
 
-  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
-    let timer = null;
-    try {
-      const controller = new AbortController();
-      timer = window.setTimeout(() => controller.abort(), 60000);
+  const payload = await readJson(response);
 
-      response = await fetch(`${WORKER_BASE_URL}${path}`, {
-        method: options.method || 'GET',
-        headers: {
-          'content-type': 'application/json',
-          ...(options.headers || {}),
-        },
-        credentials: 'include',
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal,
-      });
-
-      if (response.status >= 500 && attempt <= retryCount + 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-      } else {
-        break;
-      }
-    } catch (error) {
-      lastNetworkError = error;
-      if (attempt > retryCount) {
-        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
-        throw new Error(
-          isAbort
-            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
-            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
-        );
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-    } finally {
-      if (timer) window.clearTimeout(timer);
-    }
+  if (!response.ok || payload?.ok === false) {
+    const message = normalizeWorkerErrorMessage(payload, response, '');
+    const err = new Error(message);
+    err.payload = payload;
+    err.status = response.status;
+    throw err;
   }
 
-  if (!response) {
-    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
-  }
-
-  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
-    let timer = null;
-    try {
-      const controller = new AbortController();
-      timer = window.setTimeout(() => controller.abort(), 60000);
-
-      response = await fetch(`${WORKER_BASE_URL}${path}`, {
-        method: options.method || 'GET',
-        headers: {
-          'content-type': 'application/json',
-          ...(options.headers || {}),
-        },
-        credentials: 'include',
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal,
-      });
-
-      if (response.status >= 500 && attempt <= retryCount + 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-      } else {
-        break;
-      }
-    } catch (error) {
-      lastNetworkError = error;
-      if (attempt > retryCount) {
-        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
-        throw new Error(
-          isAbort
-            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
-            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
-        );
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-    } finally {
-      if (timer) window.clearTimeout(timer);
-    }
-  }
-
-  if (!response) {
-    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
-  }
-
-  let lastError = null;
-
-  for (const strategy of ordered) {
-    try {
-      if (pushDebugLog) {
-        pushDebugLog(`DENENİYOR → ${strategy.name} → ${strategy.url}`);
-      }
-
-      const response = await strategy.run();
-      const payload = await readJson(response);
-
-      if (!response.ok || payload?.ok === false) {
-        const message = normalizeWorkerErrorMessage(payload, response, '');
-        lastError = new Error(`[${strategy.name}] ${message}`);
-        lastError.payload = payload;
-        lastError.status = response.status;
-
-        if (pushDebugLog) {
-          pushDebugLog(`BAŞARISIZ → ${strategy.name} → HTTP ${response.status} → ${message}`);
-        }
-        continue;
-      }
-
-      setStoredWinningStrategyName(strategy.name);
-
-      if (pushDebugLog) {
-        pushDebugLog(`BAŞARILI → ${strategy.name} → ${strategy.url}`);
-      }
-
-      return payload;
-    } catch (error) {
-      lastError = error;
-
-      if (pushDebugLog) {
-        pushDebugLog(`HATA → ${strategy.name} → ${strategy.url} → ${safeText(error?.message, 'Bilinmeyen hata')}`);
-      }
-    }
-  }
-
-  const finalPayload = lastError?.payload || null;
-  const finalMessage = normalizeWorkerErrorMessage(finalPayload, null, safeText(lastError?.message, ''));
-  const err = new Error(finalMessage);
-  err.payload = finalPayload;
-  err.originalError = lastError;
-  throw err;
+  return payload;
 }
 
 export default function IDMImagePage() {
@@ -356,6 +254,7 @@ export default function IDMImagePage() {
   const [loadingInfo, setLoadingInfo] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [debugLogs, setDebugLogs] = useState([]);
   // TÜRKÇE NOT: En ufak runtime hatayı arayüzde göstermek için global hata state'i eklendi.
   const [runtimeError, setRuntimeError] = useState('');
 
