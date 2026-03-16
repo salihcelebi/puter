@@ -29,7 +29,7 @@ import { assetsRouter } from "./routes/assets.js";
 import { userRouter } from "./routes/user.js";
 import { fileSystem } from "./db/fs.js";
 import { authService } from "./services/authService.js";
-import { ensureModelsSeeded } from "./db/seed-model-prices.js";
+import { ensureModelsSeeded } from "./db/modeller.js";
 import { aiService } from "./services/aiService.js";
 
 dotenv.config();
