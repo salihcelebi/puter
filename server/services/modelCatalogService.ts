@@ -1,5 +1,5 @@
 import { kv } from '../db/kv.js';
-import { MODEL_PRICES, USD_TRY_RATE_KEY, type ModelPrice } from '../db/seed-model-prices.js';
+import { MODEL_PRICES, USD_TRY_RATE_KEY, type ModelPrice } from '../db/modeller.js';
 import { calculateSaleCredits } from './pricingService.js';
 
 type SortBy = 'name' | 'provider' | 'type' | 'inputCost' | 'outputCost' | 'usage' | 'profit';

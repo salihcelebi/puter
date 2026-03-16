@@ -6,7 +6,24 @@ Bu React sayfası sadece worker API ile konuşur, modeli tarayıcıda çalışt�
 */
 
 const WORKER_BASE_URL = 'https://idm.puter.work';
-const DEFAULT_MODEL_ID = 'openai/dall-e-3';
+const IMAGE_MODELS = [
+  { modelId: 'openai/gpt-image-1', label: 'OpenAI · GPT Image 1' },
+  { modelId: 'google/gemini-3.1-flash-image-preview', label: 'Google · Gemini 3.1 Flash Image Preview' },
+  { modelId: 'black-forest-labs/flux-1.1-pro', label: 'Black Forest Labs · Flux 1.1 Pro' },
+  { modelId: 'black-forest-labs/flux-1.1-pro-ultra', label: 'Black Forest Labs · Flux 1.1 Pro Ultra' },
+  { modelId: 'black-forest-labs/flux-kontext-max', label: 'Black Forest Labs · Flux Kontext Max' },
+  { modelId: 'black-forest-labs/flux-kontext-pro', label: 'Black Forest Labs · Flux Kontext Pro' },
+  { modelId: 'black-forest-labs/flux-1-dev', label: 'Black Forest Labs · Flux 1 Dev' },
+  { modelId: 'black-forest-labs/flux-1-schnell', label: 'Black Forest Labs · Flux 1 Schnell' },
+  { modelId: 'recraft-ai/recraft-v3', label: 'Recraft · Recraft V3' },
+  { modelId: 'recraft-ai/recraft-20b', label: 'Recraft · Recraft 20B' },
+  { modelId: 'bfl/flux-pro-1.1-ultra', label: 'BFL · Flux Pro 1.1 Ultra' },
+  { modelId: 'bfl/flux-pro', label: 'BFL · Flux Pro' },
+  { modelId: 'bfl/flux-dev', label: 'BFL · Flux Dev' },
+  { modelId: 'bfl/flux-schnell', label: 'BFL · Flux Schnell' },
+];
+
+const DEFAULT_MODEL_ID = IMAGE_MODELS[0].modelId;
 const DEFAULT_RATIO = '1:1';
 const DEFAULT_QUALITY = 'standard';
 const POLL_INTERVAL_MS = 2500;
@@ -141,15 +158,51 @@ function normalizeWorkerErrorMessage(payload, response) {
 }
 
 async function requestWorker(path, options = {}) {
-  const response = await fetch(`${WORKER_BASE_URL}${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      'content-type': 'application/json',
-      ...(options.headers || {}),
-    },
-    credentials: 'include',
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const retryCount = Math.max(0, Math.min(20, safeNumber(options.retryCount, 2)));
+  let response;
+  let lastNetworkError = null;
+
+  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = window.setTimeout(() => controller.abort(), 60000);
+
+      response = await fetch(`${WORKER_BASE_URL}${path}`, {
+        method: options.method || 'GET',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+        credentials: 'include',
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+
+      if (response.status >= 500 && attempt <= retryCount + 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+      } else {
+        break;
+      }
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt > retryCount) {
+        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+        throw new Error(
+          isAbort
+            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
+            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }
+
+  if (!response) {
+    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
+  }
 
   const payload = await readJson(response);
 
@@ -204,10 +257,13 @@ export default function IDMImagePage() {
   }, []);
 
   const loadModels = useCallback(async () => {
-    const payload = await requestWorker('/models');
-    const items = normalizeArray(payload?.data?.items);
-    const onlyImageModels = items.filter((item) => safeText(item?.modelId || item?.id) === DEFAULT_MODEL_ID);
-    setModels(onlyImageModels.length ? onlyImageModels : items);
+    const items = IMAGE_MODELS.map((item) => ({
+      id: item.modelId,
+      modelId: item.modelId,
+      provider: item.label.split(' · ')[0],
+      modelName: item.label.split(' · ')[1] || item.modelId,
+    }));
+    setModels(items);
   }, []);
 
   const hydrateHistoryImages = useCallback(async (items) => {
@@ -354,8 +410,8 @@ export default function IDMImagePage() {
         method: 'POST',
         body: {
           prompt: form.prompt,
-          model: DEFAULT_MODEL_ID,
-          modelId: DEFAULT_MODEL_ID,
+          model: form.model,
+          modelId: form.model,
           ratio: form.ratio,
           quality: form.quality,
           style: form.style,
@@ -436,7 +492,7 @@ export default function IDMImagePage() {
           <h1 style={styles.title}>Tek worker üstünden görsel üretim</h1>
           <p style={styles.subtitle}>
             Bu sayfa sadece <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
-            Tek model kullanır. Depolama mantığı me.puter üstündedir.
+            Modeller kataloğundaki image model listesini kullanır. Depolama mantığı me.puter üstündedir.
           </p>
         </div>
 
@@ -466,9 +522,15 @@ export default function IDMImagePage() {
               value={form.model}
               onChange={(e) => handleChange('model', e.target.value)}
               style={styles.select}
-              disabled
             >
-              <option value={DEFAULT_MODEL_ID}>OpenAI · DALL-E 3</option>
+              {models.length ? models.map((item) => {
+                const id = safeText(item?.modelId || item?.id);
+                const provider = safeText(item?.provider || item?.company);
+                const modelName = safeText(item?.modelName || id);
+                return <option key={id} value={id}>{provider ? `${provider} · ${modelName}` : modelName}</option>;
+              }) : IMAGE_MODELS.map((item) => (
+                <option key={item.modelId} value={item.modelId}>{item.label}</option>
+              ))}
             </select>
 
             <label style={styles.label}>Prompt</label>
@@ -583,7 +645,7 @@ export default function IDMImagePage() {
 
                 <div>
                   <div style={styles.metaLabel}>MODEL</div>
-                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, DEFAULT_MODEL_ID)}</div>
+                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, form.model || DEFAULT_MODEL_ID)}</div>
                 </div>
 
                 <div>
