@@ -1,21 +1,20 @@
-// imgs.js — v19.0.0
+// imgs.js — v20.0.0
 // me.puter owner-pays image worker
 // Model catalog source: https://models-worker.puter.work/models
 // Storage strategy: try multiple candidate folders in order, use first successful real path
 
 const WORKER_NAME = 'imgs';
-const WORKER_VERSION = '19.2.0';
-const STORAGE_CACHE_KEY = 'imgs:storage:working_root';
+const WORKER_VERSION = '20.0.0';
 const JOB_PREFIX = 'ai_job:';
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
 const URL_EXPIRES_MS = 24 * 60 * 60 * 1000;
 const POLL_INTERVAL_HINT_MS = 1800;
-const PROVIDER = 'openai-image-generation';
-const MAX_GENERATION_ATTEMPTS = 20;
+const MAX_GENERATION_ATTEMPTS = 4;
 const MODELS_WORKER_URL = 'https://models-worker.puter.work/models?limit=250';
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
+const DEFAULT_PROVIDER = 'openai-image-generation';
 const STORAGE_ROOT_CANDIDATES = Object.freeze([
   '/nisanil/Desktop/turk/img/idm_images',
   'Desktop/turk/img/idm_images',
@@ -23,6 +22,7 @@ const STORAGE_ROOT_CANDIDATES = Object.freeze([
   'img/idm_images',
   'idm_images'
 ]);
+const ALLOWED_IMAGE_PROVIDERS = new Set(['openai-image-generation', 'together', 'gemini', 'xai']);
 
 let modelsCache = {
   fetchedAt: 0,
@@ -72,7 +72,7 @@ function normalizeError(err) {
     if (typeof err === 'string') return err;
     if (err.message) return String(err.message);
     const s = JSON.stringify(err);
-    return s && s !== '{}' ? s.slice(0, 800) : 'Hata okunamadı';
+    return s && s !== '{}' ? s.slice(0, 1200) : 'Hata okunamadı';
   } catch (_) {
     return 'Hata serileştirilemedi';
   }
@@ -85,7 +85,7 @@ function corsHeaders(request) {
     'access-control-allow-headers': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
     'access-control-allow-credentials': origin === '*' ? 'false' : 'true',
-    'vary': 'origin'
+    vary: 'origin'
   };
 }
 
@@ -161,12 +161,37 @@ function joinFsPath(root, relativePart) {
   return `${left}/${right}`;
 }
 
-function qualityToImageQuality(quality) {
-  const q = ss(quality, 'standard').toLowerCase();
-  return q === 'hd' ? 'hd' : 'standard';
+function normalizeProviderRegistry(rawProvider, rawModel) {
+  const provider = ss(rawProvider).toLowerCase();
+  const model = ss(rawModel).toLowerCase();
+  if (ALLOWED_IMAGE_PROVIDERS.has(provider)) return provider;
+  if (model.startsWith('openai/')) return 'openai-image-generation';
+  if (model.startsWith('xai/') || model.includes('grok')) return 'xai';
+  if (model.startsWith('google/gemini')) return 'gemini';
+  if (
+    model.startsWith('black-forest-labs/') ||
+    model.includes('flux') ||
+    model.includes('imagen') ||
+    model.startsWith('ideogram/') ||
+    model.startsWith('recraft/')
+  ) {
+    return 'together';
+  }
+  return DEFAULT_PROVIDER;
+}
+
+function normalizeQuality(quality) {
+  const q = ss(quality, 'medium').toLowerCase();
+  if (q === 'hd') return 'high';
+  if (q === 'standard') return 'medium';
+  if (q === 'low' || q === 'medium' || q === 'high') return q;
+  return 'medium';
 }
 
 function ratioToSize(ratio) {
+  if (ratio && typeof ratio === 'object' && Number.isFinite(ratio.w) && Number.isFinite(ratio.h)) {
+    return { w: clamp(Math.floor(Number(ratio.w)), 256, 4096), h: clamp(Math.floor(Number(ratio.h)), 256, 4096) };
+  }
   const map = {
     '1:1': { w: 1024, h: 1024 },
     '16:9': { w: 1792, h: 1024 },
@@ -181,6 +206,13 @@ function ratioToSize(ratio) {
   return map[ss(ratio, '1:1')] || map['1:1'];
 }
 
+function ratioToAspectRatio(ratio) {
+  const normalized = ss(ratio, '1:1');
+  if (/^\d+:\d+$/.test(normalized)) return normalized;
+  const size = ratioToSize(ratio);
+  return `${size.w}:${size.h}`;
+}
+
 function extractImageSrc(result) {
   if (!result) return null;
   if (typeof result === 'string') return result.trim();
@@ -190,22 +222,34 @@ function extractImageSrc(result) {
 }
 
 function normalizeCatalogEntry(item) {
-  const modelId = ss(item?.modelId || item?.id);
-  if (!modelId) return null;
+  const model = ss(item?.model || item?.modelId || item?.id);
+  if (!model) return null;
+  const provider = normalizeProviderRegistry(item?.provider, model);
+  const displayName = ss(item?.displayName, ss(item?.modelName, model));
   return {
     ...item,
-    id: ss(item?.id, modelId),
-    modelId,
-    modelName: ss(item?.modelName, modelId.split('/')[1] || modelId),
-    provider: ss(item?.provider || item?.company, modelId.split('/')[0] || 'unknown'),
-    company: ss(item?.company || item?.provider, item?.provider || 'unknown'),
+    id: ss(item?.id, model),
+    modelId: ss(item?.modelId, model),
+    model,
+    displayName,
+    modelName: ss(item?.modelName, displayName),
+    provider,
+    company: ss(item?.company || item?.providerLabel || item?.provider, provider),
+    providerLabel: ss(item?.providerLabel || item?.company || item?.provider, provider),
     categoryRaw: ss(item?.categoryRaw, ''),
-    badges: Array.isArray(item?.badges) ? item.badges : []
+    badges: Array.isArray(item?.badges) ? item.badges : [],
+    template: item?.template && typeof item.template === 'object' ? item.template : null,
+    profile: item?.profile && typeof item.profile === 'object' ? item.profile : null,
+    override: item?.override && typeof item.override === 'object' ? item.override : null,
+    tagUi: item?.tagUi && typeof item.tagUi === 'object' ? item.tagUi : null,
+    pricing: item?.pricing && typeof item.pricing === 'object' ? item.pricing : null,
+    prices: item?.prices && typeof item.prices === 'object' ? item.prices : null
   };
 }
 
 function isImageCatalogModel(item) {
-  return ss(item?.categoryRaw).toLowerCase() === 'image generation';
+  const category = ss(item?.categoryRaw || item?.category).toLowerCase();
+  return category === 'image generation' || category === 'image';
 }
 
 async function readJsonResponse(response) {
@@ -273,51 +317,151 @@ async function buildModelsPayload() {
 function findRequestedModel(items, requestedModel) {
   const wanted = ss(requestedModel);
   if (!wanted) return items[0] || null;
-  return items.find((item) => ss(item?.modelId) === wanted || ss(item?.id) === wanted) || items[0] || null;
+  return items.find((item) => {
+    return wanted === ss(item?.model) || wanted === ss(item?.modelId) || wanted === ss(item?.id);
+  }) || null;
 }
 
-function buildPromptText(prompt, negativePrompt) {
+function buildPromptText(prompt, negativePrompt, provider) {
   const cleanPrompt = ss(prompt, '');
   const cleanNegative = ss(negativePrompt, '');
   if (!cleanNegative) return cleanPrompt;
+  if (provider === 'together') return cleanPrompt;
   return `${cleanPrompt}\n\nAvoid / Negative prompt: ${cleanNegative}`;
 }
 
-function buildGenerationAttemptPlans(ratio, quality, style) {
-  const normalizedRatio = ss(ratio, '1:1');
-  const requestedQuality = qualityToImageQuality(quality);
-  const requestedStyle = ss(style, '').toLowerCase();
+function makeStageError(stage, code, message, bullets = [], retryable = true, httpStatus = 500) {
+  const err = new Error(message);
+  err.stage = stage;
+  err.code = code;
+  err.bullets = Array.isArray(bullets) ? bullets : [];
+  err.retryable = retryable;
+  err.httpStatus = httpStatus;
+  return err;
+}
 
-  const ratioCandidates = [normalizedRatio, '1:1', '16:9', '9:16', '4:5', '3:4'];
-  const qualityCandidates = [requestedQuality, 'standard', 'hd'];
-  const styleCandidates = [requestedStyle, 'vivid', 'natural', ''];
+function buildProviderBaseOptions(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
+  const modelId = ss(model?.model || model?.modelId, DEFAULT_IMAGE_MODEL);
+  const base = {
+    provider,
+    model: modelId,
+    test_mode: Boolean(body?.test_mode === true)
+  };
+  return base;
+}
+
+function buildOpenAiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  const size = ratioToSize(body?.ratio || '1:1');
+  base.quality = normalizeQuality(body?.quality);
+  base.ratio = size;
+  return base;
+}
+
+function buildTogetherImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  const size = ratioToSize(body?.ratio || '1:1');
+  base.width = size.w;
+  base.height = size.h;
+  base.aspect_ratio = ratioToAspectRatio(body?.ratio || '1:1');
+  if (ss(body?.negativePrompt)) base.negative_prompt = ss(body?.negativePrompt);
+  base.n = ci(body?.n, 1, 4, 1);
+  if (body?.responseFormat) base.response_format = ss(body.responseFormat);
+  if (body?.steps != null) base.steps = ci(body.steps, 1, 50, 28);
+  if (body?.seed != null) base.seed = ci(body.seed, 0, 2147483647, 1);
+  if (body?.image_url) base.image_url = ss(body.image_url);
+  if (body?.image_base64) base.image_base64 = ss(body.image_base64);
+  if (body?.mask_image_url) base.mask_image_url = ss(body.mask_image_url);
+  if (body?.mask_image_base64) base.mask_image_base64 = ss(body.mask_image_base64);
+  if (body?.prompt_strength != null) base.prompt_strength = Number(body.prompt_strength);
+  if (body?.disable_safety_checker === true) base.disable_safety_checker = true;
+  return base;
+}
+
+function buildGeminiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  base.ratio = ratioToSize(body?.ratio || '1:1');
+  if (body?.input_image) base.input_image = body.input_image;
+  if (body?.input_image_mime_type) base.input_image_mime_type = ss(body.input_image_mime_type);
+  return base;
+}
+
+function buildXaiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  return base;
+}
+
+function buildProviderSpecificOptions(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
+  if (!ALLOWED_IMAGE_PROVIDERS.has(provider)) {
+    throw makeStageError('generation', 'PROVIDER_INVALID', `Desteklenmeyen image provider: ${provider}`, [`model=${ss(model?.model)}`], false, 400);
+  }
+  if (provider === 'openai-image-generation') return buildOpenAiImageOptions(model, body);
+  if (provider === 'together') return buildTogetherImageOptions(model, body);
+  if (provider === 'gemini') return buildGeminiImageOptions(model, body);
+  if (provider === 'xai') return buildXaiImageOptions(model, body);
+  throw makeStageError('generation', 'PROVIDER_INVALID', `Provider profili bulunamadı: ${provider}`, [`model=${ss(model?.model)}`], false, 400);
+}
+
+function buildGenerationAttemptPlans(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
   const plans = [];
+  const requestedRatio = body?.ratio || '1:1';
+  const requestedQuality = body?.quality || 'medium';
+  const fallbackRatios = [requestedRatio, '1:1'];
+  const fallbackQualities = [requestedQuality, 'medium', 'high', 'low'];
 
-  for (const r of ratioCandidates) {
-    for (const q of qualityCandidates) {
-      for (const s of styleCandidates) {
-        if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
-        const opts = {
-          provider: PROVIDER,
-          test_mode: false,
-          quality: q,
-          ratio: ratioToSize(r)
-        };
-        if (s) opts.style = s;
+  if (provider === 'openai-image-generation') {
+    for (const q of fallbackQualities) {
+      for (const r of fallbackRatios) {
+        const draftBody = { ...body, quality: q, ratio: r };
         plans.push({
           index: plans.length + 1,
-          ratio: r,
-          quality: q,
-          style: s || '-',
-          timeoutMs: 25000 + (plans.length * 1500),
-          opts
+          timeoutMs: 26000 + plans.length * 2500,
+          prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+          options: buildProviderSpecificOptions(model, draftBody)
         });
+        if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
       }
-      if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
     }
-    if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
+  } else if (provider === 'together') {
+    const togetherBodies = [
+      { ...body },
+      { ...body, ratio: requestedRatio || '1:1' },
+      { ...body, ratio: '1:1' }
+    ];
+    for (const draftBody of togetherBodies) {
+      plans.push({
+        index: plans.length + 1,
+        timeoutMs: 28000 + plans.length * 3000,
+        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+        options: buildProviderSpecificOptions(model, draftBody)
+      });
+      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
+    }
+  } else if (provider === 'gemini') {
+    const geminiBodies = [
+      { ...body },
+      { ...body, ratio: '1:1' }
+    ];
+    for (const draftBody of geminiBodies) {
+      plans.push({
+        index: plans.length + 1,
+        timeoutMs: 30000 + plans.length * 3500,
+        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+        options: buildProviderSpecificOptions(model, draftBody)
+      });
+      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
+    }
+  } else {
+    plans.push({
+      index: 1,
+      timeoutMs: 26000,
+      prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+      options: buildProviderSpecificOptions(model, body)
+    });
   }
-
   return plans;
 }
 
@@ -362,34 +506,15 @@ function buildRelativeAssetPath(jobId, ext) {
   return `${yyyy}/${mm}/${dd}/${safeJobId}.${ext}`;
 }
 
-async function getStorageRootCandidates() {
+function getStorageRootCandidates() {
   const seen = new Set();
   const list = [];
-  const cached = await getCachedStorageRoot();
-  const all = cached ? [cached, ...STORAGE_ROOT_CANDIDATES] : STORAGE_ROOT_CANDIDATES;
-  for (const item of all) {
+  for (const item of STORAGE_ROOT_CANDIDATES) {
     const normalized = ss(item);
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     list.push(normalized);
   }
-  return list;
-}
-
-
-
-function makeEvent(type, message, extra = null) {
-  return {
-    time: nowIso(),
-    type: ss(type, 'info'),
-    message: ss(message, ''),
-    extra: extra || null
-  };
-}
-
-function pushJobEvent(job, type, message, extra = null) {
-  const list = Array.isArray(job?.events) ? job.events.slice(-39) : [];
-  list.push(makeEvent(type, message, extra));
   return list;
 }
 
@@ -410,34 +535,6 @@ async function withTimeout(promise, ms) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-
-
-async function getCachedStorageRoot() {
-  try {
-    const raw = await me.puter.kv.get(STORAGE_CACHE_KEY);
-    if (!raw) return '';
-    if (typeof raw === 'string') {
-      try {
-        const parsed = JSON.parse(raw);
-        return ss(parsed?.root || parsed?.path || parsed, '');
-      } catch (_) {
-        return ss(raw, '');
-      }
-    }
-    return ss(raw?.root || raw?.path, '');
-  } catch (_) {
-    return '';
-  }
-}
-
-async function setCachedStorageRoot(root) {
-  const value = ss(root, '');
-  if (!value) return;
-  try {
-    await me.puter.kv.set(STORAGE_CACHE_KEY, JSON.stringify({ root: value, savedAt: nowIso() }));
-  } catch (_) {}
 }
 
 async function kvGet(key) {
@@ -472,6 +569,7 @@ function slimJobForKv(job) {
     retryable: j.retryable,
     cancelRequested: j.cancelRequested,
     model: j.model,
+    modelInfo: j.modelInfo,
     storage: j.storage,
     outputUrl: j.outputUrl,
     outputUrlExpiresAt: j.outputUrlExpiresAt,
@@ -562,15 +660,12 @@ async function tryWriteToStorageCandidate(root, relativePath, blob) {
     dedupeName: false
   });
   const resolvedPath = ss(writeResult?.path || writeResult?.item?.path || attemptedPath, attemptedPath);
-  let statOk = false;
   let statInfo = null;
   try {
     statInfo = await me.puter.fs.stat(resolvedPath);
-    statOk = true;
   } catch (statError) {
     try {
       statInfo = await me.puter.fs.stat(attemptedPath);
-      statOk = true;
     } catch (_) {
       throw attachBullets(new Error(`Dosya yazıldı gibi göründü ama doğrulanamadı: ${normalizeError(statError)}`), [
         `attemptedPath=${attemptedPath}`,
@@ -579,7 +674,7 @@ async function tryWriteToStorageCandidate(root, relativePath, blob) {
       ]);
     }
   }
-  const finalPath = statOk ? ss(statInfo?.path || resolvedPath, resolvedPath) : resolvedPath;
+  const finalPath = ss(statInfo?.path || resolvedPath, resolvedPath);
   const readUrl = await me.puter.fs.getReadURL(finalPath, URL_EXPIRES_MS);
   return {
     attemptedPath,
@@ -598,59 +693,11 @@ async function persistGeneratedImage(jobId, source) {
   const mimeType = blob.type || `image/${ext}`;
   const relativePath = buildRelativeAssetPath(jobId, ext);
   const attempts = [];
-  const roots = await getStorageRootCandidates();
 
-  await jobUpdate(jobId, async (job) => ({
-    ...job,
-    progress: 74,
-    step: 'Depolama klasörleri hazırlanıyor',
-    events: pushJobEvent(job, 'storage', 'Depolama root adayları hazırlandı', { roots })
-  }));
-
-  for (const root of roots) {
-    const attemptedPath = joinFsPath(root, relativePath);
+  for (const root of getStorageRootCandidates()) {
     try {
-      await jobUpdate(jobId, async (job) => ({
-        ...job,
-        progress: 78,
-        step: `Depolamaya yazılıyor: ${root}`,
-        storage: {
-          ...(job.storage || {}),
-          attemptedPath,
-          storageRoot: root
-        },
-        events: pushJobEvent(job, 'storage_attempt', 'Depolama yolu deneniyor', { root, attemptedPath })
-      }));
-
-      try {
-        const dirOnly = attemptedPath.split('/').slice(0, -1).join('/');
-        if (dirOnly) {
-          await me.puter.fs.mkdir(dirOnly, { createMissingParents: true, dedupeName: false });
-        }
-      } catch (_) {}
-
       const stored = await tryWriteToStorageCandidate(root, relativePath, blob);
       const fileName = stored.resolvedPath.split('/').pop();
-      await setCachedStorageRoot(root);
-      await jobUpdate(jobId, async (job) => ({
-        ...job,
-        progress: 92,
-        step: 'Depolama doğrulandı',
-        storage: {
-          ...(job.storage || {}),
-          path: stored.resolvedPath,
-          attemptedPath: stored.attemptedPath,
-          storageRoot: root,
-          verified: true,
-          mimeType,
-          fileName
-        },
-        events: pushJobEvent(job, 'storage_success', 'Depolama başarılı', {
-          root,
-          attemptedPath: stored.attemptedPath,
-          resolvedPath: stored.resolvedPath
-        })
-      }));
       return {
         path: stored.resolvedPath,
         attemptedPath: stored.attemptedPath,
@@ -662,23 +709,13 @@ async function persistGeneratedImage(jobId, source) {
         triedRoots: attempts.map((item) => item.root)
       };
     } catch (error) {
-      const normalized = normalizeError(error);
-      attempts.push({ root, error: normalized, attemptedPath });
-      await jobUpdate(jobId, async (job) => ({
-        ...job,
-        progress: 80,
-        step: `Depolama yolu başarısız: ${root}`,
-        events: pushJobEvent(job, 'storage_error', 'Depolama yolu başarısız oldu', {
-          root,
-          attemptedPath,
-          error: normalized
-        })
-      }));
+      attempts.push({ root, error: normalizeError(error) });
     }
   }
 
   const bullets = attempts.map((item, index) => `${index + 1}. ${item.root} → ${item.error}`);
-  throw attachBullets(new Error('Görsel üretildi ancak me.puter depolama klasörlerinin hiçbirine yazılamadı.'), bullets);
+  const err = makeStageError('storage', 'STORAGE_FAILED', 'Görsel üretildi ancak me.puter depolama klasörlerinin hiçbirine yazılamadı.', bullets, true, 500);
+  throw err;
 }
 
 function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model) {
@@ -690,7 +727,7 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
     step: 'İstek alındı',
     retryable: true,
     cancelRequested: false,
-    model: model?.modelId || DEFAULT_IMAGE_MODEL,
+    model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
     modelInfo: model || null,
     storage: {
       path: null,
@@ -704,71 +741,97 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
     outputUrlExpiresAt: null,
     outputUrls: [],
     requestSummary: {
-      model: model?.modelId || DEFAULT_IMAGE_MODEL,
+      model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
       promptPreview: prompt.length <= 160 ? prompt : `${prompt.slice(0, 157)}...`,
-      ratio,
-      quality,
+      ratio: ss(ratio, '1:1'),
+      quality: ss(quality, ''),
       style: style || '-',
       negativePromptPreview: negativePrompt ? (negativePrompt.length <= 120 ? negativePrompt : `${negativePrompt.slice(0, 117)}...`) : ''
     },
     request: {
-      modelId: model?.modelId || DEFAULT_IMAGE_MODEL,
-      ratio,
-      quality,
-      style,
-      negativePrompt,
+      modelId: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
+      provider: normalizeProviderRegistry(model?.provider, model?.model || model?.modelId),
+      ratio: ss(ratio, '1:1'),
+      quality: ss(quality, ''),
+      style: ss(style, ''),
+      negativePrompt: ss(negativePrompt, ''),
       n: 1
     },
     error: null,
-    events: [makeEvent('info', 'İş oluşturuldu')],
     createdAt: nowIso(),
     updatedAt: nowIso(),
     finishedAt: null
   };
 }
 
-async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model) {
-  const finalPrompt = buildPromptText(prompt, negativePrompt);
+async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body = {}) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model || model?.modelId);
+  const requestedBody = {
+    ...body,
+    prompt,
+    negativePrompt,
+    ratio,
+    quality,
+    style,
+    n: ci(body?.n, 1, 4, 1)
+  };
+
   await jobUpdate(jobId, async (job) => ({
     ...job,
     progress: 12,
-    step: 'Model hazırlanıyor',
-    events: pushJobEvent(job, 'info', 'Model ve üretim planı hazırlanıyor')
+    step: `Model hazırlanıyor (${provider})`
   }));
 
-  const plans = buildGenerationAttemptPlans(ratio, quality, style);
+  const plans = buildGenerationAttemptPlans(model, requestedBody);
   const attemptErrors = [];
   let src = null;
 
   for (const plan of plans) {
-    const progress = Math.min(60, 18 + Math.floor((plan.index / plans.length) * 42));
+    const progress = Math.min(64, 18 + Math.floor((plan.index / Math.max(1, plans.length)) * 42));
     await jobUpdate(jobId, async (job) => ({
       ...job,
       progress,
-      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`,
-      events: pushJobEvent(job, 'ai_attempt', 'AI üretim denemesi başladı', { attempt: plan.index, total: plans.length, ratio: plan.ratio, quality: plan.quality, style: plan.style })
+      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`
     }));
 
     try {
-      const imageResult = await withTimeout(me.puter.ai.txt2img(finalPrompt, { ...plan.opts, model: model?.modelId || DEFAULT_IMAGE_MODEL }), plan.timeoutMs);
+      const imageResult = await withTimeout(me.puter.ai.txt2img(plan.prompt, plan.options), plan.timeoutMs);
       src = extractImageSrc(imageResult);
-      if (!src) throw new Error('AI boş sonuç döndürdü');
+      if (!src) {
+        throw new Error('AI sonuç döndürdü ancak görsel kaynağı bulunamadı');
+      }
       break;
     } catch (error) {
-      attemptErrors.push(`Deneme ${plan.index}: ${normalizeError(error)}`);
+      const message = normalizeError(error);
+      attemptErrors.push(`Deneme ${plan.index}: ${message}`);
+      if (/field_invalid|model is invalid|valid model name/i.test(message)) {
+        throw makeStageError(
+          'generation',
+          'MODEL_INVALID',
+          'Seçilen model Puter image registry içinde bulunamadı veya provider ile eşleşmedi.',
+          [`requestedModel=${ss(model?.model || model?.modelId)}`, `provider=${provider}`, message],
+          false,
+          400
+        );
+      }
     }
   }
 
   if (!src) {
-    const err = new Error(`Görsel üretimi ${plans.length} farklı denemeye rağmen tamamlanamadı.`);
-    throw attachBullets(err, attemptErrors.slice(0, 10));
+    throw makeStageError(
+      'generation',
+      'GENERATION_FAILED',
+      `Görsel üretimi ${plans.length} denemeye rağmen tamamlanamadı.`,
+      attemptErrors.slice(0, 10),
+      true,
+      500
+    );
   }
 
   await jobUpdate(jobId, async (job) => ({
     ...job,
     progress: 72,
-    step: 'Görsel depolamaya yazılıyor',
-    events: pushJobEvent(job, 'storage', 'Görsel üretildi, depolama aşamasına geçildi')
+    step: 'Görsel depolamaya yazılıyor'
   }));
 
   const stored = await persistGeneratedImage(jobId, src);
@@ -790,8 +853,7 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
     outputUrl: stored.readUrl,
     outputUrls: stored.readUrl ? [stored.readUrl] : [],
     outputUrlExpiresAt: stored.expiresAt,
-    error: null,
-    events: pushJobEvent(job, 'done', 'İş başarıyla tamamlandı', { storagePath: stored.path, storageRoot: stored.storageRoot })
+    error: null
   }));
 
   return {
@@ -816,8 +878,7 @@ router.get('/', async ({ request }) => {
       totalModels: catalog.items.length,
       modelsSource: catalog.source,
       pollIntervalMs: POLL_INTERVAL_HINT_MS,
-      storageCandidates: await getStorageRootCandidates(),
-      cachedStorageRoot: await getCachedStorageRoot()
+      storageCandidates: getStorageRootCandidates()
     }), 200, 'no-store', request);
   } catch (error) {
     return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'WORKER_INFO_FAILED', normalizeError(error), [], 500), 500, 'no-store', request);
@@ -833,8 +894,7 @@ router.get('/health', async ({ request }) => {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
     storageMode: 'me.puter.fs',
-    modelSource: MODELS_WORKER_URL,
-    cachedStorageRoot: await getCachedStorageRoot()
+    modelSource: MODELS_WORKER_URL
   }), 200, 'no-store', request);
 });
 
@@ -858,8 +918,8 @@ router.post('/generate', async ({ request }) => {
     const body = await request.json();
     const prompt = ss(body?.prompt);
     const negativePrompt = ss(body?.negativePrompt);
-    const ratio = ss(body?.ratio || body?.size, '1:1');
-    const quality = qualityToImageQuality(body?.quality || 'standard');
+    const ratio = body?.ratio || '1:1';
+    const quality = ss(body?.quality || 'medium', 'medium');
     const style = ss(body?.style, '');
     if (!prompt) {
       return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'PROMPT_REQUIRED', 'Prompt alanı boş bırakılamaz.', [], 400), 400, 'no-store', request);
@@ -869,44 +929,77 @@ router.post('/generate', async ({ request }) => {
     const requestedModel = ss(body?.modelId || body?.model);
     const model = findRequestedModel(catalog.items, requestedModel);
     if (!model) {
-      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'MODEL_NOT_FOUND', 'Kullanılabilir görsel modeli bulunamadı.', [], 400), 400, 'no-store', request);
+      return jsonResponse(
+        errEnvelope(requestId, traceId, startedAt, 'MODEL_INVALID', 'Seçilen model Puter image registry içinde bulunamadı.', [
+          `requestedModel=${requestedModel || '-'}`,
+          `modelsSource=${catalog.source}`
+        ], 400),
+        400,
+        'no-store',
+        request
+      );
+    }
+
+    const provider = normalizeProviderRegistry(model.provider, model.model || model.modelId);
+    if (!ALLOWED_IMAGE_PROVIDERS.has(provider)) {
+      return jsonResponse(
+        errEnvelope(requestId, traceId, startedAt, 'PROVIDER_INVALID', 'Seçilen model için image provider profili bulunamadı.', [
+          `requestedModel=${ss(model.model || model.modelId)}`,
+          `provider=${provider}`
+        ], 400),
+        400,
+        'no-store',
+        request
+      );
     }
 
     jobId = uid('img');
     await jobWrite(baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model));
 
     try {
-      const result = await runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model);
+      const result = await runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body);
       return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'IMAGE_JOB_COMPLETED', result.job, {
         feature: 'image',
-        model: model.modelId,
+        model: model.model || model.modelId,
+        provider,
         modelsSource: catalog.source,
         inlinePreview: result.inlinePreview
       }), 200, 'no-store', request);
     } catch (generationError) {
       const bullets = Array.isArray(generationError?.bullets) ? generationError.bullets : [];
+      const stage = ss(generationError?.stage, 'generation');
+      const code = ss(generationError?.code, stage === 'storage' ? 'STORAGE_FAILED' : 'GENERATION_FAILED');
+      const httpStatus = ci(generationError?.httpStatus, 400, 599, stage === 'storage' ? 500 : 500);
+      const failedStatus = stage === 'storage' ? 'failed_storage' : 'failed';
+      const failedStep = stage === 'storage' ? 'Görsel üretildi ancak depolama başarısız oldu' : 'Görsel üretimi başarısız oldu';
+
       await jobUpdate(jobId, async (job) => ({
         ...job,
-        status: 'failed_storage',
+        status: failedStatus,
         progress: 100,
-        step: 'Görsel üretildi ancak depolama başarısız oldu',
+        step: failedStep,
         finishedAt: nowIso(),
         error: {
           message: normalizeError(generationError),
-          retryable: true,
+          retryable: httpStatus >= 500,
           bullets
-        },
-        events: pushJobEvent(job, 'failed', 'Depolama başarısız oldu', { bullets })
+        }
       }));
       const failedJob = await jobRead(jobId);
+      const publicMessage = code === 'MODEL_INVALID'
+        ? 'Seçilen model Puter image registry içinde bulunamadı.'
+        : stage === 'storage'
+          ? 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.'
+          : 'Görsel üretimi tamamlanamadı.';
       return jsonResponse(
-        errEnvelope(requestId, traceId, startedAt, 'IMAGE_STORAGE_FAILED', 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.', bullets, 500, {
+        errEnvelope(requestId, traceId, startedAt, code, publicMessage, bullets, httpStatus, {
           feature: 'image',
+          stage,
           job: failedJob,
-          modelsSource: catalog.source,
-          storageStrategy: 'PATH_POOL + mkdir + createMissingParents + realPath + stat + getReadURL + KV cache'
+          provider,
+          modelsSource: catalog.source
         }),
-        500,
+        httpStatus,
         'no-store',
         request
       );
@@ -921,8 +1014,7 @@ router.post('/generate', async ({ request }) => {
           progress: 100,
           step: 'Ana çöküş',
           finishedAt: nowIso(),
-          error: { message, retryable: true },
-          events: pushJobEvent(job, 'failed', 'Ana çöküş', { error: message })
+          error: { message, retryable: true }
         }));
       } catch (_) {}
     }
