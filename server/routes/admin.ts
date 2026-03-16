@@ -372,7 +372,7 @@ adminRouter.post('/settings/models', async (req: AuthRequest, res) => {
 });
 
 // Advanced Model Management
-import { USD_TRY_RATE_KEY, ensureModelsSeeded } from '../db/seed-model-prices.js';
+import { USD_TRY_RATE_KEY, ensureModelsSeeded } from '../db/modeller.js';
 
 adminRouter.get('/models', async (req: AuthRequest, res) => {
   try {

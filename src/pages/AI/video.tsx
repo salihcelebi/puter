@@ -3,9 +3,10 @@ import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import AILayout from '../../components/AILayout';
 import toast from 'react-hot-toast';
-import { useAuth } from '../../context/AuthContext';
 import { fetchApiJson } from '../../lib/apiClient';
 import { formatCredits, formatUsd, ModelCatalogItem } from '../../lib/aiWorkers';
+
+// TÜRKÇE NOT: Bu dosyanın parse hatası vermemesi için duplicate useAuth importu tek satıra indirildi.
 
 const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
 const VIDEO_MODEL_SESSION_KEY = 'nisai:selected-video-model';
