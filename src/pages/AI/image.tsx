@@ -256,6 +256,48 @@ async function requestWorker(path, options = {}) {
     throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
   }
 
+  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = window.setTimeout(() => controller.abort(), 60000);
+
+      response = await fetch(`${WORKER_BASE_URL}${path}`, {
+        method: options.method || 'GET',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+        credentials: 'include',
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
+
+      if (response.status >= 500 && attempt <= retryCount + 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+      } else {
+        break;
+      }
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt > retryCount) {
+        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+        throw new Error(
+          isAbort
+            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
+            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }
+
+  if (!response) {
+    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
+  }
+
   let lastError = null;
 
   for (const strategy of ordered) {
@@ -314,7 +356,8 @@ export default function IDMImagePage() {
   const [loadingInfo, setLoadingInfo] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [debugLogs, setDebugLogs] = useState([]);
+  // TÜRKÇE NOT: En ufak runtime hatayı arayüzde göstermek için global hata state'i eklendi.
+  const [runtimeError, setRuntimeError] = useState('');
 
   const pollRef = useRef(null);
 
@@ -344,23 +387,35 @@ export default function IDMImagePage() {
     setActiveImageUrls(images);
   }, []);
 
-  const requestWorker = useCallback(async (path, options = {}) => {
-    return requestWorkerWith20Strategies(path, options, pushDebugLog);
-  }, [pushDebugLog]);
+  // TÜRKÇE NOT: Her noktadan gelen hatayı kullanıcıya net göstermek için ortak raporlama fonksiyonu.
+  const reportUiError = useCallback((title, error) => {
+    const msg = safeText(error?.message || error, 'Bilinmeyen hata');
+    setPageError(`${title}: ${msg}`);
+  }, []);
 
   const loadWorkerInfo = useCallback(async () => {
-    const payload = await requestWorker('/');
-    setWorkerInfo(payload?.data || null);
-  }, [requestWorker]);
+    // TÜRKÇE NOT: Worker info çekimi sırasında oluşan hata yakalanıp üst katmana açıklamalı fırlatılır.
+    try {
+      const payload = await requestWorker('/');
+      setWorkerInfo(payload?.data || null);
+    } catch (error) {
+      throw new Error(`Worker bilgi yükleme hatası: ${safeText(error?.message, 'Bilinmeyen hata')}`);
+    }
+  }, []);
 
   const loadModels = useCallback(async () => {
-    const items = IMAGE_MODELS.map((item) => ({
-      id: item.modelId,
-      modelId: item.modelId,
-      provider: item.label.split(' · ')[0],
-      modelName: item.label.split(' · ')[1] || item.modelId,
-    }));
-    setModels(items);
+    // TÜRKÇE NOT: Model listesi oluşturulurken beklenmeyen bir veri hatası olursa UI açık kalsın diye try/catch kullanılır.
+    try {
+      const items = IMAGE_MODELS.map((item) => ({
+        id: item.modelId,
+        modelId: item.modelId,
+        provider: item.label.split(' · ')[0],
+        modelName: item.label.split(' · ')[1] || item.modelId,
+      }));
+      setModels(items);
+    } catch (error) {
+      throw new Error(`Model listesi hazırlanamadı: ${safeText(error?.message, 'Bilinmeyen hata')}`);
+    }
   }, []);
 
   const hydrateHistoryImages = useCallback(async (items) => {
@@ -464,10 +519,10 @@ export default function IDMImagePage() {
         }
       } catch (error) {
         clearPoll();
-        setPageError(error.message || 'Job durumu okunamadı.');
+reportUiError('Job durumu okunamadı', error);
       }
     }, POLL_INTERVAL_MS);
-  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, requestWorker, resolveCompletedImageIfNeeded, stopIfTerminal]);
+  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, reportUiError, resolveCompletedImageIfNeeded, stopIfTerminal]);
 
   const boot = useCallback(async () => {
     setLoadingInfo(true);
@@ -477,16 +532,31 @@ export default function IDMImagePage() {
       await Promise.all([loadWorkerInfo(), loadModels(), loadHistory()]);
       pushDebugLog('BOOT TAMAMLANDI');
     } catch (error) {
-      setPageError(error.message || 'Sayfa başlatılamadı.');
-      pushDebugLog(`BOOT HATA → ${safeText(error?.message, 'bilinmeyen hata')}`);
+reportUiError('Sayfa başlatılamadı', error);
     } finally {
       setLoadingInfo(false);
     }
-  }, [loadHistory, loadModels, loadWorkerInfo, pushDebugLog]);
+  }, [loadHistory, loadModels, loadWorkerInfo, reportUiError]);
 
   useEffect(() => {
+    // TÜRKÇE NOT: Uygulama açılırken ve sonrasında global JS hataları da ekranda görülsün diye dinleyici eklenir.
+    const onError = (event) => {
+      setRuntimeError(`Runtime hata: ${safeText(event?.message, 'Bilinmeyen hata')}`);
+    };
+    const onRejection = (event) => {
+      const reason = event?.reason;
+      setRuntimeError(`Promise hata: ${safeText(reason?.message || reason, 'Bilinmeyen hata')}`);
+    };
+
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+
     boot();
-    return () => clearPoll();
+    return () => {
+      clearPoll();
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
   }, [boot, clearPoll]);
 
   const handleChange = useCallback((key, value) => {
@@ -543,11 +613,11 @@ export default function IDMImagePage() {
       if (failedJob) {
         setActiveJob(failedJob);
       }
-      setPageError(error.message || 'Üretim başlatılamadı.');
+reportUiError('Üretim başlatılamadı', error);
     } finally {
       setSubmitting(false);
     }
-  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, requestWorker, resolveCompletedImageIfNeeded, stopIfTerminal]);
+  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, reportUiError, resolveCompletedImageIfNeeded, stopIfTerminal]);
 
   const handleCancel = useCallback(async () => {
     const jobId = safeText(activeJob?.jobId);
@@ -563,18 +633,18 @@ export default function IDMImagePage() {
       mergeActiveImages(payload?.data || null, activeInlinePreview);
       await loadHistory();
     } catch (error) {
-      setPageError(error.message || 'İptal işlemi başarısız oldu.');
+reportUiError('İptal işlemi başarısız oldu', error);
     }
-  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages, requestWorker]);
+  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages, reportUiError]);
 
   const handleRefreshHistory = useCallback(async () => {
     setPageError('');
     try {
       await loadHistory();
     } catch (error) {
-      setPageError(error.message || 'Geçmiş yenilenemedi.');
+reportUiError('Geçmiş yenilenemedi', error);
     }
-  }, [loadHistory]);
+  }, [loadHistory, reportUiError]);
 
   const handleResetStrategy = useCallback(() => {
     try {
@@ -629,6 +699,10 @@ export default function IDMImagePage() {
 
       {pageError ? (
         <div style={styles.errorBox}>{pageError}</div>
+      ) : null}
+
+      {runtimeError ? (
+        <div style={styles.errorBox}>{runtimeError}</div>
       ) : null}
 
       <div style={styles.grid}>
