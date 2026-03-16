@@ -1,13 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
+type EventStatus = 'started' | 'success' | 'failed' | 'progress' | string;
+
+type WorkerErrorShape = {
+  message?: string;
+  bullets?: string[];
+  retryable?: boolean;
+};
 
 type WorkerEnvelope<T> = {
   ok: boolean;
   code: string;
   data: T;
-  error?: { message?: string; bullets?: string[]; retryable?: boolean } | null;
+  error?: WorkerErrorShape | null;
   meta?: Record<string, unknown> | null;
+  worker?: string;
+  version?: string;
+  requestId?: string;
+  traceId?: string;
+  time?: string;
+  durationMs?: number;
+};
+
+type WorkerEvent = {
+  stage?: string;
+  status?: EventStatus;
+  title?: string;
+  successMessage?: string;
+  errorMessage?: string;
+  timestamp?: string;
+  details?: Record<string, unknown> | null;
+  relatedPath?: string | null;
+  relatedModel?: string | null;
+  attemptNo?: number | null;
 };
 
 type ModelItem = {
@@ -69,11 +95,9 @@ type JobRecord = {
     fileName?: string | null;
     verified?: boolean;
   };
-  error?: {
-    message?: string;
-    bullets?: string[];
-    retryable?: boolean;
-  } | null;
+  error?: WorkerErrorShape | null;
+  lastEvent?: WorkerEvent | null;
+  events?: WorkerEvent[];
 };
 
 type HistoryPayload = {
@@ -83,6 +107,12 @@ type HistoryPayload = {
   feature?: string;
 };
 
+type WorkerRequestFailure = {
+  message: string;
+  envelope?: WorkerEnvelope<unknown> | null;
+  status?: number;
+};
+
 const MODELS_BASE_URL = 'https://models-worker.puter.work';
 const IMGS_BASE_URL = 'https://imgs.puter.work';
 const POLL_MS = 1800;
@@ -90,6 +120,39 @@ const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed
 const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:5', '3:4', '3:2', '2:3'];
 const QUALITY_OPTIONS = ['standard', 'hd'];
 const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'];
+
+const PROMPT_PRESETS = [
+  {
+    label: 'Sinematik İstanbul',
+    prompt:
+      'Sisli İstanbul sokaklarında yağmur sonrası gece sahnesi, neon yansımalar, sinematik ışık, detaylı mimari, yüksek atmosfer, gerçekçi kompozisyon',
+    negativePrompt:
+      'bulanık, düşük çözünürlük, bozuk anatomi, yazı, watermark, ekstra uzuv, kötü perspektif',
+    ratio: '16:9',
+    quality: 'hd',
+    style: 'cinematic',
+  },
+  {
+    label: 'Lüks Ürün Çekimi',
+    prompt:
+      'Mat siyah arka planda premium akıllı saat ürün fotoğrafı, stüdyo ışığı, yansıma kontrollü, ultra net detay, reklam kalitesi',
+    negativePrompt:
+      'kirli yüzey, düşük kalite, aşırı parlama, deforme ürün, yazı, logo hatası, watermark',
+    ratio: '1:1',
+    quality: 'hd',
+    style: 'photorealistic',
+  },
+  {
+    label: 'Anime Kahraman',
+    prompt:
+      'Rüzgarlı tepede duran genç anime kahraman, dramatik gökyüzü, güçlü poz, detaylı kostüm, enerjik ışık çizgileri, yüksek kalite illüstrasyon',
+    negativePrompt:
+      'gerçekçi yüz, düşük detay, bulanık çizim, kötü eller, ekstra parmak, yazı, watermark',
+    ratio: '4:5',
+    quality: 'hd',
+    style: 'anime',
+  },
+];
 
 function buildUrl(base: string, path: string): string {
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -129,39 +192,132 @@ function formatDate(value?: string | null): string {
 
 function statusText(status?: JobStatus): string {
   switch (status) {
-    case 'queued': return 'Sırada';
-    case 'processing': return 'Üretiliyor';
-    case 'completed': return 'Tamamlandı';
-    case 'failed': return 'Başarısız';
-    case 'failed_storage': return 'Depolama hatası';
-    case 'cancelled': return 'İptal edildi';
-    default: return 'Bilinmiyor';
+    case 'queued':
+      return 'Sırada';
+    case 'processing':
+      return 'Üretiliyor';
+    case 'completed':
+      return 'Tamamlandı';
+    case 'failed':
+      return 'Başarısız';
+    case 'failed_storage':
+      return 'Depolama hatası';
+    case 'cancelled':
+      return 'İptal edildi';
+    default:
+      return 'Bilinmiyor';
   }
 }
 
-function workerErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof DOMException && error.name === 'AbortError') return 'İstek zaman aşımına uğradı.';
-  if (error instanceof Error) return error.message || fallback;
-  return fallback;
+function statusBadgeClass(status?: JobStatus): string {
+  switch (status) {
+    case 'completed':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'processing':
+    case 'queued':
+      return 'border-blue-200 bg-blue-50 text-blue-700';
+    case 'failed':
+    case 'failed_storage':
+      return 'border-red-200 bg-red-50 text-red-700';
+    case 'cancelled':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-700';
+  }
+}
+
+function eventStatusClass(status?: EventStatus): string {
+  switch (status) {
+    case 'success':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'failed':
+      return 'border-red-200 bg-red-50 text-red-700';
+    case 'started':
+      return 'border-sky-200 bg-sky-50 text-sky-700';
+    case 'progress':
+      return 'border-violet-200 bg-violet-50 text-violet-700';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-700';
+  }
+}
+
+function normalizeText(value: unknown, fallback = ''): string {
+  if (value == null) return fallback;
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function getEventMessage(event?: WorkerEvent | null): string {
+  if (!event) return 'Henüz olay kaydı yok.';
+  const detailsMessage = normalizeText((event.details as Record<string, unknown> | null)?.eventMessage, '');
+  if (detailsMessage) return detailsMessage;
+  if (event.status === 'failed') return normalizeText(event.errorMessage, 'Aşama başarısız oldu.');
+  if (event.status === 'success') return normalizeText(event.successMessage, 'Aşama tamamlandı.');
+  return normalizeText(event.title, 'Olay kaydı üretildi.');
+}
+
+function clampProgress(value?: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function dedupeEvents(job: JobRecord | null): WorkerEvent[] {
+  if (!job) return [];
+  const source = Array.isArray(job.events) ? job.events : [];
+  const map = new Map<string, WorkerEvent>();
+  for (const event of source) {
+    const key = [
+      normalizeText(event.timestamp, ''),
+      normalizeText(event.stage, ''),
+      normalizeText(event.status, ''),
+      String(event.attemptNo ?? ''),
+      normalizeText(event.relatedPath, ''),
+      normalizeText(event.relatedModel, ''),
+    ].join('|');
+    if (!map.has(key)) map.set(key, event);
+  }
+  const events = [...map.values()];
+  events.sort((a, b) => {
+    const left = new Date(normalizeText(a.timestamp, '1970-01-01T00:00:00.000Z')).getTime();
+    const right = new Date(normalizeText(b.timestamp, '1970-01-01T00:00:00.000Z')).getTime();
+    return right - left;
+  });
+  return events;
+}
+
+function detailsToRows(details?: Record<string, unknown> | null): Array<{ key: string; value: string }> {
+  if (!details || typeof details !== 'object') return [];
+  return Object.entries(details)
+    .filter(([key, value]) => key !== 'eventMessage' && value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => {
+      let text = '';
+      if (Array.isArray(value)) text = value.join(', ');
+      else if (typeof value === 'object') text = JSON.stringify(value);
+      else text = String(value);
+      return { key, value: text };
+    });
 }
 
 async function readEnvelope<T>(response: Response): Promise<WorkerEnvelope<T>> {
   const text = await response.text();
   if (!text.trim()) {
-    throw new Error('Worker boş cevap döndürdü.');
+    throw { message: 'Worker boş cevap döndürdü.' } as WorkerRequestFailure;
   }
   try {
     return JSON.parse(text) as WorkerEnvelope<T>;
   } catch {
-    throw new Error('Worker geçerli JSON döndürmedi.');
+    throw { message: 'Worker geçerli JSON döndürmedi.' } as WorkerRequestFailure;
   }
 }
 
 async function requestJson<T>(base: string, path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
-  let lastError: unknown = null;
+  let lastError: WorkerRequestFailure = { message: 'İstek başarısız oldu.' };
+
   for (let attempt = 0; attempt <= retry; attempt += 1) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 60000);
+
     try {
       const response = await fetch(buildUrl(base, path), {
         ...init,
@@ -172,26 +328,45 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, re
           ...(init?.headers || {}),
         },
       });
+
       window.clearTimeout(timer);
       const payload = await readEnvelope<T>(response);
+
       if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error?.message || `İstek başarısız oldu (${response.status}).`);
+        throw {
+          message: payload.error?.message || `İstek başarısız oldu (${response.status}).`,
+          envelope: payload as WorkerEnvelope<unknown>,
+          status: response.status,
+        } as WorkerRequestFailure;
       }
+
       return payload;
     } catch (error) {
       window.clearTimeout(timer);
-      lastError = error;
+
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        lastError = { message: 'İstek zaman aşımına uğradı.' };
+      } else if (typeof error === 'object' && error && 'message' in error) {
+        lastError = error as WorkerRequestFailure;
+      } else if (error instanceof Error) {
+        lastError = { message: error.message || 'İstek başarısız oldu.' };
+      } else {
+        lastError = { message: 'İstek başarısız oldu.' };
+      }
+
       if (attempt === retry) break;
       await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
-  throw lastError instanceof Error ? lastError : new Error('İstek başarısız oldu.');
+
+  throw lastError;
 }
 
 export default function ImagePage(): JSX.Element {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [modelsSource, setModelsSource] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
+
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -199,19 +374,31 @@ export default function ImagePage(): JSX.Element {
   const [quality, setQuality] = useState('standard');
   const [style, setStyle] = useState('');
   const [count, setCount] = useState(1);
+
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [history, setHistory] = useState<JobRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+
+  const [pageError, setPageError] = useState('');
   const [workerInfo, setWorkerInfo] = useState('');
+  const [showTechDetails, setShowTechDetails] = useState(true);
+  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+
   const pollRef = useRef<number | null>(null);
 
   const selectedModel = useMemo(
     () => models.find((item) => modelKey(item) === selectedModelId) || null,
     [models, selectedModelId],
   );
+
   const activeImages = useMemo(() => pickImages(activeJob), [activeJob]);
+  const activeEvents = useMemo(() => dedupeEvents(activeJob), [activeJob]);
+  const progressValue = useMemo(() => clampProgress(activeJob?.progress), [activeJob?.progress]);
+  const latestErrorBullets = useMemo(() => {
+    if (!activeJob?.error?.bullets?.length) return [];
+    return activeJob.error.bullets.filter(Boolean);
+  }, [activeJob?.error?.bullets]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
@@ -220,9 +407,13 @@ export default function ImagePage(): JSX.Element {
     }
   }, []);
 
+  const toggleEvent = useCallback((key: string) => {
+    setExpandedEvents((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
+
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
-    setError('');
+    setPageError('');
     try {
       const envelope = await requestJson<ModelsPayload>(MODELS_BASE_URL, '/models?limit=250', undefined, 1);
       const items = (Array.isArray(envelope.data?.items) ? envelope.data.items : []).filter(isImageModel);
@@ -230,10 +421,11 @@ export default function ImagePage(): JSX.Element {
       setModelsSource(`${MODELS_BASE_URL}/models`);
       setSelectedModelId((current) => current || modelKey(items[0]) || '');
       if (!items.length) {
-        setError('models-worker içinde görsel modeli bulunamadı.');
+        setPageError('models-worker içinde görsel modeli bulunamadı.');
       }
-    } catch (requestError) {
-      setError(workerErrorMessage(requestError, 'Modeller alınamadı.'));
+    } catch (error) {
+      const failure = error as WorkerRequestFailure;
+      setPageError(failure.message || 'Modeller alınamadı.');
     } finally {
       setModelsLoading(false);
     }
@@ -254,8 +446,8 @@ export default function ImagePage(): JSX.Element {
     try {
       const envelope = await requestJson<HistoryPayload>(IMGS_BASE_URL, '/jobs/history?limit=12', undefined, 0);
       setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
-    } catch (requestError) {
-      console.error(requestError);
+    } catch {
+      // geçmiş listesi kritik değil
     } finally {
       setLoadingHistory(false);
     }
@@ -264,10 +456,33 @@ export default function ImagePage(): JSX.Element {
   const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
     if (!job.jobId || pickImages(job).length > 0) return job;
     try {
-      const envelope = await requestJson<{ outputUrl?: string | null }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
+      const envelope = await requestJson<{
+        outputUrl?: string | null;
+        storagePath?: string | null;
+        outputUrlExpiresAt?: string | null;
+        storageRoot?: string | null;
+        attemptedPath?: string | null;
+        mimeType?: string | null;
+        fileName?: string | null;
+      }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
+
       const outputUrl = envelope.data?.outputUrl || null;
       if (!outputUrl) return job;
-      return { ...job, outputUrl, outputUrls: [outputUrl] };
+
+      return {
+        ...job,
+        outputUrl,
+        outputUrls: [outputUrl],
+        storage: {
+          ...(job.storage || {}),
+          path: envelope.data?.storagePath || job.storage?.path || null,
+          storageRoot: envelope.data?.storageRoot || job.storage?.storageRoot || null,
+          attemptedPath: envelope.data?.attemptedPath || job.storage?.attemptedPath || null,
+          mimeType: envelope.data?.mimeType || job.storage?.mimeType || null,
+          fileName: envelope.data?.fileName || job.storage?.fileName || null,
+          verified: true,
+        },
+      };
     } catch {
       return job;
     }
@@ -281,18 +496,22 @@ export default function ImagePage(): JSX.Element {
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
       }
+
       setActiveJob(nextJob);
+
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
         await refreshHistory();
         return;
       }
+
       pollRef.current = window.setTimeout(() => {
         void pollJob(jobId);
       }, POLL_MS);
-    } catch (requestError) {
+    } catch (error) {
+      const failure = error as WorkerRequestFailure;
       setSubmitting(false);
-      setError(workerErrorMessage(requestError, 'Job durumu alınamadı.'));
+      setPageError(failure.message || 'Job durumu alınamadı.');
     }
   }, [ensureImageUrl, refreshHistory, stopPolling]);
 
@@ -303,18 +522,27 @@ export default function ImagePage(): JSX.Element {
     return () => stopPolling();
   }, [loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
 
+  const applyPreset = useCallback((preset: (typeof PROMPT_PRESETS)[number]) => {
+    setPrompt(preset.prompt);
+    setNegativePrompt(preset.negativePrompt);
+    setRatio(preset.ratio);
+    setQuality(preset.quality);
+    setStyle(preset.style);
+  }, []);
+
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) {
-      setError('Prompt zorunlu.');
+      setPageError('Prompt zorunlu.');
       return;
     }
     if (!selectedModelId) {
-      setError('Model seçmelisin.');
+      setPageError('Model seçmelisin.');
       return;
     }
+
     stopPolling();
     setSubmitting(true);
-    setError('');
+    setPageError('');
     setActiveJob(null);
 
     try {
@@ -345,45 +573,76 @@ export default function ImagePage(): JSX.Element {
 
       let nextJob = envelope.data;
       const inlinePreview = typeof envelope.meta?.inlinePreview === 'string' ? envelope.meta.inlinePreview : null;
+
       if (inlinePreview && pickImages(nextJob).length === 0) {
         nextJob = { ...nextJob, outputUrl: inlinePreview, outputUrls: [inlinePreview] };
       }
+
       setActiveJob(nextJob);
 
       if (!nextJob.jobId) {
-        throw new Error('Worker jobId döndürmedi.');
+        throw { message: 'Worker jobId döndürmedi.' } as WorkerRequestFailure;
       }
 
       await refreshHistory();
+
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
         return;
       }
+
       await pollJob(nextJob.jobId);
-    } catch (requestError) {
+    } catch (error) {
+      const failure = error as WorkerRequestFailure;
+      const failedEnvelope = failure.envelope as WorkerEnvelope<unknown> | undefined;
+      const failedJob = (failedEnvelope?.meta?.job as JobRecord | undefined) || null;
+
+      if (failedJob) {
+        setActiveJob(failedJob);
+      } else if (failedEnvelope?.meta?.lastEvent || failedEnvelope?.error) {
+        setActiveJob((current) => ({
+          ...(current || {
+            jobId: 'no-job',
+            status: 'failed_storage',
+          }),
+          status: 'failed_storage',
+          progress: current?.progress ?? 100,
+          step: failure.message || 'İş başarısız oldu',
+          error: failedEnvelope.error || { message: failure.message || 'İş başarısız oldu.' },
+          lastEvent: (failedEnvelope.meta?.lastEvent as WorkerEvent | undefined) || current?.lastEvent || null,
+        }));
+      }
+
       setSubmitting(false);
-      setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
+      setPageError(failure.message || 'Görsel üretimi başlatılamadı.');
+      await refreshHistory();
     }
   }, [count, negativePrompt, pollJob, prompt, quality, ratio, refreshHistory, selectedModelId, stopPolling, style]);
 
   const handleCancel = useCallback(async () => {
     if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
     try {
-      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, '/jobs/cancel', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: activeJob.jobId }),
-      }, 0);
+      const envelope = await requestJson<JobRecord>(
+        IMGS_BASE_URL,
+        '/jobs/cancel',
+        {
+          method: 'POST',
+          body: JSON.stringify({ jobId: activeJob.jobId }),
+        },
+        0,
+      );
       stopPolling();
       setSubmitting(false);
       setActiveJob(envelope.data);
       await refreshHistory();
-    } catch (requestError) {
-      setError(workerErrorMessage(requestError, 'İptal işlemi başarısız oldu.'));
+    } catch (error) {
+      const failure = error as WorkerRequestFailure;
+      setPageError(failure.message || 'İptal işlemi başarısız oldu.');
     }
   }, [activeJob, refreshHistory, stopPolling]);
 
   const openHistoryJob = useCallback(async (jobId: string) => {
-    setError('');
+    setPageError('');
     stopPolling();
     try {
       const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
@@ -398,8 +657,9 @@ export default function ImagePage(): JSX.Element {
       } else {
         setSubmitting(false);
       }
-    } catch (requestError) {
-      setError(workerErrorMessage(requestError, 'Geçmiş kaydı açılamadı.'));
+    } catch (error) {
+      const failure = error as WorkerRequestFailure;
+      setPageError(failure.message || 'Geçmiş kaydı açılamadı.');
     }
   }, [ensureImageUrl, pollJob, stopPolling]);
 
@@ -416,6 +676,7 @@ export default function ImagePage(): JSX.Element {
               Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
             </p>
           </div>
+
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
             <div>Seçili model: {selectedModel ? modelLabel(selectedModel) : 'yok'}</div>
             <div className="mt-1 text-xs text-slate-400">
@@ -426,15 +687,32 @@ export default function ImagePage(): JSX.Element {
         </div>
       </div>
 
-      {error ? (
+      {pageError ? (
         <div className="rounded-2xl border border-red-700 bg-red-950/70 px-4 py-3 text-sm text-red-100">
-          {error}
+          {pageError}
         </div>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[1.1fr,0.9fr]">
+      <div className="grid gap-6 lg:grid-cols-[1.02fr,0.98fr]">
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Üretim ayarları</h2>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">Hazır promptlar</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {PROMPT_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => applyPreset(preset)}
+                  className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-slate-500 hover:text-slate-900"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="mt-4 grid gap-4">
             <label className="grid gap-2">
               <span className="text-sm font-medium text-slate-700">Prompt</span>
@@ -478,21 +756,33 @@ export default function ImagePage(): JSX.Element {
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Oran</span>
                 <select value={ratio} onChange={(e) => setRatio(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {RATIO_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {RATIO_OPTIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
               </label>
 
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Kalite</span>
                 <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {QUALITY_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                  {QUALITY_OPTIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
                 </select>
               </label>
 
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-700">Stil</span>
                 <select value={style} onChange={(e) => setStyle(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {STYLE_OPTIONS.map((item) => <option key={item} value={item}>{item || 'Varsayılan'}</option>)}
+                  {STYLE_OPTIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {item || 'Varsayılan'}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
@@ -527,6 +817,7 @@ export default function ImagePage(): JSX.Element {
               >
                 {submitting ? 'Üretiliyor...' : 'Görsel üret'}
               </button>
+
               <button
                 type="button"
                 onClick={() => void handleCancel()}
@@ -540,29 +831,67 @@ export default function ImagePage(): JSX.Element {
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">Aktif iş</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-xl font-semibold text-slate-900">Aktif iş</h2>
+            <button
+              type="button"
+              onClick={() => setShowTechDetails((current) => !current)}
+              className="rounded-2xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700"
+            >
+              {showTechDetails ? 'Teknik detayları gizle' : 'Teknik detayları göster'}
+            </button>
+          </div>
+
           {activeJob ? (
             <div className="mt-4 space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-medium text-slate-700">Durum: {statusText(activeJob.status)}</span>
+                <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                  <span className={`rounded-full border px-3 py-1 font-medium ${statusBadgeClass(activeJob.status)}`}>
+                    {statusText(activeJob.status)}
+                  </span>
                   <span className="text-slate-500">Job: {activeJob.jobId}</span>
                 </div>
-                <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200">
-                  <div className="h-full rounded-full bg-slate-900 transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, activeJob.progress || 0))}%` }} />
+
+                <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-slate-900 transition-all duration-500"
+                    style={{ width: `${progressValue}%` }}
+                  />
                 </div>
+
                 <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                  <span>{activeJob.step || 'Bekleniyor'}</span>
-                  <span>%{Math.max(0, Math.min(100, activeJob.progress || 0))}</span>
+                  <span>{activeJob.step || getEventMessage(activeJob.lastEvent)}</span>
+                  <span>%{progressValue}</span>
                 </div>
+
+                {activeJob.lastEvent ? (
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${eventStatusClass(activeJob.lastEvent.status)}`}>
+                        {normalizeText(activeJob.lastEvent.status, 'event')}
+                      </span>
+                      <span className="text-sm font-semibold text-slate-900">
+                        {normalizeText(activeJob.lastEvent.title, normalizeText(activeJob.lastEvent.stage, 'Son olay'))}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-sm text-slate-700">{getEventMessage(activeJob.lastEvent)}</div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {formatDate(activeJob.lastEvent.timestamp)}{' '}
+                      {activeJob.lastEvent.attemptNo ? `· deneme ${activeJob.lastEvent.attemptNo}` : ''}
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               {activeJob.error?.message ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                  <div>{activeJob.error.message}</div>
-                  {Array.isArray(activeJob.error.bullets) && activeJob.error.bullets.length > 0 ? (
+                  <div className="font-semibold">Hata özeti</div>
+                  <div className="mt-2">{activeJob.error.message}</div>
+                  {latestErrorBullets.length > 0 ? (
                     <div className="mt-3 space-y-1 text-xs">
-                      {activeJob.error.bullets.map((bullet) => <div key={bullet}>• {bullet}</div>)}
+                      {latestErrorBullets.map((bullet) => (
+                        <div key={bullet}>• {bullet}</div>
+                      ))}
                     </div>
                   ) : null}
                 </div>
@@ -580,11 +909,108 @@ export default function ImagePage(): JSX.Element {
                 </div>
               )}
 
-              {activeJob.storage?.path ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-slate-900">Worker olay akışı</div>
+                  <div className="text-xs text-slate-500">{activeEvents.length} olay</div>
+                </div>
+
+                {activeEvents.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                    Worker event listesi henüz gelmedi.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activeEvents.map((event, index) => {
+                      const rows = detailsToRows(event.details);
+                      const eventKey = [
+                        normalizeText(event.timestamp, ''),
+                        normalizeText(event.stage, ''),
+                        normalizeText(event.status, ''),
+                        String(event.attemptNo ?? ''),
+                        String(index),
+                      ].join('|');
+                      const expanded = !!expandedEvents[eventKey];
+
+                      return (
+                        <div key={eventKey} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${eventStatusClass(event.status)}`}>
+                                  {normalizeText(event.status, 'event')}
+                                </span>
+                                <span className="text-sm font-semibold text-slate-900">
+                                  {normalizeText(event.title, normalizeText(event.stage, 'Olay'))}
+                                </span>
+                                {event.attemptNo ? (
+                                  <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                                    deneme {event.attemptNo}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              <div className="mt-2 text-sm text-slate-700">{getEventMessage(event)}</div>
+
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span>Tarih: {formatDate(event.timestamp)}</span>
+                                {event.relatedModel ? <span>Model: {event.relatedModel}</span> : null}
+                                {event.relatedPath ? <span>Path: {event.relatedPath}</span> : null}
+                                {event.stage ? <span>Stage: {event.stage}</span> : null}
+                              </div>
+                            </div>
+
+                            {showTechDetails && rows.length > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleEvent(eventKey)}
+                                className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                              >
+                                {expanded ? 'Detayları gizle' : 'Detayları aç'}
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {showTechDetails && expanded && rows.length > 0 ? (
+                            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {rows.map((row) => (
+                                  <div key={`${eventKey}-${row.key}`} className="rounded-xl border border-slate-100 bg-slate-50 p-2">
+                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{row.key}</div>
+                                    <div className="mt-1 break-all text-xs text-slate-700">{row.value}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {showTechDetails ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-                  <div>Storage path: {activeJob.storage.path}</div>
-                  {activeJob.storage.storageRoot ? <div>Storage root: {activeJob.storage.storageRoot}</div> : null}
-                  {activeJob.storage.attemptedPath ? <div>Attempted path: {activeJob.storage.attemptedPath}</div> : null}
+                  <div className="font-semibold text-slate-800">Teknik özet</div>
+                  <div className="mt-2 grid gap-1">
+                    <div>jobId: {activeJob.jobId}</div>
+                    <div>status: {activeJob.status}</div>
+                    <div>progress: {progressValue}</div>
+                    <div>createdAt: {formatDate(activeJob.createdAt)}</div>
+                    <div>updatedAt: {formatDate(activeJob.updatedAt)}</div>
+                    <div>finishedAt: {formatDate(activeJob.finishedAt)}</div>
+                    <div>model: {activeJob.requestSummary?.model || activeJob.request?.modelId || '-'}</div>
+                    <div>ratio: {activeJob.requestSummary?.ratio || activeJob.request?.ratio || '-'}</div>
+                    <div>quality: {activeJob.requestSummary?.quality || activeJob.request?.quality || '-'}</div>
+                    <div>style: {activeJob.requestSummary?.style || activeJob.request?.style || '-'}</div>
+                    <div>storage.path: {activeJob.storage?.path || '-'}</div>
+                    <div>storage.root: {activeJob.storage?.storageRoot || '-'}</div>
+                    <div>storage.attemptedPath: {activeJob.storage?.attemptedPath || '-'}</div>
+                    <div>storage.fileName: {activeJob.storage?.fileName || '-'}</div>
+                    <div>storage.mimeType: {activeJob.storage?.mimeType || '-'}</div>
+                    <div>storage.verified: {String(activeJob.storage?.verified ?? false)}</div>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -599,30 +1025,46 @@ export default function ImagePage(): JSX.Element {
       <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold text-slate-900">Geçmiş</h2>
-          <button type="button" onClick={() => void refreshHistory()} className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">
+          <button
+            type="button"
+            onClick={() => void refreshHistory()}
+            className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
+          >
             Yenile
           </button>
         </div>
+
         <div className="mt-4 grid gap-3">
           {loadingHistory ? (
             <div className="text-sm text-slate-500">Geçmiş yükleniyor...</div>
           ) : history.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">Henüz kayıt yok.</div>
-          ) : history.map((item) => (
-            <button
-              key={item.jobId}
-              type="button"
-              onClick={() => void openHistoryJob(item.jobId)}
-              className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-slate-800">{statusText(item.status)}</span>
-                <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
-              </div>
-              <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
-              <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
-            </button>
-          ))}
+          ) : (
+            history.map((item) => (
+              <button
+                key={item.jobId}
+                type="button"
+                onClick={() => void openHistoryJob(item.jobId)}
+                className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusBadgeClass(item.status)}`}>
+                    {statusText(item.status)}
+                  </span>
+                  <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
+                </div>
+
+                <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
+                <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
+
+                {item.lastEvent ? (
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                    {getEventMessage(item.lastEvent)}
+                  </div>
+                ) : null}
+              </button>
+            ))
+          )}
         </div>
       </section>
     </div>
