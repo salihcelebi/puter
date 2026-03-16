@@ -5,7 +5,7 @@
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
 const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.0.3';
+const WORKER_VERSION = '18.1.0';
 const JOB_PREFIX = 'ai_job:';
 const PROVIDER = 'openai-image-generation';
 const MAX_GENERATION_ATTEMPTS = 20;
@@ -13,23 +13,26 @@ const URL_EXPIRES_MS = 24 * 60 * 60 * 1000; // 24 saat
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
 
-const IMAGE_MODEL_IDS = [
-  'openai/gpt-image-1',
-  'google/gemini-3.1-flash-image-preview',
-  'black-forest-labs/flux-1.1-pro',
-  'black-forest-labs/flux-1.1-pro-ultra',
-  'black-forest-labs/flux-kontext-max',
-  'black-forest-labs/flux-kontext-pro',
-  'black-forest-labs/flux-1-dev',
-  'black-forest-labs/flux-1-schnell',
-  'recraft-ai/recraft-v3',
-  'recraft-ai/recraft-20b',
-  'bfl/flux-pro-1.1-ultra',
-  'bfl/flux-pro',
-  'bfl/flux-dev',
-  'bfl/flux-schnell'
-];
+const MODELS_SOURCE_URL = 'https://raw.githubusercontent.com/salihcelebi/puter/refs/heads/main/server/db/modeller.ts';
+const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
+const FALLBACK_IMAGE_MODELS = [
+  {
+    serviceType: 'Image generation',
+    provider: 'OpenAI',
+    modelName: 'GPT Image 1',
+    modelId: DEFAULT_IMAGE_MODEL,
+    billingType: 'image',
+    usdPerImage: null,
+    sourceUrl: MODELS_SOURCE_URL
+  }
+];
+
+let modelCatalogCache = {
+  fetchedAt: 0,
+  items: null,
+  source: 'empty'
+};
 
 // 20 TASARIM KARARI
 // 01) Tek model sabit
@@ -156,22 +159,111 @@ function errEnvelope(requestId, traceId, startedAtMs, code, message, bullets = [
   };
 }
 
-function buildModels() {
+function extractArrayLiteral(source, anchor) {
+  const start = source.indexOf(anchor);
+  if (start < 0) return null;
+  const bracketStart = source.indexOf('[', start);
+  if (bracketStart < 0) return null;
+  let depth = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escape = false;
+  for (let i = bracketStart; i < source.length; i += 1) {
+    const ch = source[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { escape = true; continue; }
+    if (!inDouble && !inTemplate && ch === "'") { inSingle = !inSingle; continue; }
+    if (!inSingle && !inTemplate && ch === '"') { inDouble = !inDouble; continue; }
+    if (!inSingle && !inDouble && ch === '`') { inTemplate = !inTemplate; continue; }
+    if (inSingle || inDouble || inTemplate) continue;
+    if (ch === '[') depth += 1;
+    if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return source.slice(bracketStart, i + 1);
+    }
+  }
+  return null;
+}
+
+function normalizeCatalogEntry(item) {
+  const modelId = ss(item?.modelId, '');
+  if (!modelId) return null;
+  const provider = ss(item?.provider, modelId.split('/')[0] || 'unknown');
+  const modelName = ss(item?.modelName, modelId.split('/')[1] || modelId);
   return {
-    items: IMAGE_MODEL_IDS.map((modelId) => ({
-      id: modelId,
-      modelId,
-      provider: modelId.split('/')[0],
-      modelName: modelId.split('/')[1],
-      categoryRaw: 'Image generation',
-      badges: ['GÖRSEL']
-    })),
-    total: IMAGE_MODEL_IDS.length,
-    limit: IMAGE_MODEL_IDS.length,
+    serviceType: ss(item?.serviceType, 'Image generation'),
+    provider,
+    modelName,
+    modelId,
+    billingType: ss(item?.billingType, 'image'),
+    usdPerImage: item?.usdPerImage ?? null,
+    sourceUrl: ss(item?.sourceUrl, MODELS_SOURCE_URL)
+  };
+}
+
+async function fetchModelsFromGithub() {
+  const res = await fetch(MODELS_SOURCE_URL, {
+    method: 'GET',
+    headers: { 'accept': 'text/plain, text/javascript, application/javascript;q=0.9, */*;q=0.1' }
+  });
+  if (!res.ok) throw new Error(`modeller.ts alınamadı (${res.status})`);
+  const source = await res.text();
+  const arrayLiteral = extractArrayLiteral(source, 'export const MODEL_PRICES');
+  if (!arrayLiteral) throw new Error('MODEL_PRICES dizisi çözülemedi');
+  const parsed = Function(`return (${arrayLiteral});`)();
+  if (!Array.isArray(parsed)) throw new Error('MODEL_PRICES dizi değil');
+  const items = parsed
+    .filter((item) => ss(item?.serviceType).toLowerCase() === 'image generation')
+    .map(normalizeCatalogEntry)
+    .filter(Boolean);
+  if (!items.length) throw new Error('Image generation modelleri bulunamadı');
+  return items;
+}
+
+async function getImageCatalog(forceRefresh = false) {
+  const now = nowMs();
+  if (!forceRefresh && Array.isArray(modelCatalogCache.items) && modelCatalogCache.items.length && (now - modelCatalogCache.fetchedAt) < MODEL_CACHE_TTL_MS) {
+    return modelCatalogCache;
+  }
+  try {
+    const items = await fetchModelsFromGithub();
+    modelCatalogCache = { fetchedAt: now, items, source: 'github:server/db/modeller.ts' };
+    return modelCatalogCache;
+  } catch (error) {
+    if (Array.isArray(modelCatalogCache.items) && modelCatalogCache.items.length) {
+      return modelCatalogCache;
+    }
+    modelCatalogCache = { fetchedAt: now, items: FALLBACK_IMAGE_MODELS, source: 'fallback:default-image-model' };
+    return modelCatalogCache;
+  }
+}
+
+async function getAllowedImageModelIds() {
+  const catalog = await getImageCatalog(false);
+  return catalog.items.map((item) => item.modelId);
+}
+
+async function buildModels() {
+  const catalog = await getImageCatalog(false);
+  const items = catalog.items.map((item) => ({
+    id: item.modelId,
+    modelId: item.modelId,
+    provider: item.provider,
+    company: item.provider,
+    modelName: item.modelName,
+    categoryRaw: item.serviceType,
+    badges: ['GÖRSEL'],
+    pricing: { usdPerImage: item.usdPerImage }
+  }));
+  return {
+    items,
+    total: items.length,
+    limit: items.length,
     offset: 0,
     hasMore: false,
     feature: 'image',
-    source: 'seed-image-catalog'
+    source: catalog.source
   };
 }
 
@@ -595,7 +687,7 @@ router.get('/', async ({ request }) => {
   return jsonResponse(okEnvelope(rid, trid, t, 'WORKER_INFO', {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
-    totalModels: IMAGE_MODEL_IDS.length,
+    totalModels: (await getAllowedImageModelIds()).length,
     model: DEFAULT_IMAGE_MODEL
   }), 200, 'no-store', request);
 });
@@ -617,7 +709,7 @@ router.get('/models', async ({ request }) => {
   const rid = uid('models');
   const trid = uid('trace');
   return jsonResponse(
-    okEnvelope(rid, trid, t, 'MODELS_OK', buildModels()),
+    okEnvelope(rid, trid, t, 'MODELS_OK', await buildModels()),
     200,
     'public, max-age=300',
     request
@@ -637,7 +729,8 @@ router.post('/generate', async ({ request }) => {
     const quality = qualityToDalle3(body?.quality || 'standard');
     const style = ss(body?.style, '');
     const requestedModel = ss(body?.modelId || body?.model, DEFAULT_IMAGE_MODEL);
-    const modelId = IMAGE_MODEL_IDS.includes(requestedModel) ? requestedModel : DEFAULT_IMAGE_MODEL;
+    const allowedModels = await getAllowedImageModelIds();
+    const modelId = allowedModels.includes(requestedModel) ? requestedModel : (allowedModels[0] || DEFAULT_IMAGE_MODEL);
 
     if (!prompt) {
       return jsonResponse(
