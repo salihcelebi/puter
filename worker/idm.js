@@ -5,14 +5,31 @@
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
 const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.0.2';
+const WORKER_VERSION = '18.0.3';
 const JOB_PREFIX = 'ai_job:';
-const MODEL_ID = 'openai/dall-e-3';
 const PROVIDER = 'openai-image-generation';
 const MAX_GENERATION_ATTEMPTS = 20;
 const URL_EXPIRES_MS = 24 * 60 * 60 * 1000; // 24 saat
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
+
+const IMAGE_MODEL_IDS = [
+  'openai/gpt-image-1',
+  'google/gemini-3.1-flash-image-preview',
+  'black-forest-labs/flux-1.1-pro',
+  'black-forest-labs/flux-1.1-pro-ultra',
+  'black-forest-labs/flux-kontext-max',
+  'black-forest-labs/flux-kontext-pro',
+  'black-forest-labs/flux-1-dev',
+  'black-forest-labs/flux-1-schnell',
+  'recraft-ai/recraft-v3',
+  'recraft-ai/recraft-20b',
+  'bfl/flux-pro-1.1-ultra',
+  'bfl/flux-pro',
+  'bfl/flux-dev',
+  'bfl/flux-schnell'
+];
+const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
 
 // 20 TASARIM KARARI
 // 01) Tek model sabit
@@ -141,27 +158,20 @@ function errEnvelope(requestId, traceId, startedAtMs, code, message, bullets = [
 
 function buildModels() {
   return {
-    items: [
-      {
-        id: MODEL_ID,
-        modelId: MODEL_ID,
-        provider: 'OpenAI',
-        company: 'OpenAI',
-        modelName: 'DALL-E 3',
-        categoryRaw: 'Image generation',
-        badges: ['GÖRSEL'],
-        qualityOptions: ['standard', 'hd'],
-        ratioOptions: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-        traits: ['Tek model', 'me.puter storage', 'kalıcı URL'],
-        standoutFeature: 'Sadece kalıcı dosya yazımı başarılıysa completed',
-        useCase: 'Tek worker üzerinden güvenli görsel üretim'
-      }
-    ],
-    total: 1,
-    limit: 1,
+    items: IMAGE_MODEL_IDS.map((modelId) => ({
+      id: modelId,
+      modelId,
+      provider: modelId.split('/')[0],
+      modelName: modelId.split('/')[1],
+      categoryRaw: 'Image generation',
+      badges: ['GÖRSEL']
+    })),
+    total: IMAGE_MODEL_IDS.length,
+    limit: IMAGE_MODEL_IDS.length,
     offset: 0,
     hasMore: false,
-    feature: 'image'
+    feature: 'image',
+    source: 'seed-image-catalog'
   };
 }
 
@@ -206,7 +216,6 @@ function buildGenerationAttemptPlans(ratio, quality, style) {
         if (plans.length >= MAX_GENERATION_ATTEMPTS) break;
         const opts = {
           provider: PROVIDER,
-          model: 'dall-e-3',
           test_mode: false,
           quality: q,
           ratio: ratioToSize(r)
@@ -269,7 +278,7 @@ function buildStoragePath(jobId, ext) {
   return `idm-images/${yyyy}/${mm}/${dd}/${jobId}.${ext}`;
 }
 
-function baseJobRecord(jobId, prompt, ratio, quality) {
+function baseJobRecord(jobId, prompt, ratio, quality, modelId) {
   return {
     jobId,
     feature: 'image',
@@ -278,7 +287,7 @@ function baseJobRecord(jobId, prompt, ratio, quality) {
     step: 'İstek alındı',
     retryable: true,
     cancelRequested: false,
-    model: MODEL_ID,
+    model: modelId || DEFAULT_IMAGE_MODEL,
     storage: {
       path: null,
       verified: false,
@@ -289,13 +298,13 @@ function baseJobRecord(jobId, prompt, ratio, quality) {
     outputUrlExpiresAt: null,
     outputUrls: [],
     requestSummary: {
-      model: MODEL_ID,
+      model: modelId || DEFAULT_IMAGE_MODEL,
       promptPreview: prompt.length <= 160 ? prompt : prompt.slice(0, 157) + '...',
       ratio,
       quality
     },
     request: {
-      modelId: MODEL_ID,
+      modelId: modelId || DEFAULT_IMAGE_MODEL,
       ratio,
       quality
     },
@@ -500,7 +509,7 @@ async function persistGeneratedImage(jobId, source) {
   };
 }
 
-async function runGeneration(jobId, prompt, ratio, quality, style) {
+async function runGeneration(jobId, prompt, ratio, quality, style, modelId) {
   await jobUpdate(jobId, async (j) => ({
     ...j,
     progress: 15,
@@ -520,7 +529,7 @@ async function runGeneration(jobId, prompt, ratio, quality, style) {
     }));
 
     try {
-      const imageResult = await withTimeout(me.puter.ai.txt2img(prompt, plan.opts), plan.timeoutMs);
+      const imageResult = await withTimeout(me.puter.ai.txt2img(prompt, { ...plan.opts, model: modelId || DEFAULT_IMAGE_MODEL }), plan.timeoutMs);
       src = extractImageSrc(imageResult);
       if (!src) {
         throw new Error('AI boş sonuç döndürdü');
@@ -586,8 +595,8 @@ router.get('/', async ({ request }) => {
   return jsonResponse(okEnvelope(rid, trid, t, 'WORKER_INFO', {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
-    totalModels: 1,
-    model: MODEL_ID
+    totalModels: IMAGE_MODEL_IDS.length,
+    model: DEFAULT_IMAGE_MODEL
   }), 200, 'no-store', request);
 });
 
@@ -627,6 +636,8 @@ router.post('/generate', async ({ request }) => {
     const ratio = ss(body?.ratio || body?.size, '1:1');
     const quality = qualityToDalle3(body?.quality || 'standard');
     const style = ss(body?.style, '');
+    const requestedModel = ss(body?.modelId || body?.model, DEFAULT_IMAGE_MODEL);
+    const modelId = IMAGE_MODEL_IDS.includes(requestedModel) ? requestedModel : DEFAULT_IMAGE_MODEL;
 
     if (!prompt) {
       return jsonResponse(
@@ -639,15 +650,15 @@ router.post('/generate', async ({ request }) => {
 
     jobId = uid('img');
 
-    const job = baseJobRecord(jobId, prompt, ratio, quality);
+    const job = baseJobRecord(jobId, prompt, ratio, quality, modelId);
     await jobWrite(job);
 
     try {
-      const result = await runGeneration(jobId, prompt, ratio, quality, style);
+      const result = await runGeneration(jobId, prompt, ratio, quality, style, modelId);
 
       return jsonResponse(okEnvelope(rid, trid, t, 'IMAGE_JOB_COMPLETED', result.job, {
         feature: 'image',
-        model: MODEL_ID,
+        model: modelId || DEFAULT_IMAGE_MODEL,
         inlinePreview: result.inlinePreview // UI anlık gösterim için kullanabilir
       }), 200, 'no-store', request);
     } catch (generationError) {
@@ -688,8 +699,7 @@ router.post('/generate', async ({ request }) => {
           500,
           {
             feature: 'image',
-            model: MODEL_ID,
-            job: failedJob
+              job: failedJob
           }
         ),
         500,
@@ -757,7 +767,7 @@ router.get('/jobs/status/:id', async ({ request, params }) => {
 
     return jsonResponse(okEnvelope(rid, trid, t, 'JOB_STATUS_OK', job, {
       feature: 'image',
-      model: MODEL_ID
+      model: DEFAULT_IMAGE_MODEL
     }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
@@ -790,7 +800,7 @@ router.get('/jobs/history', async ({ request }) => {
       total: hydrated.length,
       limit: HISTORY_LIMIT,
       feature: 'image',
-      model: MODEL_ID
+      model: DEFAULT_IMAGE_MODEL
     }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(
@@ -859,7 +869,7 @@ router.get('/jobs/image/:id', async ({ request, params }) => {
       fileName: job.storage.fileName
     }, {
       feature: 'image',
-      model: MODEL_ID
+      model: DEFAULT_IMAGE_MODEL
     }), 200, 'no-store', request);
   } catch (err) {
     return jsonResponse(

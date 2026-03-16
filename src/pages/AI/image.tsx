@@ -8,7 +8,24 @@ Başarılı stratejiyi hafızaya alır ve sonra önce onu kullanır.
 */
 
 const WORKER_BASE_URL = 'https://idm.puter.work';
-const DEFAULT_MODEL_ID = 'openai/dall-e-3';
+const IMAGE_MODELS = [
+  { modelId: 'openai/gpt-image-1', label: 'OpenAI · GPT Image 1' },
+  { modelId: 'google/gemini-3.1-flash-image-preview', label: 'Google · Gemini 3.1 Flash Image Preview' },
+  { modelId: 'black-forest-labs/flux-1.1-pro', label: 'Black Forest Labs · Flux 1.1 Pro' },
+  { modelId: 'black-forest-labs/flux-1.1-pro-ultra', label: 'Black Forest Labs · Flux 1.1 Pro Ultra' },
+  { modelId: 'black-forest-labs/flux-kontext-max', label: 'Black Forest Labs · Flux Kontext Max' },
+  { modelId: 'black-forest-labs/flux-kontext-pro', label: 'Black Forest Labs · Flux Kontext Pro' },
+  { modelId: 'black-forest-labs/flux-1-dev', label: 'Black Forest Labs · Flux 1 Dev' },
+  { modelId: 'black-forest-labs/flux-1-schnell', label: 'Black Forest Labs · Flux 1 Schnell' },
+  { modelId: 'recraft-ai/recraft-v3', label: 'Recraft · Recraft V3' },
+  { modelId: 'recraft-ai/recraft-20b', label: 'Recraft · Recraft 20B' },
+  { modelId: 'bfl/flux-pro-1.1-ultra', label: 'BFL · Flux Pro 1.1 Ultra' },
+  { modelId: 'bfl/flux-pro', label: 'BFL · Flux Pro' },
+  { modelId: 'bfl/flux-dev', label: 'BFL · Flux Dev' },
+  { modelId: 'bfl/flux-schnell', label: 'BFL · Flux Schnell' },
+];
+
+const DEFAULT_MODEL_ID = IMAGE_MODELS[0].modelId;
 const DEFAULT_RATIO = '1:1';
 const DEFAULT_QUALITY = 'standard';
 const POLL_INTERVAL_MS = 2500;
@@ -150,300 +167,51 @@ function normalizeWorkerErrorMessage(payload, response, rawErrorMessage) {
   return 'İstek başarısız oldu.';
 }
 
-function buildCandidateUrls(baseUrl, path) {
-  const p = path.startsWith('/') ? path : `/${path}`;
-  const trimmed = baseUrl.replace(/\/+$/, '');
-  const candidates = [
-    `${trimmed}${p}`,
-    `${trimmed}${p}/`,
-    `${trimmed}${p.replace(/\/+$/, '')}`,
-  ];
-  return [...new Set(candidates)];
-}
+async function requestWorker(path, options = {}) {
+  const retryCount = Math.max(0, Math.min(20, safeNumber(options.retryCount, 2)));
+  let response;
+  let lastNetworkError = null;
 
-function getStoredWinningStrategyName() {
-  try {
-    return localStorage.getItem(STRATEGY_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
+  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = window.setTimeout(() => controller.abort(), 60000);
 
-function setStoredWinningStrategyName(name) {
-  try {
-    localStorage.setItem(STRATEGY_STORAGE_KEY, name);
-  } catch {
-    // ignore
-  }
-}
+      response = await fetch(`${WORKER_BASE_URL}${path}`, {
+        method: options.method || 'GET',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers || {}),
+        },
+        credentials: 'include',
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: controller.signal,
+      });
 
-function createStrategies(url, options, jsonBodyString) {
-  const noBodyMethods = new Set(['GET', 'HEAD']);
-  const canHaveBody = !noBodyMethods.has((options.method || 'GET').toUpperCase());
-
-  const baseHeaders = options.headers || {};
-  const body = canHaveBody ? jsonBodyString : undefined;
-
-  const strategies = [
-    {
-      name: 'S01-default-cors-include-json',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S02-default-cors-omit-json',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S03-cors-same-origin-json',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'same-origin',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S04-cors-include-no-content-type',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S05-cors-omit-no-content-type',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S06-cors-include-accept-json',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { accept: 'application/json', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S07-cors-omit-accept-json',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { accept: 'application/json', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S08-cors-include-accept-any',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { accept: '*/*', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S09-cors-omit-accept-any',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { accept: '*/*', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S10-cors-include-pragmas',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { pragma: 'no-cache', 'cache-control': 'no-cache', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S11-cors-omit-pragmas',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { pragma: 'no-cache', 'cache-control': 'no-cache', 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S12-cors-include-keepalive',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        keepalive: true,
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S13-cors-omit-keepalive',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        keepalive: true,
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S14-cors-include-referrer-policy',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        referrerPolicy: 'no-referrer',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S15-cors-omit-referrer-policy',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        referrerPolicy: 'no-referrer',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S16-cors-include-no-content-body-string',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S17-cors-omit-no-content-body-string',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S18-cors-include-text-plain',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'text/plain;charset=UTF-8', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S19-cors-omit-text-plain',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'text/plain;charset=UTF-8', ...baseHeaders },
-        credentials: 'omit',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-    {
-      name: 'S20-cors-include-x-requested-with',
-      run: () => fetch(url, {
-        method: options.method,
-        headers: { 'content-type': 'application/json', 'x-requested-with': 'fetch', ...baseHeaders },
-        credentials: 'include',
-        mode: 'cors',
-        cache: 'no-store',
-        body,
-      }),
-    },
-  ];
-
-  return strategies;
-}
-
-async function requestWorkerWith20Strategies(path, options = {}, pushDebugLog = null) {
-  const urls = buildCandidateUrls(WORKER_BASE_URL, path);
-  const method = (options.method || 'GET').toUpperCase();
-  const jsonBodyString = options.body ? JSON.stringify(options.body) : undefined;
-  const remembered = getStoredWinningStrategyName();
-
-  const allStrategiesPerUrl = [];
-  for (const url of urls) {
-    const list = createStrategies(url, { ...options, method }, jsonBodyString);
-    allStrategiesPerUrl.push(...list.map((item) => ({ ...item, url })));
-  }
-
-  const ordered = [];
-  const used = new Set();
-
-  if (remembered) {
-    for (const item of allStrategiesPerUrl) {
-      if (item.name === remembered) {
-        ordered.push(item);
-        used.add(`${item.url}__${item.name}`);
+      if (response.status >= 500 && attempt <= retryCount + 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+      } else {
+        break;
       }
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt > retryCount) {
+        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
+        throw new Error(
+          isAbort
+            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
+            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
+        );
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
+    } finally {
+      if (timer) window.clearTimeout(timer);
     }
   }
 
-  for (const item of allStrategiesPerUrl) {
-    const key = `${item.url}__${item.name}`;
-    if (!used.has(key)) {
-      ordered.push(item);
-      used.add(key);
-    }
+  if (!response) {
+    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
   }
 
   let lastError = null;
@@ -544,11 +312,14 @@ export default function IDMImagePage() {
   }, [requestWorker]);
 
   const loadModels = useCallback(async () => {
-    const payload = await requestWorker('/models');
-    const items = normalizeArray(payload?.data?.items);
-    const onlyImageModels = items.filter((item) => safeText(item?.modelId || item?.id) === DEFAULT_MODEL_ID);
-    setModels(onlyImageModels.length ? onlyImageModels : items);
-  }, [requestWorker]);
+    const items = IMAGE_MODELS.map((item) => ({
+      id: item.modelId,
+      modelId: item.modelId,
+      provider: item.label.split(' · ')[0],
+      modelName: item.label.split(' · ')[1] || item.modelId,
+    }));
+    setModels(items);
+  }, []);
 
   const hydrateHistoryImages = useCallback(async (items) => {
     const next = [];
@@ -697,8 +468,8 @@ export default function IDMImagePage() {
         method: 'POST',
         body: {
           prompt: form.prompt,
-          model: DEFAULT_MODEL_ID,
-          modelId: DEFAULT_MODEL_ID,
+          model: form.model,
+          modelId: form.model,
           ratio: form.ratio,
           quality: form.quality,
           style: form.style,
@@ -788,8 +559,8 @@ export default function IDMImagePage() {
           <div style={styles.eyebrow}>IMAGE WORKER</div>
           <h1 style={styles.title}>20 stratejili worker istemcisi</h1>
           <p style={styles.subtitle}>
-            Bu sayfa <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
-            Başarılı fetch yöntemi bulunursa hafızaya alınır.
+            Bu sayfa sadece <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
+            Seed image model kataloğunu kullanır. Depolama mantığı me.puter üstündedir.
           </p>
         </div>
 
@@ -830,9 +601,15 @@ export default function IDMImagePage() {
               value={form.model}
               onChange={(e) => handleChange('model', e.target.value)}
               style={styles.select}
-              disabled
             >
-              <option value={DEFAULT_MODEL_ID}>OpenAI · DALL-E 3</option>
+              {models.length ? models.map((item) => {
+                const id = safeText(item?.modelId || item?.id);
+                const provider = safeText(item?.provider || item?.company);
+                const modelName = safeText(item?.modelName || id);
+                return <option key={id} value={id}>{provider ? `${provider} · ${modelName}` : modelName}</option>;
+              }) : IMAGE_MODELS.map((item) => (
+                <option key={item.modelId} value={item.modelId}>{item.label}</option>
+              ))}
             </select>
 
             <label style={styles.label}>Prompt</label>
@@ -947,7 +724,7 @@ export default function IDMImagePage() {
 
                 <div>
                   <div style={styles.metaLabel}>MODEL</div>
-                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, DEFAULT_MODEL_ID)}</div>
+                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, form.model || DEFAULT_MODEL_ID)}</div>
                 </div>
 
                 <div>
