@@ -1,914 +1,1260 @@
-/*
-█████████████████████████████████████████████
-image.tsx — v2.0.0
-Değişiklikler:
-1) WorkerEnvelope.error genişletildi — bullets, displayDurationMs, context alanları eklendi
-2) workerRequest artık hata detaylarını (bullets) da fırlatıyor
-3) handleGenerate: worker zaten completed dönüyorsa poll başlatmıyor, direkt görseli set ediyor
-4) Hata gösterimi: bullets varsa madde madde, displayDurationMs ile minimum 5 sn görünür
-5) Yeni üretimde önceki hata otomatik temizleniyor
-6) İlerleme çubuğu: optimistic olarak zamanla ilerliyor (fake progress), completed'da %100
-7) Hata bloğu: her madde ayrı satırda, 5 sn sayacı ile otomatik kararıyor (ama silinmiyor)
-█████████████████████████████████████████████
-*/
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// imgs.js — v20.0.0
+// me.puter owner-pays image worker
+// Model catalog source: https://models-worker.puter.work/models
+// Storage strategy: try multiple candidate folders in order, use first successful real path
 
-// ─────────────────── TİPLER ───────────────────
+const WORKER_NAME = 'imgs';
+const WORKER_VERSION = '20.0.0';
+const JOB_PREFIX = 'ai_job:';
+const HISTORY_LIMIT = 20;
+const KV_SAFE_LIMIT = 390000;
+const URL_EXPIRES_MS = 24 * 60 * 60 * 1000;
+const POLL_INTERVAL_HINT_MS = 1800;
+const MAX_GENERATION_ATTEMPTS = 4;
+const MODELS_WORKER_URL = 'https://models-worker.puter.work/models?limit=250';
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
+const DEFAULT_PROVIDER = 'openai-image-generation';
+const STORAGE_ROOT_CANDIDATES = Object.freeze([
+  '/nisanil/Desktop/turk/img/idm_images',
+  'Desktop/turk/img/idm_images',
+  'turk/img/idm_images',
+  'img/idm_images',
+  'idm_images'
+]);
+const ALLOWED_IMAGE_PROVIDERS = new Set(['openai-image-generation', 'together', 'gemini', 'xai']);
 
-type WorkerError = {
-  message?: string;
-  code?: string;
-  context?: string;
-  bullets?: string[];
-  displayDurationMs?: number;
-  retryable?: boolean;
-  timestamp?: string;
+let modelsCache = {
+  fetchedAt: 0,
+  source: 'empty',
+  items: []
 };
 
-type WorkerEnvelope<T> = {
-  ok: boolean;
-  code: string;
-  data: T;
-  error: WorkerError | null;
-  meta?: unknown;
-  requestId?: string;
-  traceId?: string;
-  time?: string;
-  durationMs?: number;
-};
-
-type ModelItem = {
-  id?: string;
-  modelId?: string;
-  modelName?: string;
-  company?: string;
-  provider?: string;
-  categoryRaw?: string;
-  imagePrice?: number | null;
-  inputPrice?: number | null;
-  outputPrice?: number | null;
-  speedLabel?: string;
-  standoutFeature?: string;
-  useCase?: string;
-  badges?: string[];
-};
-
-type ModelsPayload = {
-  items: ModelItem[];
-  total: number;
-  limit: number;
-  offset: number;
-  hasMore: boolean;
-};
-
-type GeneratePayload = {
-  jobId: string;
-  status: JobStatus;
-  progress: number;
-  step: string;
-  modelId?: string;
-  requestId?: string;
-  // Worker senkron üretim yapıyorsa bunlar dolu gelir
-  outputUrl?: string | null;
-  outputUrls?: string[];
-  url?: string | null;
-  urls?: string[];
-  error?: WorkerError | null;
-};
-
-type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
-
-type JobRecord = {
-  jobId: string;
-  feature?: string;
-  status: JobStatus;
-  progress?: number;
-  step?: string;
-  outputUrl?: string | null;
-  outputUrls?: string[];
-  url?: string | null;
-  urls?: string[];
-  retryable?: boolean;
-  cancelRequested?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-  finishedAt?: string | null;
-  error?: WorkerError | null;
-  requestSummary?: {
-    model?: string;
-    prompt?: string;
-    promptPreview?: string;
-  };
-  request?: {
-    model?: string;
-    modelId?: string;
-    ratio?: string;
-    size?: string;
-    quality?: string;
-    style?: string;
-    negativePrompt?: string;
-    n?: number;
-  };
-};
-
-type HistoryPayload = {
-  items: JobRecord[];
-  total: number;
-  limit: number;
-  feature: string;
-};
-
-// Ekranda gösterilecek hata yapısı
-type DisplayError = {
-  message: string;
-  bullets: string[];
-  displayDurationMs: number;
-  timestamp: number; // Date.now()
-};
-
-// ─────────────────── SABİTLER ───────────────────
-
-const WORKER_BASE_URL = 'https://idm.puter.work';
-const POLL_INTERVAL_MS = 2000;
-const TERMINAL_STATUSES = new Set<JobStatus>(['completed', 'failed', 'cancelled']);
-const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
-const QUALITY_OPTIONS = ['low', 'medium', 'high'];
-const STYLE_OPTIONS = ['', 'photorealistic', 'illustration', 'anime', 'cinematic', 'digital-art'];
-const ERROR_DISPLAY_MS = 5000; // minimum gösterim süresi
-
-// ─────────────────── YARDIMCILAR ───────────────────
-
-function joinUrl(path: string): string {
-  return `${WORKER_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
+function nowIso() {
+  return new Date().toISOString();
 }
 
-function pickJobImages(job: JobRecord | GeneratePayload | null): string[] {
-  if (!job) return [];
-  const candidates = [
-    ...(Array.isArray((job as JobRecord).outputUrls) ? (job as JobRecord).outputUrls! : []),
-    ...(Array.isArray((job as JobRecord).urls) ? (job as JobRecord).urls! : []),
-    ...((job as JobRecord).outputUrl ? [(job as JobRecord).outputUrl!] : []),
-    ...((job as JobRecord).url ? [(job as JobRecord).url!] : []),
-  ].filter(Boolean) as string[];
-  return [...new Set(candidates)];
+function nowMs() {
+  return Date.now();
 }
 
-function modelKey(model: ModelItem): string {
-  return model.modelId || model.id || '';
+function uid(prefix) {
+  return `${prefix || 'id'}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function modelLabel(model: ModelItem): string {
-  const provider = model.provider || model.company || 'Model';
-  const name = model.modelName || model.modelId || model.id || 'Bilinmeyen Model';
-  return `${provider} · ${name}`;
-}
-
-function formatPrice(value: number | null | undefined): string {
-  if (value == null || Number.isNaN(value)) return '-';
-  return `$${value}`;
-}
-
-function formatDate(value?: string | null): string {
-  if (!value) return '-';
+function ss(v, fb = '') {
   try {
-    return new Intl.DateTimeFormat('tr-TR', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value));
-  } catch {
-    return value;
+    if (v == null) return fb;
+    const s = String(v).trim();
+    return s || fb;
+  } catch (_) {
+    return fb;
   }
 }
 
-// Hata nesnesinden DisplayError üret
-function buildDisplayError(err: unknown, fallbackMsg?: string): DisplayError {
-  const DEFAULT_MSG = fallbackMsg || 'Görsel üretimi sırasında beklenmeyen bir hata oluştu.';
+function ci(v, min, max, fb) {
+  try {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return fb;
+    return Math.max(min, Math.min(max, n));
+  } catch (_) {
+    return fb;
+  }
+}
 
-  if (err && typeof err === 'object') {
-    const e = err as Record<string, unknown>;
-    const message = typeof e.message === 'string' && e.message.trim() ? e.message.trim() : DEFAULT_MSG;
-    const bullets = Array.isArray(e.bullets) && e.bullets.length
-      ? (e.bullets as string[])
-      : [
-          `1) Hata: ${message}`,
-          `2) Kod: ${typeof e.code === 'string' ? e.code : 'BILINMIYOR'} — işlem başarısız oldu.`,
-          `3) Lütfen prompt ve model seçimini kontrol ederek tekrar deneyin.`,
-        ];
-    const displayDurationMs = typeof e.displayDurationMs === 'number' ? e.displayDurationMs : ERROR_DISPLAY_MS;
-    return { message, bullets, displayDurationMs, timestamp: Date.now() };
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function normalizeError(err) {
+  if (!err) return 'Bilinmeyen hata';
+  try {
+    if (typeof err === 'string') return err;
+    if (err.message) return String(err.message);
+    const s = JSON.stringify(err);
+    return s && s !== '{}' ? s.slice(0, 1200) : 'Hata okunamadı';
+  } catch (_) {
+    return 'Hata serileştirilemedi';
+  }
+}
+
+function corsHeaders(request) {
+  const origin = ss(request?.headers?.get('origin'), '*');
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-headers': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-credentials': origin === '*' ? 'false' : 'true',
+    vary: 'origin'
+  };
+}
+
+function jsonResponse(body, status = 200, cacheControl = 'no-store', request = null) {
+  return new Response(JSON.stringify(body, null, 2), {
+    status,
+    headers: {
+      ...corsHeaders(request),
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': cacheControl
+    }
+  });
+}
+
+function okEnvelope(requestId, traceId, startedAtMs, code, data = null, meta = null) {
+  return {
+    ok: true,
+    code,
+    error: null,
+    data,
+    meta,
+    worker: WORKER_NAME,
+    version: WORKER_VERSION,
+    requestId,
+    traceId,
+    time: nowIso(),
+    durationMs: Math.max(0, nowMs() - startedAtMs)
+  };
+}
+
+function errEnvelope(requestId, traceId, startedAtMs, code, message, bullets = [], httpStatus = 500, meta = null) {
+  return {
+    ok: false,
+    code,
+    error: {
+      message,
+      bullets,
+      retryable: httpStatus >= 500
+    },
+    data: null,
+    meta,
+    worker: WORKER_NAME,
+    version: WORKER_VERSION,
+    requestId,
+    traceId,
+    time: nowIso(),
+    durationMs: Math.max(0, nowMs() - startedAtMs),
+    httpStatus
+  };
+}
+
+function sanitizePathPart(value, fallback = 'item') {
+  const raw = ss(value, fallback);
+  const cleaned = raw
+    .normalize('NFKD')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+function trimSlashes(value) {
+  return ss(value).replace(/^\/+|\/+$/g, '');
+}
+
+function joinFsPath(root, relativePart) {
+  const left = ss(root);
+  const right = trimSlashes(relativePart);
+  if (!left) return right;
+  if (!right) return left;
+  if (left.endsWith('/')) return `${left}${right}`;
+  return `${left}/${right}`;
+}
+
+function normalizeProviderRegistry(rawProvider, rawModel) {
+  const provider = ss(rawProvider).toLowerCase();
+  const model = ss(rawModel).toLowerCase();
+  if (ALLOWED_IMAGE_PROVIDERS.has(provider)) return provider;
+  if (model.startsWith('openai/')) return 'openai-image-generation';
+  if (model.startsWith('xai/') || model.includes('grok')) return 'xai';
+  if (model.startsWith('google/gemini')) return 'gemini';
+  if (
+    model.startsWith('black-forest-labs/') ||
+    model.includes('flux') ||
+    model.includes('imagen') ||
+    model.startsWith('ideogram/') ||
+    model.startsWith('recraft/')
+  ) {
+    return 'together';
+  }
+  return DEFAULT_PROVIDER;
+}
+
+function normalizeQuality(quality) {
+  const q = ss(quality, 'medium').toLowerCase();
+  if (q === 'hd') return 'high';
+  if (q === 'standard') return 'medium';
+  if (q === 'low' || q === 'medium' || q === 'high') return q;
+  return 'medium';
+}
+
+function ratioToSize(ratio) {
+  if (ratio && typeof ratio === 'object' && Number.isFinite(ratio.w) && Number.isFinite(ratio.h)) {
+    return { w: clamp(Math.floor(Number(ratio.w)), 256, 4096), h: clamp(Math.floor(Number(ratio.h)), 256, 4096) };
+  }
+  const map = {
+    '1:1': { w: 1024, h: 1024 },
+    '16:9': { w: 1792, h: 1024 },
+    '9:16': { w: 1024, h: 1792 },
+    '4:5': { w: 1024, h: 1280 },
+    '5:4': { w: 1280, h: 1024 },
+    '4:3': { w: 1024, h: 768 },
+    '3:4': { w: 768, h: 1024 },
+    '3:2': { w: 1536, h: 1024 },
+    '2:3': { w: 1024, h: 1536 }
+  };
+  return map[ss(ratio, '1:1')] || map['1:1'];
+}
+
+function ratioToAspectRatio(ratio) {
+  const normalized = ss(ratio, '1:1');
+  if (/^\d+:\d+$/.test(normalized)) return normalized;
+  const size = ratioToSize(ratio);
+  return `${size.w}:${size.h}`;
+}
+
+function extractImageSrc(result) {
+  if (!result) return null;
+  if (typeof result === 'string') return result.trim();
+  if (typeof result.src === 'string') return result.src.trim();
+  if (typeof result?.image?.src === 'string') return result.image.src.trim();
+  return null;
+}
+
+function normalizeCatalogEntry(item) {
+  const model = ss(item?.model || item?.modelId || item?.id);
+  if (!model) return null;
+  const provider = normalizeProviderRegistry(item?.provider, model);
+  const displayName = ss(item?.displayName, ss(item?.modelName, model));
+  return {
+    ...item,
+    id: ss(item?.id, model),
+    modelId: ss(item?.modelId, model),
+    model,
+    displayName,
+    modelName: ss(item?.modelName, displayName),
+    provider,
+    company: ss(item?.company || item?.providerLabel || item?.provider, provider),
+    providerLabel: ss(item?.providerLabel || item?.company || item?.provider, provider),
+    categoryRaw: ss(item?.categoryRaw, ''),
+    badges: Array.isArray(item?.badges) ? item.badges : [],
+    template: item?.template && typeof item.template === 'object' ? item.template : null,
+    profile: item?.profile && typeof item.profile === 'object' ? item.profile : null,
+    override: item?.override && typeof item.override === 'object' ? item.override : null,
+    tagUi: item?.tagUi && typeof item.tagUi === 'object' ? item.tagUi : null,
+    pricing: item?.pricing && typeof item.pricing === 'object' ? item.pricing : null,
+    prices: item?.prices && typeof item.prices === 'object' ? item.prices : null
+  };
+}
+
+function isImageCatalogModel(item) {
+  const category = ss(item?.categoryRaw || item?.category).toLowerCase();
+  return category === 'image generation' || category === 'image';
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text.trim()) return {};
+  return JSON.parse(text);
+}
+
+async function fetchModelsFromWorker() {
+  const response = await fetch(MODELS_WORKER_URL, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json, text/plain;q=0.5, */*;q=0.1'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`models-worker alınamadı (${response.status})`);
+  }
+  const payload = await readJsonResponse(response);
+  const items = Array.isArray(payload?.data?.items)
+    ? payload.data.items
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : [];
+  const filtered = items
+    .filter(isImageCatalogModel)
+    .map(normalizeCatalogEntry)
+    .filter(Boolean);
+  if (!filtered.length) {
+    throw new Error('Image generation modelleri models-worker içinde bulunamadı');
+  }
+  return {
+    items: filtered,
+    source: payload?.data?.source || payload?.meta?.source || 'models-worker:/models'
+  };
+}
+
+async function getImageCatalog(forceRefresh = false) {
+  const now = nowMs();
+  if (!forceRefresh && Array.isArray(modelsCache.items) && modelsCache.items.length && (now - modelsCache.fetchedAt) < MODELS_CACHE_TTL_MS) {
+    return modelsCache;
+  }
+  const result = await fetchModelsFromWorker();
+  modelsCache = {
+    fetchedAt: now,
+    source: result.source,
+    items: result.items
+  };
+  return modelsCache;
+}
+
+async function buildModelsPayload() {
+  const catalog = await getImageCatalog(false);
+  return {
+    items: catalog.items,
+    total: catalog.items.length,
+    limit: catalog.items.length,
+    offset: 0,
+    hasMore: false,
+    feature: 'image',
+    source: catalog.source
+  };
+}
+
+function findRequestedModel(items, requestedModel) {
+  const wanted = ss(requestedModel);
+  if (!wanted) return items[0] || null;
+  return items.find((item) => {
+    return wanted === ss(item?.model) || wanted === ss(item?.modelId) || wanted === ss(item?.id);
+  }) || null;
+}
+
+function buildPromptText(prompt, negativePrompt, provider) {
+  const cleanPrompt = ss(prompt, '');
+  const cleanNegative = ss(negativePrompt, '');
+  if (!cleanNegative) return cleanPrompt;
+  if (provider === 'together') return cleanPrompt;
+  return `${cleanPrompt}\n\nAvoid / Negative prompt: ${cleanNegative}`;
+}
+
+function makeStageError(stage, code, message, bullets = [], retryable = true, httpStatus = 500) {
+  const err = new Error(message);
+  err.stage = stage;
+  err.code = code;
+  err.bullets = Array.isArray(bullets) ? bullets : [];
+  err.retryable = retryable;
+  err.httpStatus = httpStatus;
+  return err;
+}
+
+function buildProviderBaseOptions(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
+  const modelId = ss(model?.model || model?.modelId, DEFAULT_IMAGE_MODEL);
+  const base = {
+    provider,
+    model: modelId,
+    test_mode: Boolean(body?.test_mode === true)
+  };
+  return base;
+}
+
+function buildOpenAiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  const size = ratioToSize(body?.ratio || '1:1');
+  base.quality = normalizeQuality(body?.quality);
+  base.ratio = size;
+  return base;
+}
+
+function buildTogetherImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  const size = ratioToSize(body?.ratio || '1:1');
+  base.width = size.w;
+  base.height = size.h;
+  base.aspect_ratio = ratioToAspectRatio(body?.ratio || '1:1');
+  if (ss(body?.negativePrompt)) base.negative_prompt = ss(body?.negativePrompt);
+  base.n = ci(body?.n, 1, 4, 1);
+  if (body?.responseFormat) base.response_format = ss(body.responseFormat);
+  if (body?.steps != null) base.steps = ci(body.steps, 1, 50, 28);
+  if (body?.seed != null) base.seed = ci(body.seed, 0, 2147483647, 1);
+  if (body?.image_url) base.image_url = ss(body.image_url);
+  if (body?.image_base64) base.image_base64 = ss(body.image_base64);
+  if (body?.mask_image_url) base.mask_image_url = ss(body.mask_image_url);
+  if (body?.mask_image_base64) base.mask_image_base64 = ss(body.mask_image_base64);
+  if (body?.prompt_strength != null) base.prompt_strength = Number(body.prompt_strength);
+  if (body?.disable_safety_checker === true) base.disable_safety_checker = true;
+  return base;
+}
+
+function buildGeminiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  base.ratio = ratioToSize(body?.ratio || '1:1');
+  if (body?.input_image) base.input_image = body.input_image;
+  if (body?.input_image_mime_type) base.input_image_mime_type = ss(body.input_image_mime_type);
+  return base;
+}
+
+function buildXaiImageOptions(model, body) {
+  const base = buildProviderBaseOptions(model, body);
+  return base;
+}
+
+function buildProviderSpecificOptions(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
+  if (!ALLOWED_IMAGE_PROVIDERS.has(provider)) {
+    throw makeStageError('generation', 'PROVIDER_INVALID', `Desteklenmeyen image provider: ${provider}`, [`model=${ss(model?.model)}`], false, 400);
+  }
+  if (provider === 'openai-image-generation') return buildOpenAiImageOptions(model, body);
+  if (provider === 'together') return buildTogetherImageOptions(model, body);
+  if (provider === 'gemini') return buildGeminiImageOptions(model, body);
+  if (provider === 'xai') return buildXaiImageOptions(model, body);
+  throw makeStageError('generation', 'PROVIDER_INVALID', `Provider profili bulunamadı: ${provider}`, [`model=${ss(model?.model)}`], false, 400);
+}
+
+function buildGenerationAttemptPlans(model, body) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model);
+  const plans = [];
+  const requestedRatio = body?.ratio || '1:1';
+  const requestedQuality = body?.quality || 'medium';
+  const fallbackRatios = [requestedRatio, '1:1'];
+  const fallbackQualities = [requestedQuality, 'medium', 'high', 'low'];
+
+  if (provider === 'openai-image-generation') {
+    for (const q of fallbackQualities) {
+      for (const r of fallbackRatios) {
+        const draftBody = { ...body, quality: q, ratio: r };
+        plans.push({
+          index: plans.length + 1,
+          timeoutMs: 26000 + plans.length * 2500,
+          prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+          options: buildProviderSpecificOptions(model, draftBody)
+        });
+        if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
+      }
+    }
+  } else if (provider === 'together') {
+    const togetherBodies = [
+      { ...body },
+      { ...body, ratio: requestedRatio || '1:1' },
+      { ...body, ratio: '1:1' }
+    ];
+    for (const draftBody of togetherBodies) {
+      plans.push({
+        index: plans.length + 1,
+        timeoutMs: 28000 + plans.length * 3000,
+        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+        options: buildProviderSpecificOptions(model, draftBody)
+      });
+      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
+    }
+  } else if (provider === 'gemini') {
+    const geminiBodies = [
+      { ...body },
+      { ...body, ratio: '1:1' }
+    ];
+    for (const draftBody of geminiBodies) {
+      plans.push({
+        index: plans.length + 1,
+        timeoutMs: 30000 + plans.length * 3500,
+        prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+        options: buildProviderSpecificOptions(model, draftBody)
+      });
+      if (plans.length >= MAX_GENERATION_ATTEMPTS) return plans;
+    }
+  } else {
+    plans.push({
+      index: 1,
+      timeoutMs: 26000,
+      prompt: buildPromptText(body?.prompt, body?.negativePrompt, provider),
+      options: buildProviderSpecificOptions(model, body)
+    });
+  }
+  return plans;
+}
+
+function dataUrlToBlob(dataUrl) {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl || '');
+  if (!match) throw new Error('Geçersiz data URL');
+  const mime = match[1] || 'application/octet-stream';
+  const isBase64 = !!match[2];
+  const dataPart = match[3] || '';
+  let bytes;
+  if (isBase64) {
+    const binary = atob(dataPart);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  } else {
+    const text = decodeURIComponent(dataPart);
+    bytes = new TextEncoder().encode(text);
+  }
+  return new Blob([bytes], { type: mime });
+}
+
+function guessExtensionFromMime(mimeType) {
+  const mime = ss(mimeType, 'image/png').toLowerCase();
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  return 'png';
+}
+
+function guessExtensionFromDataUrl(dataUrl) {
+  const m = /^data:([^;,]+)/i.exec(dataUrl || '');
+  const mime = (m && m[1]) ? m[1].toLowerCase() : 'image/png';
+  return guessExtensionFromMime(mime);
+}
+
+function buildRelativeAssetPath(jobId, ext) {
+  const d = new Date();
+  const yyyy = String(d.getUTCFullYear());
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const safeJobId = sanitizePathPart(jobId, 'job');
+  return `${yyyy}/${mm}/${dd}/${safeJobId}.${ext}`;
+}
+
+function getStorageRootCandidates() {
+  const seen = new Set();
+  const list = [];
+  for (const item of STORAGE_ROOT_CANDIDATES) {
+    const normalized = ss(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    list.push(normalized);
+  }
+  return list;
+}
+
+function attachBullets(error, bullets) {
+  try {
+    error.bullets = Array.isArray(bullets) ? bullets : [];
+  } catch (_) {}
+  return error;
+}
+
+
+function storageLogLine(jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode) {
+  return [
+    'STORAGE_STEP',
+    ss(jobId, '-'),
+    ss(inputPath, '-'),
+    ss(resolvedPath, '-'),
+    writeOk ? 'true' : 'false',
+    statOk ? 'true' : 'false',
+    readUrlOk ? 'true' : 'false',
+    ss(failCode, 'OK')
+  ].join(', ');
+}
+
+function storageStepMeta(jobId, inputPath, resolvedPath = '', writeOk = false, statOk = false, readUrlOk = false, failCode = 'OK', extraBullets = []) {
+  const line = storageLogLine(jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode);
+  console.log(line);
+  return {
+    line,
+    bullets: [
+      line,
+      ...((Array.isArray(extraBullets) ? extraBullets : []).filter(Boolean))
+    ]
+  };
+}
+
+function normalizeBase64ToBlob(base64Value, mimeType = 'image/png') {
+  const cleaned = ss(base64Value).replace(/^data:[^,]+,/, '').replace(/\s+/g, '');
+  if (!cleaned) throw new Error('Boş base64 veri');
+  const binary = atob(cleaned);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
+function getStorageFailCode(error) {
+  const code = ss(error?.code);
+  if (code) return code;
+  return 'STORAGE_FAILED';
+}
+
+async function mkdirIfPossible(path) {
+  try {
+    if (typeof me?.puter?.fs?.mkdir !== 'function') return false;
+    await me.puter.fs.mkdir(path, { recursive: true });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+
+async function withTimeout(promise, ms) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Zaman aşımı (${ms} ms)`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function kvGet(key) {
+  const raw = await me.puter.kv.get(key);
+  if (!raw) return null;
+  return typeof raw === 'string' ? JSON.parse(raw) : raw;
+}
+
+function slimJobForKv(job) {
+  const j = JSON.parse(JSON.stringify(job));
+  delete j.inlinePreview;
+  delete j.rawDataUrl;
+  if (j.step && j.step.length > 2000) j.step = j.step.slice(0, 2000);
+  if (j.error?.message && j.error.message.length > 1200) j.error.message = j.error.message.slice(0, 1200);
+  let str = JSON.stringify(j);
+  if (str.length <= KV_SAFE_LIMIT) return j;
+  if (j.requestSummary) j.requestSummary.promptPreview = '';
+  str = JSON.stringify(j);
+  if (str.length <= KV_SAFE_LIMIT) return j;
+  delete j.outputUrls;
+  str = JSON.stringify(j);
+  if (str.length <= KV_SAFE_LIMIT) return j;
+  delete j.request;
+  str = JSON.stringify(j);
+  if (str.length <= KV_SAFE_LIMIT) return j;
+  return {
+    jobId: j.jobId,
+    feature: j.feature,
+    status: j.status,
+    progress: j.progress,
+    step: j.step || 'Kısaltılmış kayıt',
+    retryable: j.retryable,
+    cancelRequested: j.cancelRequested,
+    model: j.model,
+    modelInfo: j.modelInfo,
+    storage: j.storage,
+    outputUrl: j.outputUrl,
+    outputUrlExpiresAt: j.outputUrlExpiresAt,
+    requestSummary: j.requestSummary,
+    error: j.error,
+    createdAt: j.createdAt,
+    updatedAt: j.updatedAt,
+    finishedAt: j.finishedAt
+  };
+}
+
+async function kvSet(key, value) {
+  const payload = JSON.stringify(slimJobForKv(value));
+  await me.puter.kv.set(key, payload);
+}
+
+async function kvList(prefix) {
+  try {
+    const res = await me.puter.kv.list(prefix);
+    const arr = Array.isArray(res) ? res : (Array.isArray(res?.keys) ? res.keys : []);
+    return arr.map((item) => typeof item === 'string' ? item : item?.key).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function jobRead(jobId) {
+  return kvGet(JOB_PREFIX + jobId);
+}
+
+async function jobWrite(job) {
+  const next = { ...job, updatedAt: nowIso() };
+  await kvSet(JOB_PREFIX + next.jobId, next);
+  return next;
+}
+
+async function jobUpdate(jobId, updater) {
+  const current = (await jobRead(jobId)) || { jobId };
+  const next = await updater({ ...current });
+  return jobWrite(next);
+}
+
+async function listJobs(limit = HISTORY_LIMIT) {
+  const keys = await kvList(JOB_PREFIX);
+  const jobs = [];
+  for (const key of keys) {
+    try {
+      const item = await kvGet(key);
+      if (item?.jobId) jobs.push(item);
+    } catch (_) {}
+  }
+  jobs.sort((a, b) => ss(b.updatedAt || b.createdAt).localeCompare(ss(a.updatedAt || a.createdAt)));
+  return jobs.slice(0, ci(limit, 1, 50, HISTORY_LIMIT));
+}
+
+async function ensureFreshReadUrl(job) {
+  if (!job?.storage?.path) return job;
+  const now = nowMs();
+  const exp = job.outputUrlExpiresAt ? Date.parse(job.outputUrlExpiresAt) : 0;
+  if (job.outputUrl && exp && (exp - now > 5 * 60 * 1000)) return job;
+  try {
+    const freshUrl = await me.puter.fs.getReadURL(job.storage.path, URL_EXPIRES_MS);
+    job.outputUrl = freshUrl;
+    job.outputUrls = freshUrl ? [freshUrl] : [];
+    job.outputUrlExpiresAt = new Date(now + URL_EXPIRES_MS).toISOString();
+    await jobWrite(job);
+  } catch (_) {}
+  return job;
+}
+
+async function sourceToBlob(src) {
+  if (src instanceof Blob) {
+    if (!src.size) throw new Error('Blob boş döndü');
+    return src;
+  }
+  if (src instanceof Uint8Array) {
+    if (!src.byteLength) throw new Error('Uint8Array boş döndü');
+    return new Blob([src], { type: 'image/png' });
+  }
+  if (src instanceof ArrayBuffer) {
+    if (!src.byteLength) throw new Error('ArrayBuffer boş döndü');
+    return new Blob([src], { type: 'image/png' });
+  }
+  if (typeof src === 'object' && src?.base64) {
+    return normalizeBase64ToBlob(src.base64, ss(src.mimeType, 'image/png'));
+  }
+  if (typeof src === 'string' && src.startsWith('data:')) return dataUrlToBlob(src);
+  if (typeof src === 'string' && /^https?:\/\//i.test(src)) {
+    const response = await withTimeout(fetch(src), 20000);
+    if (!response.ok) throw new Error(`Uzak görsel indirilemedi (HTTP ${response.status})`);
+    const blob = await response.blob();
+    if (!blob || !blob.size) throw new Error('Uzak görsel boş döndü');
+    return blob;
+  }
+  if (typeof src === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(src) && src.length > 64) {
+    return normalizeBase64ToBlob(src, 'image/png');
+  }
+  throw new Error('Geçersiz görsel kaynağı');
+}
+
+async function tryWriteToStorageCandidate(jobId, root, relativePath, blob) {
+  const attemptedPath = joinFsPath(root, relativePath);
+  const parentPath = attemptedPath.split('/').slice(0, -1).join('/');
+  let writeResult = null;
+  let resolvedPath = attemptedPath;
+  let statInfo = null;
+  let readUrl = null;
+  let writeOk = false;
+  let statOk = false;
+  let readUrlOk = false;
+
+  await mkdirIfPossible(parentPath);
+
+  try {
+    writeResult = await me.puter.fs.write(attemptedPath, blob, {
+      overwrite: true,
+      createMissingParents: true,
+      dedupeName: false
+    });
+    resolvedPath = ss(writeResult?.path || writeResult?.item?.path || attemptedPath, attemptedPath);
+    writeOk = true;
+  } catch (writeError) {
+    const meta = storageStepMeta(jobId, attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, 'WRITE_FAIL', [
+      `root=${root}`,
+      normalizeError(writeError)
+    ]);
+    throw makeStageError('storage', 'WRITE_FAIL', `Dosya yazılamadı: ${normalizeError(writeError)}`, meta.bullets, true, 500);
   }
 
-  if (typeof err === 'string' && err.trim()) {
-    return {
-      message: err.trim(),
-      bullets: [
-        `1) Hata mesajı: ${err.trim()}`,
-        `2) İşlem tamamlanamadı — beklenmeyen bir durum meydana geldi.`,
-        `3) Prompt ve model seçimini kontrol ederek tekrar deneyin.`,
-      ],
-      displayDurationMs: ERROR_DISPLAY_MS,
-      timestamp: Date.now(),
-    };
+  try {
+    statInfo = await me.puter.fs.stat(resolvedPath);
+    statOk = true;
+  } catch (statError) {
+    try {
+      statInfo = await me.puter.fs.stat(attemptedPath);
+      statOk = true;
+      resolvedPath = ss(statInfo?.path || resolvedPath, resolvedPath);
+    } catch (fallbackStatError) {
+      const meta = storageStepMeta(jobId, attemptedPath, resolvedPath, writeOk, statOk, readUrlOk, 'STAT_FAIL', [
+        `root=${root}`,
+        `primaryStat=${normalizeError(statError)}`,
+        `fallbackStat=${normalizeError(fallbackStatError)}`
+      ]);
+      throw makeStageError('storage', 'STAT_FAIL', `Dosya doğrulanamadı: ${normalizeError(statError)}`, meta.bullets, true, 500);
+    }
+  }
+
+  const finalPath = ss(statInfo?.path || resolvedPath, resolvedPath);
+
+  try {
+    readUrl = await me.puter.fs.getReadURL(finalPath, URL_EXPIRES_MS);
+    readUrlOk = Boolean(readUrl);
+    if (!readUrlOk) throw new Error('Boş read URL');
+  } catch (readUrlError) {
+    const meta = storageStepMeta(jobId, attemptedPath, finalPath, writeOk, statOk, readUrlOk, 'READ_URL_FAIL', [
+      `root=${root}`,
+      normalizeError(readUrlError)
+    ]);
+    throw makeStageError('storage', 'READ_URL_FAIL', `Okuma URL alınamadı: ${normalizeError(readUrlError)}`, meta.bullets, true, 500);
+  }
+
+  const meta = storageStepMeta(jobId, attemptedPath, finalPath, writeOk, statOk, readUrlOk, 'OK', [`root=${root}`]);
+  return {
+    attemptedPath,
+    resolvedPath: finalPath,
+    readUrl,
+    root,
+    statInfo,
+    logLine: meta.line
+  };
+}
+
+async function persistGeneratedImage(jobId, source) {
+  const blob = await sourceToBlob(source);
+  const ext = typeof source === 'string' && source.startsWith('data:')
+    ? guessExtensionFromDataUrl(source)
+    : guessExtensionFromMime(blob.type || 'image/png');
+  const mimeType = blob.type || `image/${ext}`;
+  const relativePath = buildRelativeAssetPath(jobId, ext);
+  const attempts = [];
+
+  for (const root of getStorageRootCandidates()) {
+    try {
+      const stored = await tryWriteToStorageCandidate(jobId, root, relativePath, blob);
+      const fileName = stored.resolvedPath.split('/').pop();
+      return {
+        path: stored.resolvedPath,
+        attemptedPath: stored.attemptedPath,
+        storageRoot: root,
+        fileName,
+        mimeType,
+        readUrl: stored.readUrl,
+        expiresAt: new Date(nowMs() + URL_EXPIRES_MS).toISOString(),
+        triedRoots: attempts.map((item) => item.root),
+        logLine: stored.logLine
+      };
+    } catch (error) {
+      attempts.push({ root, error: normalizeError(error), code: getStorageFailCode(error) });
+    }
+  }
+
+  const bullets = attempts.map((item, index) => `${index + 1}. ${item.root} → [${item.code}] ${item.error}`);
+  const lastCode = attempts.length ? attempts[attempts.length - 1].code : 'STORAGE_FAILED';
+  const err = makeStageError('storage', lastCode, 'Görsel üretildi ancak me.puter depolama klasörlerinin hiçbirine yazılamadı.', bullets, true, 500);
+  throw err;
+}
+
+function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model) {
+  return {
+    jobId,
+    feature: 'image',
+    status: 'queued',
+    progress: 5,
+    step: 'İstek alındı',
+    retryable: true,
+    cancelRequested: false,
+    model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
+    modelInfo: model || null,
+    storage: {
+      path: null,
+      attemptedPath: null,
+      storageRoot: null,
+      verified: false,
+      mimeType: null,
+      fileName: null
+    },
+    outputUrl: null,
+    outputUrlExpiresAt: null,
+    outputUrls: [],
+    requestSummary: {
+      model: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
+      promptPreview: prompt.length <= 160 ? prompt : `${prompt.slice(0, 157)}...`,
+      ratio: ss(ratio, '1:1'),
+      quality: ss(quality, ''),
+      style: style || '-',
+      negativePromptPreview: negativePrompt ? (negativePrompt.length <= 120 ? negativePrompt : `${negativePrompt.slice(0, 117)}...`) : ''
+    },
+    request: {
+      modelId: model?.model || model?.modelId || DEFAULT_IMAGE_MODEL,
+      provider: normalizeProviderRegistry(model?.provider, model?.model || model?.modelId),
+      ratio: ss(ratio, '1:1'),
+      quality: ss(quality, ''),
+      style: ss(style, ''),
+      negativePrompt: ss(negativePrompt, ''),
+      n: 1
+    },
+    error: null,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    finishedAt: null
+  };
+}
+
+async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body = {}) {
+  const provider = normalizeProviderRegistry(model?.provider, model?.model || model?.modelId);
+  const requestedBody = {
+    ...body,
+    prompt,
+    negativePrompt,
+    ratio,
+    quality,
+    style,
+    n: ci(body?.n, 1, 4, 1)
+  };
+
+  await jobUpdate(jobId, async (job) => ({
+    ...job,
+    status: 'running',
+    progress: 12,
+    step: `Model hazırlanıyor (${provider})`
+  }));
+
+  const plans = buildGenerationAttemptPlans(model, requestedBody);
+  const attemptErrors = [];
+  let src = null;
+
+  for (const plan of plans) {
+    const currentJob = await jobRead(jobId);
+    if (currentJob?.cancelRequested) {
+      throw makeStageError('generation', 'JOB_CANCELLED', 'İş kullanıcı tarafından iptal edildi.', [], false, 409);
+    }
+    const progress = Math.min(64, 18 + Math.floor((plan.index / Math.max(1, plans.length)) * 42));
+    await jobUpdate(jobId, async (job) => ({
+      ...job,
+      status: 'running',
+      progress,
+      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`
+    }));
+
+    try {
+      const imageResult = await withTimeout(me.puter.ai.txt2img(plan.prompt, plan.options), plan.timeoutMs);
+      src = extractImageSrc(imageResult);
+      if (!src) {
+        throw new Error('AI sonuç döndürdü ancak görsel kaynağı bulunamadı');
+      }
+      break;
+    } catch (error) {
+      const message = normalizeError(error);
+      attemptErrors.push(`Deneme ${plan.index}: ${message}`);
+      if (/field_invalid|model is invalid|valid model name/i.test(message)) {
+        throw makeStageError(
+          'generation',
+          'MODEL_INVALID',
+          'Seçilen model Puter image registry içinde bulunamadı veya provider ile eşleşmedi.',
+          [`requestedModel=${ss(model?.model || model?.modelId)}`, `provider=${provider}`, message],
+          false,
+          400
+        );
+      }
+    }
+  }
+
+  if (!src) {
+    throw makeStageError(
+      'generation',
+      'GENERATION_FAILED',
+      `Görsel üretimi ${plans.length} denemeye rağmen tamamlanamadı.`,
+      attemptErrors.slice(0, 10),
+      true,
+      500
+    );
+  }
+
+  await jobUpdate(jobId, async (job) => ({
+    ...job,
+    status: 'storing',
+    progress: 72,
+    step: 'Görsel depolamaya yazılıyor'
+  }));
+
+  const stored = await persistGeneratedImage(jobId, src);
+
+  try {
+    await jobUpdate(jobId, async (job) => ({
+      ...job,
+      status: 'completed',
+      progress: 100,
+      step: 'Tamamlandı',
+      finishedAt: nowIso(),
+      storage: {
+        path: stored.path,
+        attemptedPath: stored.attemptedPath,
+        storageRoot: stored.storageRoot,
+        verified: true,
+        mimeType: stored.mimeType,
+        fileName: stored.fileName
+      },
+      outputUrl: stored.readUrl,
+      outputUrls: stored.readUrl ? [stored.readUrl] : [],
+      outputUrlExpiresAt: stored.expiresAt,
+      error: null
+    }));
+  } catch (kvError) {
+    throw makeStageError('storage', 'KV_FAIL', `KV tamamlandı kaydı yazılamadı: ${normalizeError(kvError)}`, [
+      ss(stored?.logLine),
+      `storagePath=${ss(stored?.path)}`,
+      normalizeError(kvError)
+    ], true, 500);
   }
 
   return {
-    message: DEFAULT_MSG,
-    bullets: [
-      `1) Hata detayı alınamadı — bilinmeyen bir istisna fırlatıldı.`,
-      `2) Worker bağlantısı veya AI servisi geçici olarak erişilemez olabilir.`,
-      `3) Birkaç saniye bekleyip tekrar deneyiniz veya farklı model seçiniz.`,
-    ],
-    displayDurationMs: ERROR_DISPLAY_MS,
-    timestamp: Date.now(),
+    job: await jobRead(jobId),
+    inlinePreview: src
   };
 }
 
-// ─────────────────── WORKER REQUEST ───────────────────
+router.options('/*page', async ({ request }) => {
+  return new Response(null, { status: 204, headers: corsHeaders(request) });
+});
 
-// WorkerError fırlatan özel hata sınıfı
-class WorkerRequestError extends Error {
-  public readonly workerError: WorkerError;
-  constructor(workerError: WorkerError) {
-    super(workerError.message || 'Worker isteği başarısız.');
-    this.name = 'WorkerRequestError';
-    this.workerError = workerError;
-  }
-}
-
-async function workerRequest<T>(path: string, init?: RequestInit): Promise<WorkerEnvelope<T>> {
-  let response: Response;
+router.get('/', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('info');
+  const traceId = uid('trace');
   try {
-    response = await fetch(joinUrl(path), {
-      ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers || {}) },
-    });
-  } catch (fetchErr) {
-    const e: WorkerError = {
-      message: 'Ağ bağlantı hatası — worker\'a ulaşılamadı.',
-      code: 'NETWORK_ERROR',
-      context: path,
-      bullets: [
-        `1) fetch() çağrısı başarısız oldu — sunucuya TCP bağlantısı kurulamadı.`,
-        `2) İnternet bağlantınızı veya ${WORKER_BASE_URL} adresinin erişilebilir olduğunu kontrol edin.`,
-        `3) Birkaç saniye bekleyip "Üretimi başlat" butonuna tekrar tıklayınız.`,
-      ],
-      displayDurationMs: ERROR_DISPLAY_MS,
-      retryable: true,
-    };
-    throw new WorkerRequestError(e);
+    const catalog = await getImageCatalog(false);
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'WORKER_INFO', {
+      worker: WORKER_NAME,
+      version: WORKER_VERSION,
+      totalModels: catalog.items.length,
+      modelsSource: catalog.source,
+      pollIntervalMs: POLL_INTERVAL_HINT_MS,
+      storageCandidates: getStorageRootCandidates()
+    }), 200, 'no-store', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'WORKER_INFO_FAILED', normalizeError(error), [], 500), 500, 'no-store', request);
   }
+});
 
-  let payload: WorkerEnvelope<T> | null = null;
+router.get('/health', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('health');
+  const traceId = uid('trace');
+  return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'HEALTH_OK', {
+    status: 'ok',
+    worker: WORKER_NAME,
+    version: WORKER_VERSION,
+    storageMode: 'me.puter.fs',
+    modelSource: MODELS_WORKER_URL
+  }), 200, 'no-store', request);
+});
+
+router.get('/models', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('models');
+  const traceId = uid('trace');
   try {
-    payload = (await response.json()) as WorkerEnvelope<T>;
-  } catch {
-    const e: WorkerError = {
-      message: 'Worker geçerli JSON döndürmedi.',
-      code: 'INVALID_JSON_RESPONSE',
-      context: path,
-      bullets: [
-        `1) HTTP ${response.status} geldi fakat yanıt gövdesi JSON formatında değildi.`,
-        `2) Worker beklenmedik bir içerik türü veya boş yanıt döndürdü.`,
-        `3) Worker deploy durumunu kontrol edin — yeniden deploy gerekebilir.`,
-      ],
-      displayDurationMs: ERROR_DISPLAY_MS,
-      retryable: false,
-    };
-    throw new WorkerRequestError(e);
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'MODELS_OK', await buildModelsPayload()), 200, 'public, max-age=300', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'MODELS_FAILED', normalizeError(error), [], 500), 500, 'no-store', request);
   }
+});
 
-  // ok: false durumu — bullets dahil tüm hata bilgisini taşı
-  if (!payload?.ok) {
-    const workerErr: WorkerError = payload?.error || {
-      message: `Worker isteği başarısız (HTTP ${response.status}).`,
-      code: payload?.code || 'REQUEST_FAILED',
-    };
-    throw new WorkerRequestError(workerErr);
-  }
-
-  return payload;
-}
-
-// ─────────────────── ANA COMPONENT ───────────────────
-
-export default function ImagePage() {
-  const [models, setModels] = useState<ModelItem[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState('');
-  const [selectedModelId, setSelectedModelId] = useState('');
-  const [ratio, setRatio] = useState('1:1');
-  const [quality, setQuality] = useState('medium');
-  const [style, setStyle] = useState('');
-  const [count, setCount] = useState(1);
-  const [submitting, setSubmitting] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [history, setHistory] = useState<JobRecord[]>([]);
-  const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
-
-  // Hata artık tek string değil, detaylı yapı
-  const [displayError, setDisplayError] = useState<DisplayError | null>(null);
-
-  // Fake progress için
-  const [fakeProgress, setFakeProgress] = useState(0);
-  const fakeProgressRef = useRef<number | null>(null);
-
-  const pollTimerRef = useRef<number | null>(null);
-
-  const selectedModel = useMemo(
-    () => models.find((item) => modelKey(item) === selectedModelId) || null,
-    [models, selectedModelId]
-  );
-
-  const activeImages = useMemo(() => pickJobImages(activeJob), [activeJob]);
-
-  // ── Hata göster ────────────────────────────────────
-  const showError = useCallback((err: unknown, fallback?: string) => {
-    const de = buildDisplayError(err, fallback);
-    setDisplayError(de);
-  }, []);
-
-  const clearError = useCallback(() => setDisplayError(null), []);
-
-  // ── Fake progress ───────────────────────────────────
-  const startFakeProgress = useCallback(() => {
-    setFakeProgress(5);
-    let current = 5;
-    const tick = () => {
-      // Maksimum %90'a kadar yavaşlayarak ilerle
-      if (current < 90) {
-        const step = current < 30 ? 5 : current < 60 ? 3 : current < 80 ? 1 : 0.5;
-        current = Math.min(90, current + step);
-        setFakeProgress(Math.round(current));
-        fakeProgressRef.current = window.setTimeout(tick, 600);
-      }
-    };
-    fakeProgressRef.current = window.setTimeout(tick, 600);
-  }, []);
-
-  const stopFakeProgress = useCallback((finalValue: number) => {
-    if (fakeProgressRef.current != null) {
-      window.clearTimeout(fakeProgressRef.current);
-      fakeProgressRef.current = null;
+router.post('/generate', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('gen');
+  const traceId = uid('trace');
+  let jobId = null;
+  try {
+    const body = await request.json();
+    const prompt = ss(body?.prompt);
+    const negativePrompt = ss(body?.negativePrompt);
+    const ratio = body?.ratio || '1:1';
+    const quality = ss(body?.quality || 'medium', 'medium');
+    const style = ss(body?.style, '');
+    if (!prompt) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'PROMPT_REQUIRED', 'Prompt alanı boş bırakılamaz.', [], 400), 400, 'no-store', request);
     }
-    setFakeProgress(finalValue);
-  }, []);
 
-  // ── Polling ─────────────────────────────────────────
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current != null) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
+    const catalog = await getImageCatalog(false);
+    const requestedModel = ss(body?.modelId || body?.model);
+    const model = findRequestedModel(catalog.items, requestedModel);
+    if (!model) {
+      return jsonResponse(
+        errEnvelope(requestId, traceId, startedAt, 'MODEL_INVALID', 'Seçilen model Puter image registry içinde bulunamadı.', [
+          `requestedModel=${requestedModel || '-'}`,
+          `modelsSource=${catalog.source}`
+        ], 400),
+        400,
+        'no-store',
+        request
+      );
     }
-  }, []);
 
-  const refreshHistory = useCallback(async () => {
-    setHistoryLoading(true);
+    const provider = normalizeProviderRegistry(model.provider, model.model || model.modelId);
+    if (!ALLOWED_IMAGE_PROVIDERS.has(provider)) {
+      return jsonResponse(
+        errEnvelope(requestId, traceId, startedAt, 'PROVIDER_INVALID', 'Seçilen model için image provider profili bulunamadı.', [
+          `requestedModel=${ss(model.model || model.modelId)}`,
+          `provider=${provider}`
+        ], 400),
+        400,
+        'no-store',
+        request
+      );
+    }
+
+    jobId = uid('img');
+    await jobWrite(baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, model));
+
     try {
-      const env = await workerRequest<HistoryPayload>('/jobs/history?limit=12');
-      setHistory(Array.isArray(env.data?.items) ? env.data.items : []);
-    } catch (err) {
-      console.error('History yüklenemedi:', err);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, []);
+      const result = await runGeneration(jobId, prompt, negativePrompt, ratio, quality, style, model, body);
+      return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'IMAGE_JOB_COMPLETED', result.job, {
+        feature: 'image',
+        model: model.model || model.modelId,
+        provider,
+        modelsSource: catalog.source,
+        inlinePreview: result.inlinePreview
+      }), 200, 'no-store', request);
+    } catch (generationError) {
+      const bullets = Array.isArray(generationError?.bullets) ? generationError.bullets : [];
+      const stage = ss(generationError?.stage, 'generation');
+      const code = ss(generationError?.code, stage === 'storage' ? 'STORAGE_FAILED' : 'GENERATION_FAILED');
+      const httpStatus = ci(generationError?.httpStatus, 400, 599, stage === 'storage' ? 500 : 500);
+      const failedStatus = code === 'JOB_CANCELLED' ? 'cancelled' : stage === 'storage' ? 'failed_storage' : 'failed';
+      const failedStep = code === 'JOB_CANCELLED'
+        ? 'İş iptal edildi'
+        : stage === 'storage'
+          ? 'Görsel üretildi ancak depolama başarısız oldu'
+          : 'Görsel üretimi başarısız oldu';
 
-  const loadModels = useCallback(async () => {
-    setModelsLoading(true);
-    clearError();
-    try {
-      const env = await workerRequest<ModelsPayload>('/models?feature=image&sort=price_asc&limit=100');
-      const items = Array.isArray(env.data?.items) ? env.data.items : [];
-      setModels(items);
-      setSelectedModelId((current) => current || modelKey(items[0]) || '');
-    } catch (err) {
-      showError(err, 'Model listesi yüklenemedi.');
-    } finally {
-      setModelsLoading(false);
-    }
-  }, [clearError, showError]);
-
-  const pollJob = useCallback(
-    async (jobId: string) => {
-      stopPolling();
-      try {
-        const env = await workerRequest<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
-        const job = env.data;
-        setActiveJob(job);
-        if (TERMINAL_STATUSES.has(job.status)) {
-          stopFakeProgress(job.status === 'completed' ? 100 : fakeProgress);
-          setSubmitting(false);
-          if (job.status === 'failed' && job.error) {
-            showError(job.error, 'Görsel üretimi başarısız oldu.');
-          }
-          void refreshHistory();
-          return;
+      await jobUpdate(jobId, async (job) => ({
+        ...job,
+        status: failedStatus,
+        progress: 100,
+        step: failedStep,
+        finishedAt: nowIso(),
+        error: {
+          message: normalizeError(generationError),
+          retryable: httpStatus >= 500,
+          bullets
         }
-        pollTimerRef.current = window.setTimeout(() => void pollJob(jobId), POLL_INTERVAL_MS);
-      } catch (err) {
-        stopFakeProgress(0);
-        showError(err, 'Job durumu okunamadı.');
-        setSubmitting(false);
-      }
-    },
-    [fakeProgress, refreshHistory, showError, stopFakeProgress, stopPolling]
-  );
-
-  useEffect(() => {
-    void loadModels();
-    void refreshHistory();
-    return () => {
-      stopPolling();
-      if (fakeProgressRef.current != null) window.clearTimeout(fakeProgressRef.current);
-    };
-  }, [loadModels, refreshHistory, stopPolling]);
-
-  // ── Üretim başlat ────────────────────────────────────
-  const handleGenerate = useCallback(async () => {
-    if (!prompt.trim()) { showError({ message: 'Prompt boş bırakılamaz.', code: 'PROMPT_REQUIRED', bullets: ['1) Prompt alanı zorunludur — üretim başlatılamaz.', '2) En az birkaç kelimelik açıklayıcı bir metin giriniz.', '3) Örnek: "Gece yağmurunda neon ışıklı bir şehir manzarası"'] }); return; }
-    if (!selectedModelId) { showError({ message: 'Model seçilmedi.', code: 'MODEL_REQUIRED', bullets: ['1) Üretim başlatmak için sol panelden bir model seçmeniz gerekmektedir.', '2) Dropdown listesinden herhangi bir görsel model seçiniz.', '3) Model listesi boşsa "Modelleri yenile" butonuna tıklayınız.'] }); return; }
-
-    stopPolling();
-    stopFakeProgress(0);
-    clearError();
-    setSubmitting(true);
-    setActiveJob(null);
-    startFakeProgress();
-
-    try {
-      const env = await workerRequest<GeneratePayload>('/generate', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt: prompt.trim(),
-          negativePrompt: negativePrompt.trim(),
-          model: selectedModelId,
-          quality, ratio, style, n: count,
-          responseFormat: 'url',
-          metadata: { page: 'src/pages/AI/image.tsx', source: 'worker-only' },
+      }));
+      const failedJob = await jobRead(jobId);
+      const publicMessage = code === 'MODEL_INVALID'
+        ? 'Seçilen model Puter image registry içinde bulunamadı.'
+        : code === 'JOB_CANCELLED'
+          ? 'İş kullanıcı tarafından iptal edildi.'
+          : stage === 'storage'
+            ? 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.'
+            : 'Görsel üretimi tamamlanamadı.';
+      return jsonResponse(
+        errEnvelope(requestId, traceId, startedAt, code, publicMessage, bullets, httpStatus, {
+          feature: 'image',
+          stage,
+          job: failedJob,
+          provider,
+          modelsSource: catalog.source
         }),
-      });
-
-      const payload = env.data;
-
-      if (!payload?.jobId) {
-        throw new WorkerRequestError({ message: 'Worker jobId döndürmedi.', code: 'NO_JOB_ID', bullets: ['1) Worker POST /generate isteğine jobId içermeyen yanıt döndürdü.', '2) Worker kodu veya deploy durumu hatalı olabilir.', '3) Worker\'ı yeniden deploy edip tekrar deneyiniz.'] });
-      }
-
-      // Worker senkron üretim yapıyorsa — completed direkt gelir
-      if (payload.status === 'completed' || payload.status === 'failed') {
-        stopFakeProgress(payload.status === 'completed' ? 100 : 0);
-
-        const syntheticJob: JobRecord = {
-          jobId: payload.jobId,
-          status: payload.status,
-          progress: payload.status === 'completed' ? 100 : 0,
-          step: payload.step || payload.status,
-          outputUrl: payload.outputUrl || null,
-          outputUrls: Array.isArray(payload.outputUrls) ? payload.outputUrls : [],
-          url: payload.url || null,
-          urls: Array.isArray(payload.urls) ? payload.urls : [],
-          requestSummary: { model: payload.modelId || selectedModelId, prompt, promptPreview: prompt.length > 120 ? `${prompt.slice(0, 119)}…` : prompt },
-          request: { modelId: selectedModelId, ratio, quality, style, negativePrompt, n: count },
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          finishedAt: new Date().toISOString(),
-          error: payload.error || null,
-        };
-
-        setActiveJob(syntheticJob);
-        setSubmitting(false);
-
-        if (payload.status === 'failed' && payload.error) {
-          showError(payload.error, 'Görsel üretimi başarısız oldu.');
-        }
-
-        void refreshHistory();
-        return; // poll YOK — zaten bitti
-      }
-
-      // Hâlâ queued/processing — optimistic job set et ve poll başlat
-      const optimisticJob: JobRecord = {
-        jobId: payload.jobId,
-        status: payload.status || 'queued',
-        progress: payload.progress ?? 0,
-        step: payload.step || 'queued',
-        requestSummary: { model: payload.modelId || selectedModelId, prompt, promptPreview: prompt.length > 120 ? `${prompt.slice(0, 119)}…` : prompt },
-        request: { modelId: selectedModelId, ratio, quality, style, negativePrompt, n: count },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      setActiveJob(optimisticJob);
-      void refreshHistory();
-      void pollJob(payload.jobId);
-
-    } catch (err) {
-      stopFakeProgress(0);
-      setSubmitting(false);
-
-      if (err instanceof WorkerRequestError) {
-        showError(err.workerError, 'Görsel üretimi başlatılamadı.');
-      } else {
-        showError(err, 'Görsel üretimi başlatılamadı.');
-      }
+        httpStatus,
+        'no-store',
+        request
+      );
     }
-  }, [clearError, count, negativePrompt, pollJob, prompt, quality, ratio, refreshHistory, selectedModelId, showError, startFakeProgress, stopFakeProgress, stopPolling, style]);
-
-  // ── İptal ────────────────────────────────────────────
-  const handleCancel = useCallback(async () => {
-    if (!activeJob?.jobId || TERMINAL_STATUSES.has(activeJob.status)) return;
-    clearError();
-    try {
-      const env = await workerRequest<JobRecord>('/jobs/cancel', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: activeJob.jobId }),
-      });
-      stopPolling();
-      stopFakeProgress(0);
-      setSubmitting(false);
-      setActiveJob(env.data);
-      void refreshHistory();
-    } catch (err) {
-      showError(err, 'Job iptal edilemedi.');
-    }
-  }, [activeJob, clearError, refreshHistory, showError, stopFakeProgress, stopPolling]);
-
-  // ── Geçmişten job aç ─────────────────────────────────
-  const openHistoryJob = useCallback(
-    async (jobId: string) => {
-      clearError();
-      stopPolling();
-      stopFakeProgress(0);
+  } catch (error) {
+    const message = normalizeError(error);
+    if (jobId) {
       try {
-        const env = await workerRequest<JobRecord>(`/jobs/status/${encodeURIComponent(jobId)}`);
-        const job = env.data;
-        setActiveJob(job);
-        if (!TERMINAL_STATUSES.has(job.status)) {
-          setSubmitting(true);
-          startFakeProgress();
-          void pollJob(jobId);
-        } else {
-          setSubmitting(false);
-          if (job.status === 'failed' && job.error) {
-            showError(job.error, 'Bu job başarısız olmuş.');
-          }
-        }
-      } catch (err) {
-        showError(err, 'Job açılamadı.');
+        await jobUpdate(jobId, async (job) => ({
+          ...job,
+          status: 'failed',
+          progress: 100,
+          step: 'Ana çöküş',
+          finishedAt: nowIso(),
+          error: { message, retryable: true }
+        }));
+      } catch (_) {}
+    }
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', `Ana çöküş: ${message}`, [], 500), 500, 'no-store', request);
+  }
+});
+
+router.get('/jobs/status/:id', async ({ request, params }) => {
+  const startedAt = nowMs();
+  const requestId = uid('status');
+  const traceId = uid('trace');
+  try {
+    const jobId = ss(params?.id);
+    if (!jobId) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400), 400, 'no-store', request);
+    }
+    let job = await jobRead(jobId);
+    if (!job) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'NOT_FOUND', 'Job bulunamadı.', [], 404), 404, 'no-store', request);
+    }
+    if (job.status === 'completed' && job.storage?.path) {
+      job = await ensureFreshReadUrl(job);
+    }
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'JOB_STATUS_OK', job, { feature: 'image' }), 200, 'no-store', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
+  }
+});
+
+router.get('/jobs/history', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('history');
+  const traceId = uid('trace');
+  try {
+    const items = await listJobs(HISTORY_LIMIT);
+    const hydrated = [];
+    for (let job of items) {
+      if (job.status === 'completed' && job.storage?.path) {
+        job = await ensureFreshReadUrl(job);
       }
-    },
-    [clearError, pollJob, showError, startFakeProgress, stopFakeProgress, stopPolling]
-  );
+      hydrated.push(job);
+    }
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'JOB_HISTORY_OK', {
+      items: hydrated,
+      total: hydrated.length,
+      limit: HISTORY_LIMIT,
+      feature: 'image'
+    }), 200, 'no-store', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
+  }
+});
 
-  // ── İlerleme değeri ──────────────────────────────────
-  const progressValue = activeJob?.status === 'completed'
-    ? 100
-    : activeJob?.status === 'failed' || activeJob?.status === 'cancelled'
-    ? fakeProgress
-    : Math.max(fakeProgress, activeJob?.progress ?? 0);
+router.get('/jobs/image/:id', async ({ request, params }) => {
+  const startedAt = nowMs();
+  const requestId = uid('image');
+  const traceId = uid('trace');
+  try {
+    const jobId = ss(params?.id);
+    if (!jobId) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400), 400, 'no-store', request);
+    }
+    let job = await jobRead(jobId);
+    if (!job) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'NOT_FOUND', 'Job bulunamadı.', [], 404), 404, 'no-store', request);
+    }
+    if (job.status !== 'completed' || !job.storage?.path) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'IMAGE_NOT_READY', 'Görsel henüz kalıcı olarak hazır değil.', [], 409), 409, 'no-store', request);
+    }
+    job = await ensureFreshReadUrl(job);
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'JOB_IMAGE_URL_OK', {
+      jobId: job.jobId,
+      storagePath: job.storage.path,
+      outputUrl: job.outputUrl,
+      outputUrlExpiresAt: job.outputUrlExpiresAt,
+      mimeType: job.storage.mimeType,
+      fileName: job.storage.fileName,
+      storageRoot: job.storage.storageRoot,
+      attemptedPath: job.storage.attemptedPath
+    }, { feature: 'image' }), 200, 'no-store', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
+  }
+});
 
-  // ─────────────────── RENDER ───────────────────
-
-  return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-
-        {/* Başlık */}
-        <div className="mb-6 rounded-3xl border border-neutral-800 bg-neutral-900/80 p-6 shadow-2xl shadow-black/20">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.24em] text-cyan-400">IMAGE WORKER</p>
-              <h1 className="text-3xl font-bold tracking-tight">Tek worker üstünden görsel üretim</h1>
-              <p className="mt-3 max-w-3xl text-sm text-neutral-300">
-                Bu sayfa sadece{' '}
-                <code className="rounded bg-neutral-800 px-2 py-1 text-xs">https://idm.puter.work</code>{' '}
-                ile konuşur. Model listeleme, job başlatma, durum takibi, geçmiş ve iptal akışlarının tamamı aynı worker üstünden yürür.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-950/80 p-4 text-xs text-neutral-300">
-              <div className="mb-2 font-semibold text-neutral-100">Aktif route'lar</div>
-              <div className="flex flex-wrap gap-2">
-                {['/models', '/generate', '/jobs/status/:id', '/jobs/history', '/jobs/cancel'].map((item) => (
-                  <span key={item} className="rounded-full border border-neutral-700 bg-neutral-900 px-3 py-1">{item}</span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Hata bloğu — detaylı, minimum 5 sn */}
-        {displayError ? (
-          <div className="mb-6 rounded-2xl border border-rose-700/60 bg-rose-950/40 px-5 py-4 text-sm text-rose-200">
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <p className="font-semibold text-rose-100">{displayError.message}</p>
-              <button
-                type="button"
-                onClick={clearError}
-                className="shrink-0 rounded-lg border border-rose-700/40 px-2 py-1 text-xs text-rose-400 transition hover:bg-rose-900/40"
-              >
-                Kapat
-              </button>
-            </div>
-            {displayError.bullets.length > 0 && (
-              <ul className="space-y-1.5">
-                {displayError.bullets.map((b, i) => (
-                  <li key={i} className="leading-relaxed text-rose-300">{b}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ) : null}
-
-        {/* 3 kolon layout */}
-        <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)_360px]">
-
-          {/* SOL: Üretim ayarları */}
-          <section className="rounded-3xl border border-neutral-800 bg-neutral-900/80 p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Üretim ayarları</h2>
-              <button
-                type="button"
-                onClick={() => void loadModels()}
-                className="rounded-xl border border-neutral-700 px-3 py-2 text-xs font-medium text-neutral-200 transition hover:border-neutral-500 hover:bg-neutral-800"
-              >
-                {modelsLoading ? 'Yükleniyor...' : 'Modelleri yenile'}
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-200">Model</label>
-                <select
-                  value={selectedModelId}
-                  onChange={(e) => setSelectedModelId(e.target.value)}
-                  className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none ring-0 transition focus:border-cyan-500"
-                >
-                  {models.map((model) => (
-                    <option key={modelKey(model)} value={modelKey(model)}>{modelLabel(model)}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-200">Prompt</label>
-                <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Örnek: Gece yağmurunda neon ışıkları altında yürüyen siberpunk kedi"
-                  rows={5}
-                  className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-200">Negatif prompt</label>
-                <textarea
-                  value={negativePrompt}
-                  onChange={(e) => setNegativePrompt(e.target.value)}
-                  placeholder="Örnek: blur, watermark, deformed hands"
-                  rows={3}
-                  className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-neutral-200">Oran</label>
-                  <select
-                    value={ratio}
-                    onChange={(e) => setRatio(e.target.value)}
-                    className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                  >
-                    {RATIO_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-neutral-200">Kalite</label>
-                  <select
-                    value={quality}
-                    onChange={(e) => setQuality(e.target.value)}
-                    className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                  >
-                    {QUALITY_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-neutral-200">Stil</label>
-                  <select
-                    value={style}
-                    onChange={(e) => setStyle(e.target.value)}
-                    className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                  >
-                    {STYLE_OPTIONS.map((item) => <option key={item || 'none'} value={item}>{item || 'Varsayılan'}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-neutral-200">Adet</label>
-                  <input
-                    type="number" min={1} max={4} value={count}
-                    onChange={(e) => setCount(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
-                    className="w-full rounded-2xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm outline-none transition focus:border-cyan-500"
-                  />
-                </div>
-              </div>
-
-              {selectedModel ? (
-                <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4 text-sm text-neutral-300">
-                  <div className="mb-2 font-semibold text-neutral-100">Seçili model özeti</div>
-                  <div className="space-y-2">
-                    <div><span className="text-neutral-500">Ad:</span> {modelLabel(selectedModel)}</div>
-                    <div><span className="text-neutral-500">Görsel fiyatı:</span> {formatPrice(selectedModel.imagePrice)}</div>
-                    <div><span className="text-neutral-500">Hız:</span> {selectedModel.speedLabel || '-'}</div>
-                    <div><span className="text-neutral-500">Öne çıkan:</span> {selectedModel.standoutFeature || '-'}</div>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => void handleGenerate()}
-                  disabled={submitting || !prompt.trim() || !selectedModelId}
-                  className="flex-1 rounded-2xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-neutral-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {submitting ? 'Üretim sürüyor...' : 'Üretimi başlat'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleCancel()}
-                  disabled={!activeJob || TERMINAL_STATUSES.has(activeJob.status)}
-                  className="rounded-2xl border border-neutral-700 px-4 py-3 text-sm font-semibold text-neutral-100 transition hover:border-neutral-500 hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  İptal et
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* ORTA: Aktif job */}
-          <section className="rounded-3xl border border-neutral-800 bg-neutral-900/80 p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Aktif job</h2>
-              {activeJob ? (
-                <span className={`rounded-full border px-3 py-1 text-xs uppercase tracking-[0.18em] ${
-                  activeJob.status === 'completed' ? 'border-emerald-700 text-emerald-300' :
-                  activeJob.status === 'failed' ? 'border-rose-700 text-rose-300' :
-                  activeJob.status === 'cancelled' ? 'border-neutral-600 text-neutral-400' :
-                  'border-neutral-700 text-cyan-300'
-                }`}>
-                  {activeJob.status}
-                </span>
-              ) : null}
-            </div>
-
-            {activeJob ? (
-              <div className="space-y-5">
-                <div className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">Job ID</div>
-                      <div className="mt-1 break-all text-sm text-neutral-100">{activeJob.jobId}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">Adım</div>
-                      <div className="mt-1 text-sm text-neutral-100">{activeJob.step || '-'}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">İlerleme</div>
-                      <div className="mt-1 text-sm text-neutral-100">{progressValue}%</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">Model</div>
-                      <div className="mt-1 text-sm text-neutral-100">{activeJob.requestSummary?.model || activeJob.request?.modelId || '-'}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">Oluşturuldu</div>
-                      <div className="mt-1 text-sm text-neutral-100">{formatDate(activeJob.createdAt)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.18em] text-neutral-500">Bitti</div>
-                      <div className="mt-1 text-sm text-neutral-100">{formatDate(activeJob.finishedAt)}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4">
-                    <div className="mb-2 text-xs uppercase tracking-[0.18em] text-neutral-500">Prompt</div>
-                    <div className="rounded-2xl border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-neutral-200">
-                      {activeJob.requestSummary?.promptPreview || activeJob.requestSummary?.prompt || prompt || '-'}
-                    </div>
-                  </div>
-
-                  {/* İlerleme çubuğu */}
-                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-neutral-800">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${
-                        activeJob.status === 'completed' ? 'bg-emerald-400' :
-                        activeJob.status === 'failed' ? 'bg-rose-500' :
-                        'bg-cyan-400'
-                      }`}
-                      style={{ width: `${Math.max(0, Math.min(100, progressValue))}%` }}
-                    />
-                  </div>
-
-                  {/* Job seviyesindeki hata — hata bloğundan bağımsız, küçük */}
-                  {activeJob.error?.message && activeJob.status === 'failed' ? (
-                    <div className="mt-3 rounded-xl border border-rose-800/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-300">
-                      {activeJob.error.message}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div>
-                  <div className="mb-3 text-sm font-medium text-neutral-200">Üretilen görseller</div>
-                  {activeImages.length ? (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {activeImages.map((url) => (
-                        <a key={url} href={url} target="_blank" rel="noreferrer"
-                          className="group overflow-hidden rounded-3xl border border-neutral-800 bg-neutral-950">
-                          <img src={url} alt="Generated"
-                            className="aspect-square w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
-                        </a>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex min-h-[340px] items-center justify-center rounded-3xl border border-dashed border-neutral-800 bg-neutral-950/60 px-6 text-center text-sm text-neutral-500">
-                      {activeJob.status === 'failed' ? 'Job başarısız oldu. Yukarıdaki hata bloğunu incele.' :
-                       activeJob.status === 'cancelled' ? 'Job iptal edildi.' :
-                       submitting ? 'Üretim devam ediyor, lütfen bekle...' :
-                       'Görsel henüz hazır değil.'}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="flex min-h-[520px] items-center justify-center rounded-3xl border border-dashed border-neutral-800 bg-neutral-950/60 px-6 text-center text-sm text-neutral-500">
-                Henüz aktif job yok. Soldan ayarları seçip üretimi başlat.
-              </div>
-            )}
-          </section>
-
-          {/* SAĞ: Geçmiş */}
-          <aside className="rounded-3xl border border-neutral-800 bg-neutral-900/80 p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Job geçmişi</h2>
-              <button
-                type="button"
-                onClick={() => void refreshHistory()}
-                className="rounded-xl border border-neutral-700 px-3 py-2 text-xs font-medium text-neutral-200 transition hover:border-neutral-500 hover:bg-neutral-800"
-              >
-                {historyLoading ? 'Yenileniyor...' : 'Yenile'}
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              {history.length ? (
-                history.map((job) => {
-                  const previewImages = pickJobImages(job);
-                  const isActive = activeJob?.jobId === job.jobId;
-                  return (
-                    <button
-                      type="button"
-                      key={job.jobId}
-                      onClick={() => void openHistoryJob(job.jobId)}
-                      className={`w-full rounded-2xl border p-4 text-left transition ${
-                        isActive ? 'border-cyan-500 bg-cyan-500/10' :
-                        'border-neutral-800 bg-neutral-950/70 hover:border-neutral-700 hover:bg-neutral-950'
-                      }`}
-                    >
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="truncate text-sm font-semibold text-neutral-100">
-                          {job.requestSummary?.promptPreview || job.jobId}
-                        </span>
-                        <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${
-                          job.status === 'completed' ? 'border-emerald-800 text-emerald-400' :
-                          job.status === 'failed' ? 'border-rose-800 text-rose-400' :
-                          'border-neutral-700 text-neutral-300'
-                        }`}>
-                          {job.status}
-                        </span>
-                      </div>
-                      <div className="mb-3 text-xs text-neutral-500">{formatDate(job.createdAt)}</div>
-                      {previewImages[0] ? (
-                        <img src={previewImages[0]} alt="History preview"
-                          className="mb-3 aspect-video w-full rounded-2xl object-cover" />
-                      ) : null}
-                      <div className="flex items-center justify-between text-xs text-neutral-400">
-                        <span>{job.requestSummary?.model || job.request?.modelId || '-'}</span>
-                        <span>{job.progress ?? 0}%</span>
-                      </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-950/60 px-4 py-8 text-center text-sm text-neutral-500">
-                  Geçmiş boş. İlk üretimden sonra burada görünecek.
-                </div>
-              )}
-            </div>
-          </aside>
-        </div>
-      </div>
-    </div>
-  );
-}
+router.post('/jobs/cancel', async ({ request }) => {
+  const startedAt = nowMs();
+  const requestId = uid('cancel');
+  const traceId = uid('trace');
+  try {
+    const body = await request.json();
+    const jobId = ss(body?.jobId);
+    if (!jobId) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'JOB_ID_REQUIRED', 'jobId eksik.', [], 400), 400, 'no-store', request);
+    }
+    const current = await jobRead(jobId);
+    if (!current) {
+      return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'NOT_FOUND', 'Job bulunamadı.', [], 404), 404, 'no-store', request);
+    }
+    const updated = await jobUpdate(jobId, async (job) => ({
+      ...job,
+      cancelRequested: true,
+      status: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? 'cancelled' : job.status,
+      step: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? 'İptal edildi' : job.step,
+      finishedAt: ['queued', 'running', 'storing', 'processing'].includes(job.status) ? nowIso() : job.finishedAt
+    }));
+    return jsonResponse(okEnvelope(requestId, traceId, startedAt, 'JOB_CANCEL_OK', updated), 200, 'no-store', request);
+  } catch (error) {
+    return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'ERR', normalizeError(error), [], 500), 500, 'no-store', request);
+  }
+});
