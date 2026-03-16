@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
+type JobStatus = 'queued' | 'running' | 'storing' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
 type ProviderRegistry = 'openai-image-generation' | 'together' | 'gemini' | 'xai';
 
 type WorkerEnvelope<T> = {
@@ -10,6 +10,8 @@ type WorkerEnvelope<T> = {
   error?: { message?: string; bullets?: string[]; retryable?: boolean } | null;
   meta?: Record<string, unknown> | null;
 };
+
+type WorkerFailure = Error & { envelope?: WorkerEnvelope<unknown>; statusCode?: number };
 
 type TagUi = {
   text?: string;
@@ -21,6 +23,19 @@ type TagUi = {
 type TemplateRecord = Record<string, unknown> | null;
 type ProfileRecord = Record<string, unknown> | null;
 type OverrideRecord = Record<string, unknown> | null;
+
+type JobEvent = {
+  at?: string;
+  functionName?: string;
+  title?: string;
+  status?: string;
+  message?: string;
+  code?: string;
+  stage?: string;
+  line?: string;
+  details?: string[];
+  summary?: string;
+};
 
 type RawModelItem = {
   id?: string;
@@ -77,6 +92,8 @@ type JobRecord = {
   finishedAt?: string | null;
   requestSummary?: {
     model?: string;
+    displayName?: string;
+    provider?: string;
     promptPreview?: string;
     ratio?: string;
     quality?: string;
@@ -85,6 +102,8 @@ type JobRecord = {
   };
   request?: {
     modelId?: string;
+    displayName?: string;
+    provider?: string;
     ratio?: string;
     quality?: string;
     style?: string;
@@ -99,6 +118,8 @@ type JobRecord = {
     fileName?: string | null;
     verified?: boolean;
   };
+  storageLogs?: string[];
+  events?: JobEvent[];
   error?: {
     message?: string;
     bullets?: string[];
@@ -165,6 +186,8 @@ function formatDate(value?: string | null): string {
 function statusText(status?: JobStatus): string {
   switch (status) {
     case 'queued': return 'Sırada';
+    case 'running': return 'Çalışıyor';
+    case 'storing': return 'Depolanıyor';
     case 'processing': return 'Üretiliyor';
     case 'completed': return 'Tamamlandı';
     case 'failed': return 'Başarısız';
@@ -195,26 +218,10 @@ function normalizeProviderRegistry(rawProvider: unknown, rawModel: unknown): Pro
 
   if (modelText.startsWith('openai/')) return 'openai-image-generation';
   if (modelText.startsWith('google/gemini') || modelText.startsWith('google/imagen')) return 'gemini';
-  if (modelText.startsWith('black-forest-labs/') || modelText.startsWith('ideogram/') || modelText.includes('flux')) return 'together';
+  if (modelText.startsWith('black-forest-labs/') || modelText.startsWith('recraft/') || modelText.includes('flux')) return 'together';
   if (modelText.startsWith('xai/') || modelText.includes('grok')) return 'xai';
 
   return 'openai-image-generation';
-}
-
-function normalizeCanonicalModel(rawModel: unknown): string {
-  const model = safeText(rawModel);
-  if (!model) return '';
-
-  const aliases: Record<string, string> = {
-    'black-forest-labs/flux-1-schnell': 'black-forest-labs/flux.1-schnell',
-    'black-forest-labs/flux-1-dev': 'black-forest-labs/flux.1-dev',
-    'google/gemini-3-pro-image-preview': 'google/gemini-3-pro-image-preview',
-    'google/gemini-3.1-flash-image-preview': 'google/gemini-3.1-flash-image-preview',
-    'google/imagen-4.0-ultra': 'google/imagen-4.0-ultra',
-    'openai/gpt-image-1': 'openai/gpt-image-1',
-  };
-
-  return aliases[model] || model;
 }
 
 function buildTemplate(provider: ProviderRegistry, model: string): Record<string, unknown> {
@@ -229,40 +236,27 @@ function buildTemplate(provider: ProviderRegistry, model: string): Record<string
 }
 
 function buildProfile(provider: ProviderRegistry, model: string): Record<string, unknown> {
-  if (model === 'openai/gpt-image-1') {
-    return {
-      provider: 'openai-image-generation',
-      model: 'openai/gpt-image-1',
-      prompt: 'zorunlu metin alanı',
-      test_mode: 'true | false',
-      quality: 'high | medium | low',
-      ratio: { ...DEFAULT_RATIO },
-    };
-  }
-
   if (model === 'black-forest-labs/flux.1-schnell') {
     return {
       provider: 'together',
-      model: 'black-forest-labs/flux.1-schnell',
+      model,
       prompt: 'zorunlu metin alanı',
       test_mode: 'true | false',
       ratio: { ...DEFAULT_RATIO },
       response_format: 'url | b64_json',
     };
   }
-
   if (model === 'google/imagen-4.0-ultra') {
     return {
       provider: 'gemini',
-      model: 'google/imagen-4.0-ultra',
+      model,
       prompt: 'zorunlu metin alanı',
       test_mode: 'true | false',
       ratio: { ...DEFAULT_RATIO },
       response_format: 'url',
     };
   }
-
-  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image-preview') {
+  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image') {
     return {
       provider: 'gemini',
       model,
@@ -273,7 +267,6 @@ function buildProfile(provider: ProviderRegistry, model: string): Record<string,
       input_image_mime_type: 'opsiyonel',
     };
   }
-
   return {
     provider,
     model,
@@ -284,21 +277,9 @@ function buildProfile(provider: ProviderRegistry, model: string): Record<string,
 }
 
 function buildOverride(provider: ProviderRegistry, model: string): Record<string, unknown> {
-  if (model === 'openai/gpt-image-1') {
+  if (model === 'black-forest-labs/flux.1-schnell' || model === 'google/imagen-4.0-ultra') {
     return {
-      provider: 'openai-image-generation',
-      model: 'openai/gpt-image-1',
-      allowedQuality: ['high', 'medium', 'low'],
-      ratio: { w: 1024, h: 1024 },
-      outputType: 'HTMLImageElement',
-      outputSrcField: 'image.src',
-      costPerImageUsd: 0.011,
-    };
-  }
-
-  if (model === 'black-forest-labs/flux.1-schnell') {
-    return {
-      model: 'black-forest-labs/flux.1-schnell',
+      model,
       width: true,
       height: true,
       aspect_ratio: true,
@@ -315,28 +296,7 @@ function buildOverride(provider: ProviderRegistry, model: string): Record<string
       response_format: true,
     };
   }
-
-  if (model === 'google/imagen-4.0-ultra') {
-    return {
-      model: 'google/imagen-4.0-ultra',
-      width: true,
-      height: true,
-      aspect_ratio: true,
-      steps: true,
-      seed: true,
-      negative_prompt: true,
-      n: true,
-      image_url: true,
-      image_base64: true,
-      mask_image_url: true,
-      mask_image_base64: true,
-      prompt_strength: true,
-      disable_safety_checker: true,
-      response_format: true,
-    };
-  }
-
-  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image-preview') {
+  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image') {
     return {
       model,
       ratio: true,
@@ -344,11 +304,7 @@ function buildOverride(provider: ProviderRegistry, model: string): Record<string
       input_image_mime_type: true,
     };
   }
-
-  return {
-    provider,
-    model,
-  };
+  return { provider, model };
 }
 
 function normalizeTagUi(raw: TagUi | undefined, rankText: string): Required<TagUi> {
@@ -361,7 +317,7 @@ function normalizeTagUi(raw: TagUi | undefined, rankText: string): Required<TagU
 }
 
 function normalizeModelFromWorker(raw: RawModelItem): ModelItem {
-  const model = normalizeCanonicalModel(raw.model || raw.modelId || raw.id);
+  const model = safeText(raw.model || raw.modelId || raw.id);
   const provider = normalizeProviderRegistry(raw.provider, model);
   const displayName = safeText(raw.displayName, `${safeText(raw.providerLabel || raw.company || raw.provider, 'Model')} · ${safeText(raw.modelName || model, model)}`);
   const providerLabel = safeText(raw.providerLabel, safeText(raw.company || raw.provider, provider));
@@ -423,6 +379,24 @@ async function readEnvelope<T>(response: Response): Promise<WorkerEnvelope<T>> {
   }
 }
 
+function workerFailureFromEnvelope<T>(payload: WorkerEnvelope<T>, statusCode: number): WorkerFailure {
+  const error = new Error(payload.error?.message || `İstek başarısız oldu (${statusCode}).`) as WorkerFailure;
+  error.envelope = payload as WorkerEnvelope<unknown>;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function eventStatusBadge(status?: string): string {
+  if (status === 'success') return 'Başarılı';
+  if (status === 'error') return 'Hata';
+  return safeText(status, 'Olay');
+}
+
+function collectFailureBullets(error: unknown): string[] {
+  const workerError = error as WorkerFailure;
+  return normalizeArray<string>(workerError?.envelope?.error?.bullets);
+}
+
 async function requestJson<T>(base: string, path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= retry; attempt += 1) {
@@ -441,7 +415,7 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, re
       window.clearTimeout(timer);
       const payload = await readEnvelope<T>(response);
       if (!response.ok || payload.ok === false) {
-        throw new Error(payload.error?.message || `İstek başarısız oldu (${response.status}).`);
+        throw workerFailureFromEnvelope(payload, response.status);
       }
       return payload;
     } catch (error) {
@@ -471,7 +445,9 @@ export default function ImagePage(): JSX.Element {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [errorBullets, setErrorBullets] = useState<string[]>([]);
   const [workerInfo, setWorkerInfo] = useState('');
+
   const pollRef = useRef<number | null>(null);
 
   const selectedModel = useMemo(
@@ -483,6 +459,8 @@ export default function ImagePage(): JSX.Element {
     () => selectedModel ? ({ displayName: selectedModel.displayName, provider: selectedModel.provider, model: selectedModel.model }) : null,
     [selectedModel],
   );
+  const activeEvents = useMemo(() => normalizeArray<JobEvent>(activeJob?.events), [activeJob]);
+  const activeStorageLogs = useMemo(() => normalizeArray<string>(activeJob?.storageLogs), [activeJob]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
@@ -494,6 +472,7 @@ export default function ImagePage(): JSX.Element {
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     setError('');
+    setErrorBullets([]);
     try {
       const envelope = await requestJson<ModelsPayload>(MODELS_BASE_URL, '/models?limit=250', undefined, 1);
       const items = normalizeArray<RawModelItem>(envelope.data?.items)
@@ -507,6 +486,7 @@ export default function ImagePage(): JSX.Element {
       }
     } catch (requestError) {
       setError(workerErrorMessage(requestError, 'Modeller alınamadı.'));
+      setErrorBullets(collectFailureBullets(requestError));
     } finally {
       setModelsLoading(false);
     }
@@ -514,9 +494,9 @@ export default function ImagePage(): JSX.Element {
 
   const loadWorkerInfo = useCallback(async () => {
     try {
-      const envelope = await requestJson<{ worker?: string; version?: string; modelsSource?: string }>(IMGS_BASE_URL, '/', undefined, 0);
+      const envelope = await requestJson<{ worker?: string; version?: string; modelsSource?: string; maxGenerationAttempts?: number }>(IMGS_BASE_URL, '/', undefined, 0);
       const info = envelope.data || {};
-      setWorkerInfo(`${info.worker || 'imgs'} · v${info.version || '-'}`);
+      setWorkerInfo(`${info.worker || 'imgs'} · v${info.version || '-'} · deneme=${String(info.maxGenerationAttempts ?? '-')}`);
     } catch {
       setWorkerInfo('imgs worker');
     }
@@ -537,10 +517,14 @@ export default function ImagePage(): JSX.Element {
   const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
     if (!job.jobId || pickImages(job).length > 0) return job;
     try {
-      const envelope = await requestJson<{ outputUrl?: string | null }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
+      const envelope = await requestJson<{ outputUrl?: string | null; storageLogs?: string[] }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
       const outputUrl = envelope.data?.outputUrl || null;
-      if (!outputUrl) return job;
-      return { ...job, outputUrl, outputUrls: [outputUrl] };
+      return {
+        ...job,
+        outputUrl,
+        outputUrls: outputUrl ? [outputUrl] : job.outputUrls,
+        storageLogs: normalizeArray<string>(envelope.data?.storageLogs).length ? normalizeArray<string>(envelope.data?.storageLogs) : job.storageLogs,
+      };
     } catch {
       return job;
     }
@@ -564,8 +548,12 @@ export default function ImagePage(): JSX.Element {
         void pollJob(jobId);
       }, POLL_MS);
     } catch (requestError) {
+      const workerError = requestError as WorkerFailure;
+      const failedJob = (workerError?.envelope?.meta as { job?: JobRecord } | undefined)?.job;
+      if (failedJob) setActiveJob(failedJob);
       setSubmitting(false);
       setError(workerErrorMessage(requestError, 'Job durumu alınamadı.'));
+      setErrorBullets(collectFailureBullets(requestError));
     }
   }, [ensureImageUrl, refreshHistory, stopPolling]);
 
@@ -606,6 +594,7 @@ export default function ImagePage(): JSX.Element {
     stopPolling();
     setSubmitting(true);
     setError('');
+    setErrorBullets([]);
     setActiveJob(null);
 
     try {
@@ -661,8 +650,12 @@ export default function ImagePage(): JSX.Element {
       }
       await pollJob(nextJob.jobId);
     } catch (requestError) {
+      const workerError = requestError as WorkerFailure;
+      const failedJob = (workerError?.envelope?.meta as { job?: JobRecord } | undefined)?.job;
+      if (failedJob) setActiveJob(failedJob);
       setSubmitting(false);
       setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
+      setErrorBullets(collectFailureBullets(requestError));
     }
   }, [count, negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode]);
 
@@ -673,17 +666,20 @@ export default function ImagePage(): JSX.Element {
         method: 'POST',
         body: JSON.stringify({ jobId: activeJob.jobId }),
       }, 0);
-      stopPolling();
-      setSubmitting(false);
       setActiveJob(envelope.data);
+      setError('');
+      setErrorBullets([]);
       await refreshHistory();
+      void pollJob(activeJob.jobId);
     } catch (requestError) {
       setError(workerErrorMessage(requestError, 'İptal işlemi başarısız oldu.'));
+      setErrorBullets(collectFailureBullets(requestError));
     }
-  }, [activeJob, refreshHistory, stopPolling]);
+  }, [activeJob, refreshHistory, pollJob]);
 
   const openHistoryJob = useCallback(async (jobId: string) => {
     setError('');
+    setErrorBullets([]);
     stopPolling();
     try {
       const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
@@ -700,6 +696,7 @@ export default function ImagePage(): JSX.Element {
       }
     } catch (requestError) {
       setError(workerErrorMessage(requestError, 'Geçmiş kaydı açılamadı.'));
+      setErrorBullets(collectFailureBullets(requestError));
     }
   }, [ensureImageUrl, pollJob, stopPolling]);
 
@@ -728,7 +725,12 @@ export default function ImagePage(): JSX.Element {
 
       {error ? (
         <div className="rounded-2xl border border-red-700 bg-red-950/70 px-4 py-3 text-sm text-red-100">
-          {error}
+          <div>{error}</div>
+          {errorBullets.length > 0 ? (
+            <div className="mt-2 space-y-1 text-xs">
+              {errorBullets.map((bullet) => <div key={bullet}>• {bullet}</div>)}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -777,7 +779,7 @@ export default function ImagePage(): JSX.Element {
             <div className="grid gap-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-slate-700">Modeller</span>
-                <span className="text-xs text-slate-500">Ekstra model eklenirse buraya otomatik gelir.</span>
+                <span className="text-xs text-slate-500">Worker’dan gelen modeller burada görünür.</span>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 {models.map((item) => {
@@ -815,22 +817,6 @@ export default function ImagePage(): JSX.Element {
                 })}
               </div>
             </div>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Model seçimi (yedek alan)</span>
-              <select
-                value={selectedModelId}
-                onChange={(e) => setSelectedModelId(e.target.value)}
-                className="rounded-2xl border border-slate-300 px-4 py-3"
-                disabled={modelsLoading}
-              >
-                {models.map((item) => (
-                  <option key={modelKey(item)} value={modelKey(item)}>
-                    {modelLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
 
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2">
@@ -929,12 +915,6 @@ export default function ImagePage(): JSX.Element {
                     <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.override)}</pre>
                   </div>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-700">
-                  <div><strong>price:</strong> {selectedModel.imagePriceUsd ?? '-'} USD / görsel</div>
-                  <div className="mt-1"><strong>ratio:</strong> {'{'} w: {ratioObject.w}, h: {ratioObject.h} {'}'}</div>
-                  <div className="mt-1"><strong>test_mode:</strong> {testMode ? 'true' : 'false'}</div>
-                  <div className="mt-1"><strong>quality:</strong> {quality}</div>
-                </div>
               </div>
             ) : null}
 
@@ -950,7 +930,7 @@ export default function ImagePage(): JSX.Element {
               <button
                 type="button"
                 onClick={() => void handleCancel()}
-                disabled={!activeJob || TERMINAL.has(activeJob.status) || !submitting}
+                disabled={!activeJob || TERMINAL.has(activeJob.status)}
                 className="rounded-2xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 İptal et
@@ -1000,6 +980,45 @@ export default function ImagePage(): JSX.Element {
                 </div>
               )}
 
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Aşama günlüğü</div>
+                <div className="mt-3 space-y-3">
+                  {activeEvents.length === 0 ? (
+                    <div className="text-xs text-slate-500">Henüz olay kaydı yok.</div>
+                  ) : activeEvents.map((event, index) => (
+                    <div key={`${event.at || 'event'}_${index}`} className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs font-semibold text-slate-900">{event.title || event.functionName || 'Olay'}</div>
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${event.status === 'error' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {eventStatusBadge(event.status)}
+                          </span>
+                          <span className="text-[10px] text-slate-400">{formatDate(event.at)}</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-700">{event.summary || event.message || '-'}</div>
+                      {event.code ? <div className="mt-2 text-[11px] text-slate-500">Kod: {event.code}</div> : null}
+                      {normalizeArray<string>(event.details).length > 0 ? (
+                        <div className="mt-2 space-y-1 text-[11px] text-slate-500">
+                          {normalizeArray<string>(event.details).map((detail) => <div key={detail}>• {detail}</div>)}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Storage step log</div>
+                <div className="mt-3 space-y-2">
+                  {activeStorageLogs.length === 0 ? (
+                    <div className="text-xs text-slate-500">Henüz storage log kaydı yok.</div>
+                  ) : activeStorageLogs.map((line, index) => (
+                    <pre key={`${line}_${index}`} className="overflow-x-auto rounded-xl bg-slate-950 p-3 text-[11px] text-emerald-300">{line}</pre>
+                  ))}
+                </div>
+              </div>
+
               {activeJob.storage?.path ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
                   <div>Storage path: {activeJob.storage.path}</div>
@@ -1040,7 +1059,7 @@ export default function ImagePage(): JSX.Element {
                 <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
               </div>
               <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
-              <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
+              <div className="text-xs text-slate-500">{item.requestSummary?.displayName || item.requestSummary?.model || item.request?.modelId || '-'}</div>
             </button>
           ))}
         </div>
