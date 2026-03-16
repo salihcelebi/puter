@@ -4,7 +4,8 @@
 // Storage strategy: try multiple candidate folders in order, use first successful real path
 
 const WORKER_NAME = 'imgs';
-const WORKER_VERSION = '19.0.0';
+const WORKER_VERSION = '19.2.0';
+const STORAGE_CACHE_KEY = 'imgs:storage:working_root';
 const JOB_PREFIX = 'ai_job:';
 const HISTORY_LIMIT = 20;
 const KV_SAFE_LIMIT = 390000;
@@ -361,15 +362,34 @@ function buildRelativeAssetPath(jobId, ext) {
   return `${yyyy}/${mm}/${dd}/${safeJobId}.${ext}`;
 }
 
-function getStorageRootCandidates() {
+async function getStorageRootCandidates() {
   const seen = new Set();
   const list = [];
-  for (const item of STORAGE_ROOT_CANDIDATES) {
+  const cached = await getCachedStorageRoot();
+  const all = cached ? [cached, ...STORAGE_ROOT_CANDIDATES] : STORAGE_ROOT_CANDIDATES;
+  for (const item of all) {
     const normalized = ss(item);
     if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     list.push(normalized);
   }
+  return list;
+}
+
+
+
+function makeEvent(type, message, extra = null) {
+  return {
+    time: nowIso(),
+    type: ss(type, 'info'),
+    message: ss(message, ''),
+    extra: extra || null
+  };
+}
+
+function pushJobEvent(job, type, message, extra = null) {
+  const list = Array.isArray(job?.events) ? job.events.slice(-39) : [];
+  list.push(makeEvent(type, message, extra));
   return list;
 }
 
@@ -390,6 +410,34 @@ async function withTimeout(promise, ms) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+
+async function getCachedStorageRoot() {
+  try {
+    const raw = await me.puter.kv.get(STORAGE_CACHE_KEY);
+    if (!raw) return '';
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return ss(parsed?.root || parsed?.path || parsed, '');
+      } catch (_) {
+        return ss(raw, '');
+      }
+    }
+    return ss(raw?.root || raw?.path, '');
+  } catch (_) {
+    return '';
+  }
+}
+
+async function setCachedStorageRoot(root) {
+  const value = ss(root, '');
+  if (!value) return;
+  try {
+    await me.puter.kv.set(STORAGE_CACHE_KEY, JSON.stringify({ root: value, savedAt: nowIso() }));
+  } catch (_) {}
 }
 
 async function kvGet(key) {
@@ -550,11 +598,59 @@ async function persistGeneratedImage(jobId, source) {
   const mimeType = blob.type || `image/${ext}`;
   const relativePath = buildRelativeAssetPath(jobId, ext);
   const attempts = [];
+  const roots = await getStorageRootCandidates();
 
-  for (const root of getStorageRootCandidates()) {
+  await jobUpdate(jobId, async (job) => ({
+    ...job,
+    progress: 74,
+    step: 'Depolama klasörleri hazırlanıyor',
+    events: pushJobEvent(job, 'storage', 'Depolama root adayları hazırlandı', { roots })
+  }));
+
+  for (const root of roots) {
+    const attemptedPath = joinFsPath(root, relativePath);
     try {
+      await jobUpdate(jobId, async (job) => ({
+        ...job,
+        progress: 78,
+        step: `Depolamaya yazılıyor: ${root}`,
+        storage: {
+          ...(job.storage || {}),
+          attemptedPath,
+          storageRoot: root
+        },
+        events: pushJobEvent(job, 'storage_attempt', 'Depolama yolu deneniyor', { root, attemptedPath })
+      }));
+
+      try {
+        const dirOnly = attemptedPath.split('/').slice(0, -1).join('/');
+        if (dirOnly) {
+          await me.puter.fs.mkdir(dirOnly, { createMissingParents: true, dedupeName: false });
+        }
+      } catch (_) {}
+
       const stored = await tryWriteToStorageCandidate(root, relativePath, blob);
       const fileName = stored.resolvedPath.split('/').pop();
+      await setCachedStorageRoot(root);
+      await jobUpdate(jobId, async (job) => ({
+        ...job,
+        progress: 92,
+        step: 'Depolama doğrulandı',
+        storage: {
+          ...(job.storage || {}),
+          path: stored.resolvedPath,
+          attemptedPath: stored.attemptedPath,
+          storageRoot: root,
+          verified: true,
+          mimeType,
+          fileName
+        },
+        events: pushJobEvent(job, 'storage_success', 'Depolama başarılı', {
+          root,
+          attemptedPath: stored.attemptedPath,
+          resolvedPath: stored.resolvedPath
+        })
+      }));
       return {
         path: stored.resolvedPath,
         attemptedPath: stored.attemptedPath,
@@ -566,7 +662,18 @@ async function persistGeneratedImage(jobId, source) {
         triedRoots: attempts.map((item) => item.root)
       };
     } catch (error) {
-      attempts.push({ root, error: normalizeError(error) });
+      const normalized = normalizeError(error);
+      attempts.push({ root, error: normalized, attemptedPath });
+      await jobUpdate(jobId, async (job) => ({
+        ...job,
+        progress: 80,
+        step: `Depolama yolu başarısız: ${root}`,
+        events: pushJobEvent(job, 'storage_error', 'Depolama yolu başarısız oldu', {
+          root,
+          attemptedPath,
+          error: normalized
+        })
+      }));
     }
   }
 
@@ -613,6 +720,7 @@ function baseJobRecord(jobId, prompt, negativePrompt, ratio, quality, style, mod
       n: 1
     },
     error: null,
+    events: [makeEvent('info', 'İş oluşturuldu')],
     createdAt: nowIso(),
     updatedAt: nowIso(),
     finishedAt: null
@@ -624,7 +732,8 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
   await jobUpdate(jobId, async (job) => ({
     ...job,
     progress: 12,
-    step: 'Model hazırlanıyor'
+    step: 'Model hazırlanıyor',
+    events: pushJobEvent(job, 'info', 'Model ve üretim planı hazırlanıyor')
   }));
 
   const plans = buildGenerationAttemptPlans(ratio, quality, style);
@@ -636,7 +745,8 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
     await jobUpdate(jobId, async (job) => ({
       ...job,
       progress,
-      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`
+      step: `AI görsel üretiyor (deneme ${plan.index}/${plans.length})`,
+      events: pushJobEvent(job, 'ai_attempt', 'AI üretim denemesi başladı', { attempt: plan.index, total: plans.length, ratio: plan.ratio, quality: plan.quality, style: plan.style })
     }));
 
     try {
@@ -657,7 +767,8 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
   await jobUpdate(jobId, async (job) => ({
     ...job,
     progress: 72,
-    step: 'Görsel depolamaya yazılıyor'
+    step: 'Görsel depolamaya yazılıyor',
+    events: pushJobEvent(job, 'storage', 'Görsel üretildi, depolama aşamasına geçildi')
   }));
 
   const stored = await persistGeneratedImage(jobId, src);
@@ -679,7 +790,8 @@ async function runGeneration(jobId, prompt, negativePrompt, ratio, quality, styl
     outputUrl: stored.readUrl,
     outputUrls: stored.readUrl ? [stored.readUrl] : [],
     outputUrlExpiresAt: stored.expiresAt,
-    error: null
+    error: null,
+    events: pushJobEvent(job, 'done', 'İş başarıyla tamamlandı', { storagePath: stored.path, storageRoot: stored.storageRoot })
   }));
 
   return {
@@ -704,7 +816,8 @@ router.get('/', async ({ request }) => {
       totalModels: catalog.items.length,
       modelsSource: catalog.source,
       pollIntervalMs: POLL_INTERVAL_HINT_MS,
-      storageCandidates: getStorageRootCandidates()
+      storageCandidates: await getStorageRootCandidates(),
+      cachedStorageRoot: await getCachedStorageRoot()
     }), 200, 'no-store', request);
   } catch (error) {
     return jsonResponse(errEnvelope(requestId, traceId, startedAt, 'WORKER_INFO_FAILED', normalizeError(error), [], 500), 500, 'no-store', request);
@@ -720,7 +833,8 @@ router.get('/health', async ({ request }) => {
     worker: WORKER_NAME,
     version: WORKER_VERSION,
     storageMode: 'me.puter.fs',
-    modelSource: MODELS_WORKER_URL
+    modelSource: MODELS_WORKER_URL,
+    cachedStorageRoot: await getCachedStorageRoot()
   }), 200, 'no-store', request);
 });
 
@@ -781,14 +895,16 @@ router.post('/generate', async ({ request }) => {
           message: normalizeError(generationError),
           retryable: true,
           bullets
-        }
+        },
+        events: pushJobEvent(job, 'failed', 'Depolama başarısız oldu', { bullets })
       }));
       const failedJob = await jobRead(jobId);
       return jsonResponse(
         errEnvelope(requestId, traceId, startedAt, 'IMAGE_STORAGE_FAILED', 'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.', bullets, 500, {
           feature: 'image',
           job: failedJob,
-          modelsSource: catalog.source
+          modelsSource: catalog.source,
+          storageStrategy: 'PATH_POOL + mkdir + createMissingParents + realPath + stat + getReadURL + KV cache'
         }),
         500,
         'no-store',
@@ -805,7 +921,8 @@ router.post('/generate', async ({ request }) => {
           progress: 100,
           step: 'Ana çöküş',
           finishedAt: nowIso(),
-          error: { message, retryable: true }
+          error: { message, retryable: true },
+          events: pushJobEvent(job, 'failed', 'Ana çöküş', { error: message })
         }));
       } catch (_) {}
     }
