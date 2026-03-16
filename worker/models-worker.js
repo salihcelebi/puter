@@ -1,30 +1,18 @@
 /*
 DOSYA: models-worker.js
-AMAÇ:MODEL KATALOĞUNU GÜVENLİ JSON API OLARAK SUNMAK.
+AMAÇ: EXCEL'DEN ÜRETİLMİŞ MODEL KATALOĞUNU GÜVENLİ JSON API OLARAK SUNMAK.
 NOT: BU WORKER TEK GÖREVLİDİR; SADECE MODEL KATALOĞU SERVİSİ VERİR.
-*/
-/*
-█████████████████████████████████████████████
-1) BU DOSYA, MODEL KATALOĞU VEYA MODEL LİSTELEME İÇİN AYRILMIŞ BİR WORKER DOSYASIDIR.
-2) ANA GÖREVİ, İSTEMCİ TARAFINA KULLANILABİLİR MODEL BİLGİSİNİ JSON BİÇİMİNDE SUNMAK OLARAK DÜŞÜNÜLÜR.
-3) CHAT, IMAGE, VIDEO VE DİĞER AI ÖZELLİKLERİ İÇİN HANGİ MODELLERİN GÖRÜNÜR OLDUĞUNU TEK NOKTADA TUTMAYA YARAR.
-4) BU DOSYA, FRONTEND'İN HAM VERİ KAYNAĞIYLA UĞRAŞMASI YERİNE TEK BİR CATALOG API TÜKETMESİNİ SAĞLAR.
-5) MODEL ADI, MODEL ID, SAĞLAYICI, KATEGORİ VE FİYAT BENZERİ ALANLAR BU TÜR DOSYALARDA NORMALDE NORMALLEŞTİRİLİR.
-6) AYRI BİR MODELS WORKER KULLANMAK, CHAT VE IMAGE WORKER'LARINI VERİ KATALOĞUNDAN AYIRMAK AÇISINDAN TEMİZ BİR MİMARİ KARARDIR.
-7) ADMIN EKRANLARI VE MODEL SEÇİMİ YAPAN UI BİLEŞENLERİ BU DOSYAYA BAĞLANABİLİR.
-8) MODELLERİN FİLTRELENMESİ, SAYFALANMASI VE GÜNCEL TUTULMASI İÇİN ORTAK BİR SERVİS YÜZEYİ SAĞLAR.
-9) DOSYA KÜÇÜK GÖRÜNSE DE, PROJEDEKİ “MODEL KAYNAĞI TEK OLSUN” İHTİYACINI KARŞILAR.
-10) KISACA: BU DOSYA, UYGULAMANIN KULLANABİLDİĞİ MODELLERİ DÜZENLİ BİR KATALOG HALİNDE SUNAN MODELS API WORKER'IDIR.
-█████████████████████████████████████████████
+NOT: VERİLER /mnt/data/ai-model-catalog.xlsx DOSYASINDAN ÇIKARILMIŞ SNAPSHOT'TIR.
+NOT: PREMIUM FİYATLAR GÖSTERİLİR; 1.5X BİLGİSİ RESPONSE İÇİNDE YAZDIRILMAZ.
 */
 
 const APP_INFO = Object.freeze({
     worker: 'models-catalog',
-    version: '1.0.0',
+    version: '1.1.0',
     protocolVersion: '2026-03-13',
     purpose: 'MODEL CATALOG API',
     billingMode: 'owner_pays',
-    sourceType: 'excel-snapshot',
+    sourceType: 'curated-static',
   });
   
   const DEFAULTS = Object.freeze({
@@ -3021,6 +3009,11 @@ const APP_INFO = Object.freeze({
       const modelName = safeString(row.modelName, 'ADSIZ MODEL');
       const modelId = safeString(row.modelId, `unknown-model-${index + 1}`);
       const provider = safeString(row.provider, company);
+      const providerLabel = safeString(row.providerLabel, provider);
+      const displayName = safeString(row.displayName, `${company} · ${modelName}`);
+      const profileKey = safeString(row.profileKey);
+      const rankTag = safeString(row.rankTag);
+      const releaseDate = safeString(row.releaseDate);
       const categoryRaw = safeString(row.categoryRaw, 'GENEL');
       const badges = normalizeBadges(row.badges);
       const parameters = safeString(row.parameters, '-');
@@ -3036,16 +3029,25 @@ const APP_INFO = Object.freeze({
       const rivalAdvantage = safeString(row.rivalAdvantage);
       const sourceUrl = safeString(row.sourceUrl);
       const style = row && typeof row.style === 'object' && row.style ? row.style : {};
+      const tagUi = row && typeof row.tagUi === 'object' && row.tagUi ? row.tagUi : {};
+      const template = row && typeof row.template === 'object' && row.template ? row.template : null;
+      const profile = row && typeof row.profile === 'object' && row.profile ? row.profile : null;
+      const override = row && typeof row.override === 'object' && row.override ? row.override : null;
   
       return Object.freeze({
         id: modelId,
         company,
         provider,
+        providerLabel,
+        displayName,
+        profileKey,
+        rankTag,
         modelName,
         modelId,
         categoryRaw,
         badges,
         parameters,
+        releaseDate,
         speedLabel,
         speedScore: deriveSpeedScore(speedLabel),
         prices: Object.freeze({
@@ -3058,6 +3060,15 @@ const APP_INFO = Object.freeze({
         useCase,
         rivalAdvantage,
         sourceUrl,
+        tagUi: Object.freeze({
+          text: safeString(tagUi.text, safeString(rankTag).toUpperCase()),
+          bg: safeString(tagUi.bg, '#000000'),
+          fg: safeString(tagUi.fg, '#ffffff'),
+          rounded: safeString(tagUi.rounded, '9999px'),
+        }),
+        template: template ? Object.freeze(template) : null,
+        profile: profile ? Object.freeze(profile) : null,
+        override: override ? Object.freeze(override) : null,
         style: Object.freeze({
           brandKey: safeString(style.brandKey, 'generic'),
           accent: safeString(style.accent, '#64748b'),
@@ -3068,11 +3079,16 @@ const APP_INFO = Object.freeze({
         id: `broken-model-${index + 1}`,
         company: 'BİLİNMİYOR',
         provider: 'BİLİNMİYOR',
+        providerLabel: 'BİLİNMİYOR',
+        displayName: 'BOZUK KAYIT',
+        profileKey: '',
+        rankTag: '',
         modelName: 'BOZUK KAYIT',
         modelId: `broken-model-${index + 1}`,
         categoryRaw: 'GENEL',
         badges: Object.freeze(['GENEL']),
         parameters: '-',
+        releaseDate: '',
         speedLabel: 'Orta',
         speedScore: 50,
         prices: Object.freeze({ input: null, output: null, image: null }),
@@ -3081,6 +3097,10 @@ const APP_INFO = Object.freeze({
         useCase: '',
         rivalAdvantage: '',
         sourceUrl: '',
+        tagUi: Object.freeze({ text: '', bg: '#000000', fg: '#ffffff', rounded: '9999px' }),
+        template: null,
+        profile: null,
+        override: null,
         style: Object.freeze({ brandKey: 'generic', accent: '#64748b' }),
       });
     }
