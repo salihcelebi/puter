@@ -4,8 +4,8 @@
 // Doğru başarı semantiği: completed sadece dosya gerçekten yazıldıysa
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
-const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.0.3';
+const WORKER_NAME = 'imgs';
+const WORKER_VERSION = '18.0.4';
 const JOB_PREFIX = 'ai_job:';
 const PROVIDER = 'openai-image-generation';
 const MAX_GENERATION_ATTEMPTS = 20;
@@ -461,6 +461,12 @@ async function ensureFreshReadUrl(job) {
   }
 }
 
+
+// TÜRKÇE NOT: Storage zincirinin her adımını tek satırda raporlamak için zorunlu özet log yardımcı fonksiyonu.
+function logStorageStep({ jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode }) {
+  console.log(`STORAGE_STEP jobId=${ss(jobId,'-')} inputPath=${ss(inputPath,'-')} resolvedPath=${ss(resolvedPath,'-')} writeOk=${writeOk ? 'true' : 'false'} statOk=${statOk ? 'true' : 'false'} readUrlOk=${readUrlOk ? 'true' : 'false'} failCode=${ss(failCode,'-')}`);
+}
+
 async function sourceToBlob(src) {
   if (src && src.startsWith('data:')) {
     return dataUrlToBlob(src);
@@ -482,31 +488,77 @@ async function sourceToBlob(src) {
 }
 
 async function persistGeneratedImage(jobId, source) {
+  // TÜRKÇE NOT: Storage zincirinde path sapmasını önlemek için path havuzu ve adım-adım doğrulama kullanılır.
   const blob = await sourceToBlob(source);
   const ext = source && source.startsWith('data:')
     ? guessExtensionFromDataUrl(source)
     : (blob.type || '').includes('jpeg') ? 'jpg' : (blob.type || '').includes('webp') ? 'webp' : 'png';
-  const targetPath = buildStoragePath(jobId, ext);
-  const fileName = targetPath.split('/').pop();
-  const mimeType = blob.type || `image/${ext}`;
+  const inputPath = buildStoragePath(jobId, ext);
+  const pathPool = [inputPath];
 
-  await me.puter.fs.write(targetPath, blob, {
-    overwrite: true,
-    dedupeName: true,
-    createMissingParents: true
-  });
+  let resolvedPath = inputPath;
+  let writeOk = false;
+  let statOk = false;
+  let readUrlOk = false;
+  let failCode = null;
 
-  await me.puter.fs.stat(targetPath);
+  try {
+    try {
+      const writeResult = await me.puter.fs.write(inputPath, blob, {
+        overwrite: true,
+        dedupeName: true,
+        createMissingParents: true
+      });
+      writeOk = true;
 
-  const readUrl = await me.puter.fs.getReadURL(targetPath, URL_EXPIRES_MS);
+      const candidatePath = ss(writeResult?.path || writeResult?.realPath || writeResult?.resolvedPath || writeResult, '');
+      if (candidatePath && !pathPool.includes(candidatePath)) pathPool.unshift(candidatePath);
+    } catch (e) {
+      failCode = 'WRITE_FAIL';
+      throw new Error(`FS write başarısız: ${normalizeError(e)}`);
+    }
 
-  return {
-    path: targetPath,
-    fileName,
-    mimeType,
-    readUrl,
-    expiresAt: new Date(Date.now() + URL_EXPIRES_MS).toISOString()
-  };
+    try {
+      for (const candidate of pathPool) {
+        try {
+          await me.puter.fs.stat(candidate);
+          resolvedPath = candidate;
+          statOk = true;
+          break;
+        } catch (_) {}
+      }
+      if (!statOk) throw new Error(`FS stat başarısız. Path havuzu: ${pathPool.join(', ')}`);
+    } catch (e) {
+      failCode = 'STAT_FAIL';
+      throw new Error(normalizeError(e));
+    }
+
+    let readUrl = '';
+    try {
+      readUrl = await me.puter.fs.getReadURL(resolvedPath, URL_EXPIRES_MS);
+      readUrlOk = !!ss(readUrl, '');
+      if (!readUrlOk) throw new Error('FS read URL boş döndü');
+    } catch (e) {
+      failCode = 'READ_URL_FAIL';
+      throw new Error(`FS read URL başarısız: ${normalizeError(e)}`);
+    }
+
+    logStorageStep({ jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode: failCode || 'NONE' });
+
+    const fileName = resolvedPath.split('/').pop();
+    const mimeType = blob.type || `image/${ext}`;
+
+    return {
+      path: resolvedPath,
+      fileName,
+      mimeType,
+      readUrl,
+      expiresAt: new Date(Date.now() + URL_EXPIRES_MS).toISOString()
+    };
+  } catch (e) {
+    logStorageStep({ jobId, inputPath, resolvedPath, writeOk, statOk, readUrlOk, failCode: failCode || 'STORAGE_FAIL' });
+    throw e;
+  }
 }
 
 async function runGeneration(jobId, prompt, ratio, quality, style, modelId) {
@@ -688,7 +740,7 @@ router.post('/generate', async ({ request }) => {
           rid,
           trid,
           t,
-          'IMAGE_STORAGE_FAILED',
+          'STORAGE_FAIL',
           'Görsel üretimi tamamlandı ancak me.puter depolamaya yazılamadı.',
           [
             'completed durumu verilmedi',

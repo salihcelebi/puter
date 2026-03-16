@@ -56,7 +56,7 @@ import CreditHistory from './pages/CreditHistory';
 import Chat from './pages/AI/Chat';
 import Chat1 from './pages/AI/Chat1';
 import Image from './pages/AI/image';
-import VideoGen from './pages/AI/VideoGen';
+import VideoGen from './pages/AI/video';
 import TTS from './pages/AI/TTS';
 import Music from './pages/AI/Music';
 import AdminDashboard from './pages/Admin/AdminDashboard';

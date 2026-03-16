@@ -1,4 +1,4 @@
-// seed-model-prices.ts
+// modeller.ts
 // BUNU kv.ts'NİN İÇİNE YAPIŞTIRMA.
 // kv.ts adapter kalsın.
 // Bu dosyayı projene ayrı ekle ve fiyatları KV'ye seed et.
