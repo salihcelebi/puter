@@ -1,6 +1,6 @@
-# README.md
+ README.md
 
-> DOĞRULAMA NOTU  
+> DOĞRULAMA NOTU     
 > Bu README, yüklediğin `nisai.zip` içindeki **69 dosyanın okunmuş içeriğine** göre hazırlanmıştır.  
 > `server/db/kv.json` dosyası bu **zip snapshot’ında 0 byte / 0 satır** durumundadır; çalışan bir local instance’ta aynı dosya binlerce satıra büyüyebilir.  
 > Runtime’da üretilen/veri taşıyan dosyalar, kaynak kod dosyalarından ayrı mantıkla açıklanmıştır.  
