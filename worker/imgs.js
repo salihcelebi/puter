@@ -1,11 +1,11 @@
-// idm.js — v18.0.0
+// imgs.js — v18.0.0
 // Tek model: DALL-E 3
 // Tamamen me.puter yaklaşımı
 // Doğru başarı semantiği: completed sadece dosya gerçekten yazıldıysa
 // UI fallback: anlık generate cevabında inlinePreview döner; kalıcı gösterim için outputUrl / jobs/image/:id kullanılır
 
-const WORKER_NAME = 'idm';
-const WORKER_VERSION = '18.1.0';
+const WORKER_NAME = 'imgs';
+const WORKER_VERSION = '18.1.1';
 const JOB_PREFIX = 'ai_job:';
 const PROVIDER = 'openai-image-generation';
 const MAX_GENERATION_ATTEMPTS = 20;
@@ -41,7 +41,7 @@ let modelCatalogCache = {
 // 04) me.puter.kv sadece metadata için kullan
 // 05) completed = storage gerçekten başarılı
 // 06) failed_storage = AI üretildi ama depolanamadı
-// 07) relative path kullan
+// 07) mutlak Puter path kullan
 // 08) createMissingParents kullan
 // 09) dedupeName kullan
 // 10) Blob ile yaz
@@ -362,12 +362,25 @@ function guessExtensionFromDataUrl(dataUrl) {
   return 'png';
 }
 
+function sanitizePathPart(value, fallback = 'item') {
+  const raw = ss(value, fallback);
+  const cleaned = raw
+    .normalize('NFKD')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
 function buildStoragePath(jobId, ext) {
   const d = new Date();
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `idm-images/${yyyy}/${mm}/${dd}/${jobId}.${ext}`;
+  const safeJobId = sanitizePathPart(jobId, 'job');
+  const safeExt = sanitizePathPart(ext, 'png').replace(/^\.+/, '') || 'png';
+  return `~/imgs-images/${yyyy}/${mm}/${dd}/${safeJobId}.${safeExt}`;
 }
 
 function baseJobRecord(jobId, prompt, ratio, quality, modelId) {
@@ -578,26 +591,69 @@ async function persistGeneratedImage(jobId, source) {
   const ext = source && source.startsWith('data:')
     ? guessExtensionFromDataUrl(source)
     : (blob.type || '').includes('jpeg') ? 'jpg' : (blob.type || '').includes('webp') ? 'webp' : 'png';
-  const targetPath = buildStoragePath(jobId, ext);
-  const fileName = targetPath.split('/').pop();
+  const attemptedPath = buildStoragePath(jobId, ext);
   const mimeType = blob.type || `image/${ext}`;
 
-  await me.puter.fs.write(targetPath, blob, {
-    overwrite: true,
-    dedupeName: true,
-    createMissingParents: true
-  });
+  let written;
+  try {
+    written = await me.puter.fs.write(attemptedPath, blob, {
+      overwrite: true,
+      dedupeName: false,
+      createMissingParents: true
+    });
+  } catch (error) {
+    const e = new Error(`Puter depolamaya yazma başarısız: ${normalizeError(error)}`);
+    e.code = 'STORAGE_WRITE_FAILED';
+    e.stage = 'write';
+    e.meta = {
+      attemptedPath,
+      blobType: blob.type || null,
+      blobSize: Number(blob.size || 0)
+    };
+    throw e;
+  }
 
-  await me.puter.fs.stat(targetPath);
+  const resolvedPath = ss(written?.path || written?.pathname || attemptedPath, attemptedPath);
+  const fileName = resolvedPath.split('/').pop();
 
-  const readUrl = await me.puter.fs.getReadURL(targetPath, URL_EXPIRES_MS);
+  try {
+    await me.puter.fs.stat(resolvedPath);
+  } catch (error) {
+    const e = new Error(`Puter depolama doğrulaması başarısız: ${normalizeError(error)}`);
+    e.code = 'STORAGE_STAT_FAILED';
+    e.stage = 'stat';
+    e.meta = {
+      attemptedPath,
+      resolvedPath,
+      blobType: blob.type || null,
+      blobSize: Number(blob.size || 0)
+    };
+    throw e;
+  }
+
+  let readUrl;
+  try {
+    readUrl = await me.puter.fs.getReadURL(resolvedPath, URL_EXPIRES_MS);
+  } catch (error) {
+    const e = new Error(`Puter okuma bağlantısı üretilemedi: ${normalizeError(error)}`);
+    e.code = 'STORAGE_URL_FAILED';
+    e.stage = 'getReadURL';
+    e.meta = {
+      attemptedPath,
+      resolvedPath,
+      blobType: blob.type || null,
+      blobSize: Number(blob.size || 0)
+    };
+    throw e;
+  }
 
   return {
-    path: targetPath,
+    path: resolvedPath,
     fileName,
     mimeType,
     readUrl,
-    expiresAt: new Date(Date.now() + URL_EXPIRES_MS).toISOString()
+    expiresAt: new Date(Date.now() + URL_EXPIRES_MS).toISOString(),
+    attemptedPath
   };
 }
 
