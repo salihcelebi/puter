@@ -1,61 +1,65 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
-type EventStatus = 'started' | 'success' | 'failed' | 'progress' | string;
-
-type WorkerErrorShape = {
-  message?: string;
-  bullets?: string[];
-  retryable?: boolean;
-};
+type ProviderRegistry = 'openai-image-generation' | 'together' | 'gemini' | 'xai';
 
 type WorkerEnvelope<T> = {
   ok: boolean;
   code: string;
   data: T;
-  error?: WorkerErrorShape | null;
+  error?: { message?: string; bullets?: string[]; retryable?: boolean } | null;
   meta?: Record<string, unknown> | null;
-  worker?: string;
-  version?: string;
-  requestId?: string;
-  traceId?: string;
-  time?: string;
-  durationMs?: number;
 };
 
-type WorkerEvent = {
-  stage?: string;
-  status?: EventStatus;
-  title?: string;
-  successMessage?: string;
-  errorMessage?: string;
-  timestamp?: string;
-  details?: Record<string, unknown> | null;
-  relatedPath?: string | null;
-  relatedModel?: string | null;
-  attemptNo?: number | null;
+type TagUi = {
+  text?: string;
+  bg?: string;
+  fg?: string;
+  rounded?: string;
 };
 
-type ModelItem = {
+type TemplateRecord = Record<string, unknown> | null;
+type ProfileRecord = Record<string, unknown> | null;
+type OverrideRecord = Record<string, unknown> | null;
+
+type RawModelItem = {
   id?: string;
   modelId?: string;
   modelName?: string;
   provider?: string;
+  providerLabel?: string;
   company?: string;
+  displayName?: string;
   categoryRaw?: string;
   badges?: string[];
   imagePrice?: number | null;
-  pricing?: { usdPerImage?: number | null };
+  prices?: { image?: number | null; usdPerImage?: number | null };
   speedLabel?: string;
   standoutFeature?: string;
   useCase?: string;
   traits?: string[];
   style?: { accent?: string; brandKey?: string };
+  tagUi?: TagUi;
+  template?: TemplateRecord;
+  profile?: ProfileRecord;
+  override?: OverrideRecord;
   [key: string]: unknown;
 };
 
+type ModelItem = RawModelItem & {
+  displayName: string;
+  provider: ProviderRegistry;
+  model: string;
+  providerLabel: string;
+  imagePriceUsd: number | null;
+  template: TemplateRecord;
+  profile: ProfileRecord;
+  override: OverrideRecord;
+  tagUi: Required<TagUi>;
+};
+
 type ModelsPayload = {
-  items?: ModelItem[];
+  items?: RawModelItem[];
   total?: number;
   source?: string;
   feature?: string;
@@ -95,9 +99,11 @@ type JobRecord = {
     fileName?: string | null;
     verified?: boolean;
   };
-  error?: WorkerErrorShape | null;
-  lastEvent?: WorkerEvent | null;
-  events?: WorkerEvent[];
+  error?: {
+    message?: string;
+    bullets?: string[];
+    retryable?: boolean;
+  } | null;
 };
 
 type HistoryPayload = {
@@ -107,78 +113,44 @@ type HistoryPayload = {
   feature?: string;
 };
 
-type WorkerRequestFailure = {
-  message: string;
-  envelope?: WorkerEnvelope<unknown> | null;
-  status?: number;
-};
+type RatioObject = { w: number; h: number };
 
 const MODELS_BASE_URL = 'https://models-worker.puter.work';
 const IMGS_BASE_URL = 'https://imgs.puter.work';
 const POLL_MS = 1800;
 const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed_storage']);
-const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:5', '3:4', '3:2', '2:3'];
-const QUALITY_OPTIONS = ['standard', 'hd'];
+const DEFAULT_RATIO: RatioObject = { w: 1024, h: 1024 };
+const DEFAULT_QUALITY = 'medium';
+const DEFAULT_STYLE = '';
+const QUALITY_OPTIONS = ['high', 'medium', 'low'];
 const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'];
-
-const PROMPT_PRESETS = [
-  {
-    label: 'Sinematik İstanbul',
-    prompt:
-      'Sisli İstanbul sokaklarında yağmur sonrası gece sahnesi, neon yansımalar, sinematik ışık, detaylı mimari, yüksek atmosfer, gerçekçi kompozisyon',
-    negativePrompt:
-      'bulanık, düşük çözünürlük, bozuk anatomi, yazı, watermark, ekstra uzuv, kötü perspektif',
-    ratio: '16:9',
-    quality: 'hd',
-    style: 'cinematic',
-  },
-  {
-    label: 'Lüks Ürün Çekimi',
-    prompt:
-      'Mat siyah arka planda premium akıllı saat ürün fotoğrafı, stüdyo ışığı, yansıma kontrollü, ultra net detay, reklam kalitesi',
-    negativePrompt:
-      'kirli yüzey, düşük kalite, aşırı parlama, deforme ürün, yazı, logo hatası, watermark',
-    ratio: '1:1',
-    quality: 'hd',
-    style: 'photorealistic',
-  },
-  {
-    label: 'Anime Kahraman',
-    prompt:
-      'Rüzgarlı tepede duran genç anime kahraman, dramatik gökyüzü, güçlü poz, detaylı kostüm, enerjik ışık çizgileri, yüksek kalite illüstrasyon',
-    negativePrompt:
-      'gerçekçi yüz, düşük detay, bulanık çizim, kötü eller, ekstra parmak, yazı, watermark',
-    ratio: '4:5',
-    quality: 'hd',
-    style: 'anime',
-  },
+const QUICK_PROMPTS = [
+  'Sisli İstanbul sokaklarında yağmur sonrası gece sahnesi, neon yansımalar, sinematik ışık, detaylı mimari, yüksek atmosfer, gerçekçi kompozisyon',
+  'Lüks ürün çekimi, yumuşak stüdyo ışığı, siyah arka plan, premium ambalaj, ultra net detay, reklam kalitesi',
+  'Anime kahraman, güçlü poz, dinamik saç, parlayan gözler, yüksek kontrast, detaylı kostüm, etkileyici arka plan',
 ];
 
 function buildUrl(base: string, path: string): string {
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function modelKey(model: ModelItem): string {
-  return String(model.modelId || model.id || '').trim();
+function safeText(value: unknown, fallback = ''): string {
+  const text = String(value ?? '').trim();
+  return text || fallback;
 }
 
-function modelLabel(model: ModelItem): string {
-  const provider = String(model.provider || model.company || 'Model');
-  const name = String(model.modelName || model.modelId || model.id || 'Bilinmeyen model');
-  return `${provider} · ${name}`;
+function safeNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function isImageModel(model: ModelItem): boolean {
-  return String(model.categoryRaw || '').trim().toLowerCase() === 'image generation';
+function safePrice(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function pickImages(job: JobRecord | null): string[] {
-  if (!job) return [];
-  const raw = [
-    ...(Array.isArray(job.outputUrls) ? job.outputUrls : []),
-    ...(job.outputUrl ? [job.outputUrl] : []),
-  ].filter(Boolean) as string[];
-  return [...new Set(raw)];
+function normalizeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
 
 function formatDate(value?: string | null): string {
@@ -192,132 +164,270 @@ function formatDate(value?: string | null): string {
 
 function statusText(status?: JobStatus): string {
   switch (status) {
-    case 'queued':
-      return 'Sırada';
-    case 'processing':
-      return 'Üretiliyor';
-    case 'completed':
-      return 'Tamamlandı';
-    case 'failed':
-      return 'Başarısız';
-    case 'failed_storage':
-      return 'Depolama hatası';
-    case 'cancelled':
-      return 'İptal edildi';
-    default:
-      return 'Bilinmiyor';
+    case 'queued': return 'Sırada';
+    case 'processing': return 'Üretiliyor';
+    case 'completed': return 'Tamamlandı';
+    case 'failed': return 'Başarısız';
+    case 'failed_storage': return 'Depolama hatası';
+    case 'cancelled': return 'İptal edildi';
+    default: return 'Bilinmiyor';
   }
 }
 
-function statusBadgeClass(status?: JobStatus): string {
-  switch (status) {
-    case 'completed':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'processing':
-    case 'queued':
-      return 'border-blue-200 bg-blue-50 text-blue-700';
-    case 'failed':
-    case 'failed_storage':
-      return 'border-red-200 bg-red-50 text-red-700';
-    case 'cancelled':
-      return 'border-amber-200 bg-amber-50 text-amber-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
+function workerErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof DOMException && error.name === 'AbortError') return 'İstek zaman aşımına uğradı.';
+  if (error instanceof Error) return error.message || fallback;
+  return fallback;
+}
+
+function isImageModel(model: RawModelItem): boolean {
+  return safeText(model.categoryRaw).toLowerCase() === 'image generation';
+}
+
+function normalizeProviderRegistry(rawProvider: unknown, rawModel: unknown): ProviderRegistry {
+  const providerText = safeText(rawProvider).toLowerCase();
+  const modelText = safeText(rawModel).toLowerCase();
+
+  if (providerText === 'openai-image-generation') return 'openai-image-generation';
+  if (providerText === 'together') return 'together';
+  if (providerText === 'gemini') return 'gemini';
+  if (providerText === 'xai') return 'xai';
+
+  if (modelText.startsWith('openai/')) return 'openai-image-generation';
+  if (modelText.startsWith('google/gemini') || modelText.startsWith('google/imagen')) return 'gemini';
+  if (modelText.startsWith('black-forest-labs/') || modelText.startsWith('ideogram/') || modelText.includes('flux')) return 'together';
+  if (modelText.startsWith('xai/') || modelText.includes('grok')) return 'xai';
+
+  return 'openai-image-generation';
+}
+
+function normalizeCanonicalModel(rawModel: unknown): string {
+  const model = safeText(rawModel);
+  if (!model) return '';
+
+  const aliases: Record<string, string> = {
+    'black-forest-labs/flux-1-schnell': 'black-forest-labs/flux.1-schnell',
+    'black-forest-labs/flux-1-dev': 'black-forest-labs/flux.1-dev',
+    'google/gemini-3-pro-image-preview': 'google/gemini-3-pro-image-preview',
+    'google/gemini-3.1-flash-image-preview': 'google/gemini-3.1-flash-image-preview',
+    'google/imagen-4.0-ultra': 'google/imagen-4.0-ultra',
+    'openai/gpt-image-1': 'openai/gpt-image-1',
+  };
+
+  return aliases[model] || model;
+}
+
+function buildTemplate(provider: ProviderRegistry, model: string): Record<string, unknown> {
+  return {
+    prompt: 'zorunlu metin alanı',
+    provider,
+    model,
+    test_mode: false,
+    quality: provider === 'openai-image-generation' ? 'medium' : undefined,
+    ratio: { ...DEFAULT_RATIO },
+  };
+}
+
+function buildProfile(provider: ProviderRegistry, model: string): Record<string, unknown> {
+  if (model === 'openai/gpt-image-1') {
+    return {
+      provider: 'openai-image-generation',
+      model: 'openai/gpt-image-1',
+      prompt: 'zorunlu metin alanı',
+      test_mode: 'true | false',
+      quality: 'high | medium | low',
+      ratio: { ...DEFAULT_RATIO },
+    };
   }
-}
 
-function eventStatusClass(status?: EventStatus): string {
-  switch (status) {
-    case 'success':
-      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'failed':
-      return 'border-red-200 bg-red-50 text-red-700';
-    case 'started':
-      return 'border-sky-200 bg-sky-50 text-sky-700';
-    case 'progress':
-      return 'border-violet-200 bg-violet-50 text-violet-700';
-    default:
-      return 'border-slate-200 bg-slate-50 text-slate-700';
+  if (model === 'black-forest-labs/flux.1-schnell') {
+    return {
+      provider: 'together',
+      model: 'black-forest-labs/flux.1-schnell',
+      prompt: 'zorunlu metin alanı',
+      test_mode: 'true | false',
+      ratio: { ...DEFAULT_RATIO },
+      response_format: 'url | b64_json',
+    };
   }
+
+  if (model === 'google/imagen-4.0-ultra') {
+    return {
+      provider: 'gemini',
+      model: 'google/imagen-4.0-ultra',
+      prompt: 'zorunlu metin alanı',
+      test_mode: 'true | false',
+      ratio: { ...DEFAULT_RATIO },
+      response_format: 'url',
+    };
+  }
+
+  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image-preview') {
+    return {
+      provider: 'gemini',
+      model,
+      prompt: 'zorunlu metin alanı',
+      test_mode: 'true | false',
+      ratio: { ...DEFAULT_RATIO },
+      input_image: 'opsiyonel',
+      input_image_mime_type: 'opsiyonel',
+    };
+  }
+
+  return {
+    provider,
+    model,
+    prompt: 'zorunlu metin alanı',
+    test_mode: 'true | false',
+    ratio: { ...DEFAULT_RATIO },
+  };
 }
 
-function normalizeText(value: unknown, fallback = ''): string {
-  if (value == null) return fallback;
-  const text = String(value).trim();
-  return text || fallback;
+function buildOverride(provider: ProviderRegistry, model: string): Record<string, unknown> {
+  if (model === 'openai/gpt-image-1') {
+    return {
+      provider: 'openai-image-generation',
+      model: 'openai/gpt-image-1',
+      allowedQuality: ['high', 'medium', 'low'],
+      ratio: { w: 1024, h: 1024 },
+      outputType: 'HTMLImageElement',
+      outputSrcField: 'image.src',
+      costPerImageUsd: 0.011,
+    };
+  }
+
+  if (model === 'black-forest-labs/flux.1-schnell') {
+    return {
+      model: 'black-forest-labs/flux.1-schnell',
+      width: true,
+      height: true,
+      aspect_ratio: true,
+      steps: true,
+      seed: true,
+      negative_prompt: true,
+      n: true,
+      image_url: true,
+      image_base64: true,
+      mask_image_url: true,
+      mask_image_base64: true,
+      prompt_strength: true,
+      disable_safety_checker: true,
+      response_format: true,
+    };
+  }
+
+  if (model === 'google/imagen-4.0-ultra') {
+    return {
+      model: 'google/imagen-4.0-ultra',
+      width: true,
+      height: true,
+      aspect_ratio: true,
+      steps: true,
+      seed: true,
+      negative_prompt: true,
+      n: true,
+      image_url: true,
+      image_base64: true,
+      mask_image_url: true,
+      mask_image_base64: true,
+      prompt_strength: true,
+      disable_safety_checker: true,
+      response_format: true,
+    };
+  }
+
+  if (model === 'google/gemini-3.1-flash-image-preview' || model === 'google/gemini-3-pro-image-preview') {
+    return {
+      model,
+      ratio: true,
+      input_image: true,
+      input_image_mime_type: true,
+    };
+  }
+
+  return {
+    provider,
+    model,
+  };
 }
 
-function getEventMessage(event?: WorkerEvent | null): string {
-  if (!event) return 'Henüz olay kaydı yok.';
-  const detailsMessage = normalizeText((event.details as Record<string, unknown> | null)?.eventMessage, '');
-  if (detailsMessage) return detailsMessage;
-  if (event.status === 'failed') return normalizeText(event.errorMessage, 'Aşama başarısız oldu.');
-  if (event.status === 'success') return normalizeText(event.successMessage, 'Aşama tamamlandı.');
-  return normalizeText(event.title, 'Olay kaydı üretildi.');
+function normalizeTagUi(raw: TagUi | undefined, rankText: string): Required<TagUi> {
+  return {
+    text: safeText(raw?.text, safeText(rankText, 'MODEL')),
+    bg: safeText(raw?.bg, '#000000'),
+    fg: safeText(raw?.fg, '#ffffff'),
+    rounded: safeText(raw?.rounded, '9999px'),
+  };
 }
 
-function clampProgress(value?: number): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(100, Math.round(n)));
+function normalizeModelFromWorker(raw: RawModelItem): ModelItem {
+  const model = normalizeCanonicalModel(raw.model || raw.modelId || raw.id);
+  const provider = normalizeProviderRegistry(raw.provider, model);
+  const displayName = safeText(raw.displayName, `${safeText(raw.providerLabel || raw.company || raw.provider, 'Model')} · ${safeText(raw.modelName || model, model)}`);
+  const providerLabel = safeText(raw.providerLabel, safeText(raw.company || raw.provider, provider));
+  const imagePriceUsd = safePrice(raw.prices?.image ?? raw.prices?.usdPerImage ?? raw.imagePrice);
+  const rankText = safeText((raw as { rankTag?: string }).rankTag);
+
+  return {
+    ...raw,
+    displayName,
+    provider,
+    providerLabel,
+    model,
+    imagePriceUsd,
+    template: raw.template ?? buildTemplate(provider, model),
+    profile: raw.profile ?? buildProfile(provider, model),
+    override: raw.override ?? buildOverride(provider, model),
+    tagUi: normalizeTagUi(raw.tagUi, rankText),
+  };
 }
 
-function dedupeEvents(job: JobRecord | null): WorkerEvent[] {
+function modelKey(model: ModelItem): string {
+  return safeText(model.model);
+}
+
+function modelLabel(model: ModelItem): string {
+  return safeText(model.displayName, `${model.providerLabel} · ${safeText(model.modelName, model.model)}`);
+}
+
+function pickImages(job: JobRecord | null): string[] {
   if (!job) return [];
-  const source = Array.isArray(job.events) ? job.events : [];
-  const map = new Map<string, WorkerEvent>();
-  for (const event of source) {
-    const key = [
-      normalizeText(event.timestamp, ''),
-      normalizeText(event.stage, ''),
-      normalizeText(event.status, ''),
-      String(event.attemptNo ?? ''),
-      normalizeText(event.relatedPath, ''),
-      normalizeText(event.relatedModel, ''),
-    ].join('|');
-    if (!map.has(key)) map.set(key, event);
-  }
-  const events = [...map.values()];
-  events.sort((a, b) => {
-    const left = new Date(normalizeText(a.timestamp, '1970-01-01T00:00:00.000Z')).getTime();
-    const right = new Date(normalizeText(b.timestamp, '1970-01-01T00:00:00.000Z')).getTime();
-    return right - left;
-  });
-  return events;
+  const raw = [
+    ...normalizeArray<string>(job.outputUrls),
+    ...(job.outputUrl ? [job.outputUrl] : []),
+  ].filter(Boolean);
+  return [...new Set(raw)];
 }
 
-function detailsToRows(details?: Record<string, unknown> | null): Array<{ key: string; value: string }> {
-  if (!details || typeof details !== 'object') return [];
-  return Object.entries(details)
-    .filter(([key, value]) => key !== 'eventMessage' && value !== undefined && value !== null && value !== '')
-    .map(([key, value]) => {
-      let text = '';
-      if (Array.isArray(value)) text = value.join(', ');
-      else if (typeof value === 'object') text = JSON.stringify(value);
-      else text = String(value);
-      return { key, value: text };
-    });
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return '{}';
+  }
+}
+
+function ratioLabelFromObject(ratio: RatioObject): string {
+  return `${Math.max(1, ratio.w)}:${Math.max(1, ratio.h)}`;
 }
 
 async function readEnvelope<T>(response: Response): Promise<WorkerEnvelope<T>> {
   const text = await response.text();
   if (!text.trim()) {
-    throw { message: 'Worker boş cevap döndürdü.' } as WorkerRequestFailure;
+    throw new Error('Worker boş cevap döndürdü.');
   }
   try {
     return JSON.parse(text) as WorkerEnvelope<T>;
   } catch {
-    throw { message: 'Worker geçerli JSON döndürmedi.' } as WorkerRequestFailure;
+    throw new Error('Worker geçerli JSON döndürmedi.');
   }
 }
 
 async function requestJson<T>(base: string, path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
-  let lastError: WorkerRequestFailure = { message: 'İstek başarısız oldu.' };
-
+  let lastError: unknown = null;
   for (let attempt = 0; attempt <= retry; attempt += 1) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 60000);
-
     try {
       const response = await fetch(buildUrl(base, path), {
         ...init,
@@ -328,77 +438,51 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, re
           ...(init?.headers || {}),
         },
       });
-
       window.clearTimeout(timer);
       const payload = await readEnvelope<T>(response);
-
       if (!response.ok || payload.ok === false) {
-        throw {
-          message: payload.error?.message || `İstek başarısız oldu (${response.status}).`,
-          envelope: payload as WorkerEnvelope<unknown>,
-          status: response.status,
-        } as WorkerRequestFailure;
+        throw new Error(payload.error?.message || `İstek başarısız oldu (${response.status}).`);
       }
-
       return payload;
     } catch (error) {
       window.clearTimeout(timer);
-
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        lastError = { message: 'İstek zaman aşımına uğradı.' };
-      } else if (typeof error === 'object' && error && 'message' in error) {
-        lastError = error as WorkerRequestFailure;
-      } else if (error instanceof Error) {
-        lastError = { message: error.message || 'İstek başarısız oldu.' };
-      } else {
-        lastError = { message: 'İstek başarısız oldu.' };
-      }
-
+      lastError = error;
       if (attempt === retry) break;
       await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
-
-  throw lastError;
+  throw lastError instanceof Error ? lastError : new Error('İstek başarısız oldu.');
 }
 
 export default function ImagePage(): JSX.Element {
   const [models, setModels] = useState<ModelItem[]>([]);
   const [modelsSource, setModelsSource] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
-
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [selectedModelId, setSelectedModelId] = useState('');
-  const [ratio, setRatio] = useState('1:1');
-  const [quality, setQuality] = useState('standard');
-  const [style, setStyle] = useState('');
+  const [ratioObject, setRatioObject] = useState<RatioObject>(DEFAULT_RATIO);
+  const [quality, setQuality] = useState(DEFAULT_QUALITY);
+  const [style, setStyle] = useState(DEFAULT_STYLE);
+  const [testMode, setTestMode] = useState(false);
   const [count, setCount] = useState(1);
-
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [history, setHistory] = useState<JobRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-
-  const [pageError, setPageError] = useState('');
+  const [error, setError] = useState('');
   const [workerInfo, setWorkerInfo] = useState('');
-  const [showTechDetails, setShowTechDetails] = useState(true);
-  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
-
   const pollRef = useRef<number | null>(null);
 
   const selectedModel = useMemo(
     () => models.find((item) => modelKey(item) === selectedModelId) || null,
     [models, selectedModelId],
   );
-
   const activeImages = useMemo(() => pickImages(activeJob), [activeJob]);
-  const activeEvents = useMemo(() => dedupeEvents(activeJob), [activeJob]);
-  const progressValue = useMemo(() => clampProgress(activeJob?.progress), [activeJob?.progress]);
-  const latestErrorBullets = useMemo(() => {
-    if (!activeJob?.error?.bullets?.length) return [];
-    return activeJob.error.bullets.filter(Boolean);
-  }, [activeJob?.error?.bullets]);
+  const selectedModelCore = useMemo(
+    () => selectedModel ? ({ displayName: selectedModel.displayName, provider: selectedModel.provider, model: selectedModel.model }) : null,
+    [selectedModel],
+  );
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
@@ -407,25 +491,22 @@ export default function ImagePage(): JSX.Element {
     }
   }, []);
 
-  const toggleEvent = useCallback((key: string) => {
-    setExpandedEvents((current) => ({ ...current, [key]: !current[key] }));
-  }, []);
-
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
-    setPageError('');
+    setError('');
     try {
       const envelope = await requestJson<ModelsPayload>(MODELS_BASE_URL, '/models?limit=250', undefined, 1);
-      const items = (Array.isArray(envelope.data?.items) ? envelope.data.items : []).filter(isImageModel);
+      const items = normalizeArray<RawModelItem>(envelope.data?.items)
+        .filter(isImageModel)
+        .map(normalizeModelFromWorker);
       setModels(items);
       setModelsSource(`${MODELS_BASE_URL}/models`);
       setSelectedModelId((current) => current || modelKey(items[0]) || '');
       if (!items.length) {
-        setPageError('models-worker içinde görsel modeli bulunamadı.');
+        setError('models-worker içinde görsel modeli bulunamadı.');
       }
-    } catch (error) {
-      const failure = error as WorkerRequestFailure;
-      setPageError(failure.message || 'Modeller alınamadı.');
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'Modeller alınamadı.'));
     } finally {
       setModelsLoading(false);
     }
@@ -446,8 +527,8 @@ export default function ImagePage(): JSX.Element {
     try {
       const envelope = await requestJson<HistoryPayload>(IMGS_BASE_URL, '/jobs/history?limit=12', undefined, 0);
       setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
-    } catch {
-      // geçmiş listesi kritik değil
+    } catch (requestError) {
+      console.error(requestError);
     } finally {
       setLoadingHistory(false);
     }
@@ -456,33 +537,10 @@ export default function ImagePage(): JSX.Element {
   const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
     if (!job.jobId || pickImages(job).length > 0) return job;
     try {
-      const envelope = await requestJson<{
-        outputUrl?: string | null;
-        storagePath?: string | null;
-        outputUrlExpiresAt?: string | null;
-        storageRoot?: string | null;
-        attemptedPath?: string | null;
-        mimeType?: string | null;
-        fileName?: string | null;
-      }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
-
+      const envelope = await requestJson<{ outputUrl?: string | null }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
       const outputUrl = envelope.data?.outputUrl || null;
       if (!outputUrl) return job;
-
-      return {
-        ...job,
-        outputUrl,
-        outputUrls: [outputUrl],
-        storage: {
-          ...(job.storage || {}),
-          path: envelope.data?.storagePath || job.storage?.path || null,
-          storageRoot: envelope.data?.storageRoot || job.storage?.storageRoot || null,
-          attemptedPath: envelope.data?.attemptedPath || job.storage?.attemptedPath || null,
-          mimeType: envelope.data?.mimeType || job.storage?.mimeType || null,
-          fileName: envelope.data?.fileName || job.storage?.fileName || null,
-          verified: true,
-        },
-      };
+      return { ...job, outputUrl, outputUrls: [outputUrl] };
     } catch {
       return job;
     }
@@ -496,22 +554,18 @@ export default function ImagePage(): JSX.Element {
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
       }
-
       setActiveJob(nextJob);
-
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
         await refreshHistory();
         return;
       }
-
       pollRef.current = window.setTimeout(() => {
         void pollJob(jobId);
       }, POLL_MS);
-    } catch (error) {
-      const failure = error as WorkerRequestFailure;
+    } catch (requestError) {
       setSubmitting(false);
-      setPageError(failure.message || 'Job durumu alınamadı.');
+      setError(workerErrorMessage(requestError, 'Job durumu alınamadı.'));
     }
   }, [ensureImageUrl, refreshHistory, stopPolling]);
 
@@ -522,27 +576,36 @@ export default function ImagePage(): JSX.Element {
     return () => stopPolling();
   }, [loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
 
-  const applyPreset = useCallback((preset: (typeof PROMPT_PRESETS)[number]) => {
-    setPrompt(preset.prompt);
-    setNegativePrompt(preset.negativePrompt);
-    setRatio(preset.ratio);
-    setQuality(preset.quality);
-    setStyle(preset.style);
-  }, []);
+  useEffect(() => {
+    if (!selectedModel) return;
+    const profile = (selectedModel.profile || {}) as Record<string, unknown>;
+    const template = (selectedModel.template || {}) as Record<string, unknown>;
+    const ratioCandidate = profile.ratio || template.ratio;
+    if (ratioCandidate && typeof ratioCandidate === 'object' && ratioCandidate !== null) {
+      const nextRatio = {
+        w: Math.max(1, safeNumber((ratioCandidate as RatioObject).w, DEFAULT_RATIO.w)),
+        h: Math.max(1, safeNumber((ratioCandidate as RatioObject).h, DEFAULT_RATIO.h)),
+      };
+      setRatioObject(nextRatio);
+    }
+    const qualityCandidate = safeText(profile.quality || template.quality || DEFAULT_QUALITY, DEFAULT_QUALITY);
+    if (qualityCandidate) {
+      setQuality(qualityCandidate);
+    }
+  }, [selectedModel]);
 
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim()) {
-      setPageError('Prompt zorunlu.');
+      setError('Prompt zorunlu.');
       return;
     }
-    if (!selectedModelId) {
-      setPageError('Model seçmelisin.');
+    if (!selectedModel || !selectedModelCore) {
+      setError('Model seçmelisin.');
       return;
     }
-
     stopPolling();
     setSubmitting(true);
-    setPageError('');
+    setError('');
     setActiveJob(null);
 
     try {
@@ -554,17 +617,26 @@ export default function ImagePage(): JSX.Element {
           body: JSON.stringify({
             prompt: prompt.trim(),
             negativePrompt: negativePrompt.trim(),
-            modelId: selectedModelId,
-            model: selectedModelId,
-            ratio,
+            displayName: selectedModelCore.displayName,
+            provider: selectedModelCore.provider,
+            model: selectedModelCore.model,
+            modelId: selectedModelCore.model,
+            selectedModel: selectedModelCore,
+            template: selectedModel.template,
+            profile: selectedModel.profile,
+            override: selectedModel.override,
+            ratio: ratioLabelFromObject(ratioObject),
+            ratioObject,
             quality,
             style,
+            test_mode: testMode,
             n: Math.max(1, Math.min(1, count)),
             responseFormat: 'url',
             metadata: {
               page: 'src/pages/AI/image.tsx',
               modelsSource: `${MODELS_BASE_URL}/models`,
               worker: IMGS_BASE_URL,
+              tagUi: selectedModel.tagUi,
             },
           }),
         },
@@ -573,76 +645,45 @@ export default function ImagePage(): JSX.Element {
 
       let nextJob = envelope.data;
       const inlinePreview = typeof envelope.meta?.inlinePreview === 'string' ? envelope.meta.inlinePreview : null;
-
       if (inlinePreview && pickImages(nextJob).length === 0) {
         nextJob = { ...nextJob, outputUrl: inlinePreview, outputUrls: [inlinePreview] };
       }
-
       setActiveJob(nextJob);
 
       if (!nextJob.jobId) {
-        throw { message: 'Worker jobId döndürmedi.' } as WorkerRequestFailure;
+        throw new Error('Worker jobId döndürmedi.');
       }
 
       await refreshHistory();
-
       if (TERMINAL.has(nextJob.status)) {
         setSubmitting(false);
         return;
       }
-
       await pollJob(nextJob.jobId);
-    } catch (error) {
-      const failure = error as WorkerRequestFailure;
-      const failedEnvelope = failure.envelope as WorkerEnvelope<unknown> | undefined;
-      const failedJob = (failedEnvelope?.meta?.job as JobRecord | undefined) || null;
-
-      if (failedJob) {
-        setActiveJob(failedJob);
-      } else if (failedEnvelope?.meta?.lastEvent || failedEnvelope?.error) {
-        setActiveJob((current) => ({
-          ...(current || {
-            jobId: 'no-job',
-            status: 'failed_storage',
-          }),
-          status: 'failed_storage',
-          progress: current?.progress ?? 100,
-          step: failure.message || 'İş başarısız oldu',
-          error: failedEnvelope.error || { message: failure.message || 'İş başarısız oldu.' },
-          lastEvent: (failedEnvelope.meta?.lastEvent as WorkerEvent | undefined) || current?.lastEvent || null,
-        }));
-      }
-
+    } catch (requestError) {
       setSubmitting(false);
-      setPageError(failure.message || 'Görsel üretimi başlatılamadı.');
-      await refreshHistory();
+      setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
     }
-  }, [count, negativePrompt, pollJob, prompt, quality, ratio, refreshHistory, selectedModelId, stopPolling, style]);
+  }, [count, negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode]);
 
   const handleCancel = useCallback(async () => {
     if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
     try {
-      const envelope = await requestJson<JobRecord>(
-        IMGS_BASE_URL,
-        '/jobs/cancel',
-        {
-          method: 'POST',
-          body: JSON.stringify({ jobId: activeJob.jobId }),
-        },
-        0,
-      );
+      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, '/jobs/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: activeJob.jobId }),
+      }, 0);
       stopPolling();
       setSubmitting(false);
       setActiveJob(envelope.data);
       await refreshHistory();
-    } catch (error) {
-      const failure = error as WorkerRequestFailure;
-      setPageError(failure.message || 'İptal işlemi başarısız oldu.');
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'İptal işlemi başarısız oldu.'));
     }
   }, [activeJob, refreshHistory, stopPolling]);
 
   const openHistoryJob = useCallback(async (jobId: string) => {
-    setPageError('');
+    setError('');
     stopPolling();
     try {
       const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
@@ -657,9 +698,8 @@ export default function ImagePage(): JSX.Element {
       } else {
         setSubmitting(false);
       }
-    } catch (error) {
-      const failure = error as WorkerRequestFailure;
-      setPageError(failure.message || 'Geçmiş kaydı açılamadı.');
+    } catch (requestError) {
+      setError(workerErrorMessage(requestError, 'Geçmiş kaydı açılamadı.'));
     }
   }, [ensureImageUrl, pollJob, stopPolling]);
 
@@ -676,46 +716,44 @@ export default function ImagePage(): JSX.Element {
               Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
             </p>
           </div>
-
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
-            <div>Seçili model: {selectedModel ? modelLabel(selectedModel) : 'yok'}</div>
+            <div>Seçili model: {selectedModel ? selectedModel.displayName : 'yok'}</div>
             <div className="mt-1 text-xs text-slate-400">
-              Fiyat: {selectedModel?.pricing?.usdPerImage ?? selectedModel?.imagePrice ?? '-'} USD / görsel
+              Fiyat: {selectedModel?.imagePriceUsd ?? '-'} USD / görsel
             </div>
             <div className="mt-1 text-xs text-slate-500">Kategori: {selectedModel?.categoryRaw || '-'}</div>
           </div>
         </div>
       </div>
 
-      {pageError ? (
+      {error ? (
         <div className="rounded-2xl border border-red-700 bg-red-950/70 px-4 py-3 text-sm text-red-100">
-          {pageError}
+          {error}
         </div>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[1.02fr,0.98fr]">
+      <div className="grid gap-6 lg:grid-cols-[1.1fr,0.9fr]">
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-semibold text-slate-900">Üretim ayarları</h2>
-
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-semibold text-slate-900">Hazır promptlar</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {PROMPT_PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  onClick={() => applyPreset(preset)}
-                  className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-slate-500 hover:text-slate-900"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="mt-4 grid gap-4">
+            <div className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">Hazır promptlar</span>
+              <div className="flex flex-wrap gap-2">
+                {QUICK_PROMPTS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setPrompt(item)}
+                    className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50"
+                  >
+                    {item.length > 26 ? `${item.slice(0, 26)}...` : item}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Prompt</span>
+              <span className="text-sm font-medium text-slate-700">Prompt (zorunlu metin alanı)</span>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -726,7 +764,7 @@ export default function ImagePage(): JSX.Element {
             </label>
 
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-slate-700">Negatif prompt</span>
+              <span className="text-sm font-medium text-slate-700">Negatif prompt (opsiyonel)</span>
               <textarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
@@ -736,53 +774,108 @@ export default function ImagePage(): JSX.Element {
               />
             </label>
 
+            <div className="grid gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-700">Modeller</span>
+                <span className="text-xs text-slate-500">Ekstra model eklenirse buraya otomatik gelir.</span>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {models.map((item) => {
+                  const selected = modelKey(item) === selectedModelId;
+                  return (
+                    <button
+                      key={modelKey(item)}
+                      type="button"
+                      onClick={() => setSelectedModelId(modelKey(item))}
+                      className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-slate-900 bg-slate-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-400'}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">{item.displayName}</div>
+                          <div className="mt-1 text-xs text-slate-500">{item.model}</div>
+                        </div>
+                        <span
+                          className="inline-flex items-center px-3 py-1 text-[11px] font-semibold"
+                          style={{
+                            backgroundColor: item.tagUi.bg,
+                            color: item.tagUi.fg,
+                            borderRadius: item.tagUi.rounded,
+                          }}
+                        >
+                          {item.tagUi.text}
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-1 text-xs text-slate-600">
+                        <div>Provider: {item.provider}</div>
+                        <div>Fiyat: {item.imagePriceUsd ?? '-'} USD / görsel</div>
+                        <div>Hız: {item.speedLabel || '-'}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">Model seçimi (yedek alan)</span>
+              <select
+                value={selectedModelId}
+                onChange={(e) => setSelectedModelId(e.target.value)}
+                className="rounded-2xl border border-slate-300 px-4 py-3"
+                disabled={modelsLoading}
+              >
+                {models.map((item) => (
+                  <option key={modelKey(item)} value={modelKey(item)}>
+                    {modelLabel(item)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Model</span>
-                <select
-                  value={selectedModelId}
-                  onChange={(e) => setSelectedModelId(e.target.value)}
-                  className="rounded-2xl border border-slate-300 px-4 py-3"
-                  disabled={modelsLoading}
-                >
-                  {models.map((item) => (
-                    <option key={modelKey(item)} value={modelKey(item)}>
-                      {modelLabel(item)}
-                    </option>
-                  ))}
-                </select>
+                <span className="text-sm font-medium text-slate-700">Test modu (opsiyonel)</span>
+                <label className="inline-flex items-center gap-3 rounded-2xl border border-slate-300 px-4 py-3 text-sm text-slate-700">
+                  <input type="checkbox" checked={testMode} onChange={(e) => setTestMode(e.target.checked)} />
+                  <span>{testMode ? 'true' : 'false'}</span>
+                </label>
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Oran</span>
-                <select value={ratio} onChange={(e) => setRatio(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {RATIO_OPTIONS.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Kalite</span>
+                <span className="text-sm font-medium text-slate-700">Kalite (opsiyonel)</span>
                 <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {QUALITY_OPTIONS.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
+                  {QUALITY_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
                 </select>
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-medium text-slate-700">Stil</span>
+                <span className="text-sm font-medium text-slate-700">Oran nesnesi (opsiyonel) · w</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={ratioObject.w}
+                  onChange={(e) => setRatioObject((current) => ({ ...current, w: Math.max(1, Number(e.target.value) || 1) }))}
+                  className="rounded-2xl border border-slate-300 px-4 py-3"
+                />
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Oran nesnesi (opsiyonel) · h</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={ratioObject.h}
+                  onChange={(e) => setRatioObject((current) => ({ ...current, h: Math.max(1, Number(e.target.value) || 1) }))}
+                  className="rounded-2xl border border-slate-300 px-4 py-3"
+                />
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Stil (opsiyonel)</span>
                 <select value={style} onChange={(e) => setStyle(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
-                  {STYLE_OPTIONS.map((item) => (
-                    <option key={item} value={item}>
-                      {item || 'Varsayılan'}
-                    </option>
-                  ))}
+                  {STYLE_OPTIONS.map((item) => <option key={item} value={item}>{item || 'Varsayılan'}</option>)}
                 </select>
               </label>
             </div>
@@ -801,10 +894,47 @@ export default function ImagePage(): JSX.Element {
             </label>
 
             {selectedModel ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <div className="font-semibold text-slate-900">Model özeti</div>
-                <div className="mt-2">{selectedModel.standoutFeature || selectedModel.useCase || 'Özel bilgi yok.'}</div>
-                {selectedModel.speedLabel ? <div className="mt-2 text-xs text-slate-500">Hız: {selectedModel.speedLabel}</div> : null}
+              <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="font-semibold text-slate-900">Model özeti</div>
+                  <span
+                    className="inline-flex items-center px-3 py-1 text-[11px] font-semibold"
+                    style={{
+                      backgroundColor: selectedModel.tagUi.bg,
+                      color: selectedModel.tagUi.fg,
+                      borderRadius: selectedModel.tagUi.rounded,
+                    }}
+                  >
+                    {selectedModel.tagUi.text}
+                  </span>
+                </div>
+                <div>{selectedModel.standoutFeature || selectedModel.useCase || 'Özel bilgi yok.'}</div>
+                <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+                  <div><strong>displayName:</strong> {selectedModel.displayName}</div>
+                  <div><strong>provider:</strong> {selectedModel.provider}</div>
+                  <div><strong>model:</strong> {selectedModel.model}</div>
+                  <div><strong>tagUi:</strong> {selectedModel.tagUi.text}</div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">template</div>
+                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.template)}</pre>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">profile</div>
+                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.profile)}</pre>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">override</div>
+                    <pre className="max-h-64 overflow-auto p-4 text-xs text-slate-800">{prettyJson(selectedModel.override)}</pre>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-700">
+                  <div><strong>price:</strong> {selectedModel.imagePriceUsd ?? '-'} USD / görsel</div>
+                  <div className="mt-1"><strong>ratio:</strong> {'{'} w: {ratioObject.w}, h: {ratioObject.h} {'}'}</div>
+                  <div className="mt-1"><strong>test_mode:</strong> {testMode ? 'true' : 'false'}</div>
+                  <div className="mt-1"><strong>quality:</strong> {quality}</div>
+                </div>
               </div>
             ) : null}
 
@@ -817,7 +947,6 @@ export default function ImagePage(): JSX.Element {
               >
                 {submitting ? 'Üretiliyor...' : 'Görsel üret'}
               </button>
-
               <button
                 type="button"
                 onClick={() => void handleCancel()}
@@ -831,67 +960,29 @@ export default function ImagePage(): JSX.Element {
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-xl font-semibold text-slate-900">Aktif iş</h2>
-            <button
-              type="button"
-              onClick={() => setShowTechDetails((current) => !current)}
-              className="rounded-2xl border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700"
-            >
-              {showTechDetails ? 'Teknik detayları gizle' : 'Teknik detayları göster'}
-            </button>
-          </div>
-
+          <h2 className="text-xl font-semibold text-slate-900">Aktif iş</h2>
           {activeJob ? (
             <div className="mt-4 space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-                  <span className={`rounded-full border px-3 py-1 font-medium ${statusBadgeClass(activeJob.status)}`}>
-                    {statusText(activeJob.status)}
-                  </span>
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-slate-700">Durum: {statusText(activeJob.status)}</span>
                   <span className="text-slate-500">Job: {activeJob.jobId}</span>
                 </div>
-
-                <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-200">
-                  <div
-                    className="h-full rounded-full bg-slate-900 transition-all duration-500"
-                    style={{ width: `${progressValue}%` }}
-                  />
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full rounded-full bg-slate-900 transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, activeJob.progress || 0))}%` }} />
                 </div>
-
                 <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                  <span>{activeJob.step || getEventMessage(activeJob.lastEvent)}</span>
-                  <span>%{progressValue}</span>
+                  <span>{activeJob.step || 'Bekleniyor'}</span>
+                  <span>%{Math.max(0, Math.min(100, activeJob.progress || 0))}</span>
                 </div>
-
-                {activeJob.lastEvent ? (
-                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${eventStatusClass(activeJob.lastEvent.status)}`}>
-                        {normalizeText(activeJob.lastEvent.status, 'event')}
-                      </span>
-                      <span className="text-sm font-semibold text-slate-900">
-                        {normalizeText(activeJob.lastEvent.title, normalizeText(activeJob.lastEvent.stage, 'Son olay'))}
-                      </span>
-                    </div>
-                    <div className="mt-2 text-sm text-slate-700">{getEventMessage(activeJob.lastEvent)}</div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      {formatDate(activeJob.lastEvent.timestamp)}{' '}
-                      {activeJob.lastEvent.attemptNo ? `· deneme ${activeJob.lastEvent.attemptNo}` : ''}
-                    </div>
-                  </div>
-                ) : null}
               </div>
 
               {activeJob.error?.message ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                  <div className="font-semibold">Hata özeti</div>
-                  <div className="mt-2">{activeJob.error.message}</div>
-                  {latestErrorBullets.length > 0 ? (
+                  <div>{activeJob.error.message}</div>
+                  {Array.isArray(activeJob.error.bullets) && activeJob.error.bullets.length > 0 ? (
                     <div className="mt-3 space-y-1 text-xs">
-                      {latestErrorBullets.map((bullet) => (
-                        <div key={bullet}>• {bullet}</div>
-                      ))}
+                      {activeJob.error.bullets.map((bullet) => <div key={bullet}>• {bullet}</div>)}
                     </div>
                   ) : null}
                 </div>
@@ -909,108 +1000,11 @@ export default function ImagePage(): JSX.Element {
                 </div>
               )}
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-900">Worker olay akışı</div>
-                  <div className="text-xs text-slate-500">{activeEvents.length} olay</div>
-                </div>
-
-                {activeEvents.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                    Worker event listesi henüz gelmedi.
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {activeEvents.map((event, index) => {
-                      const rows = detailsToRows(event.details);
-                      const eventKey = [
-                        normalizeText(event.timestamp, ''),
-                        normalizeText(event.stage, ''),
-                        normalizeText(event.status, ''),
-                        String(event.attemptNo ?? ''),
-                        String(index),
-                      ].join('|');
-                      const expanded = !!expandedEvents[eventKey];
-
-                      return (
-                        <div key={eventKey} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${eventStatusClass(event.status)}`}>
-                                  {normalizeText(event.status, 'event')}
-                                </span>
-                                <span className="text-sm font-semibold text-slate-900">
-                                  {normalizeText(event.title, normalizeText(event.stage, 'Olay'))}
-                                </span>
-                                {event.attemptNo ? (
-                                  <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-600">
-                                    deneme {event.attemptNo}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              <div className="mt-2 text-sm text-slate-700">{getEventMessage(event)}</div>
-
-                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                                <span>Tarih: {formatDate(event.timestamp)}</span>
-                                {event.relatedModel ? <span>Model: {event.relatedModel}</span> : null}
-                                {event.relatedPath ? <span>Path: {event.relatedPath}</span> : null}
-                                {event.stage ? <span>Stage: {event.stage}</span> : null}
-                              </div>
-                            </div>
-
-                            {showTechDetails && rows.length > 0 ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleEvent(eventKey)}
-                                className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
-                              >
-                                {expanded ? 'Detayları gizle' : 'Detayları aç'}
-                              </button>
-                            ) : null}
-                          </div>
-
-                          {showTechDetails && expanded && rows.length > 0 ? (
-                            <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3">
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                {rows.map((row) => (
-                                  <div key={`${eventKey}-${row.key}`} className="rounded-xl border border-slate-100 bg-slate-50 p-2">
-                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{row.key}</div>
-                                    <div className="mt-1 break-all text-xs text-slate-700">{row.value}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {showTechDetails ? (
+              {activeJob.storage?.path ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-                  <div className="font-semibold text-slate-800">Teknik özet</div>
-                  <div className="mt-2 grid gap-1">
-                    <div>jobId: {activeJob.jobId}</div>
-                    <div>status: {activeJob.status}</div>
-                    <div>progress: {progressValue}</div>
-                    <div>createdAt: {formatDate(activeJob.createdAt)}</div>
-                    <div>updatedAt: {formatDate(activeJob.updatedAt)}</div>
-                    <div>finishedAt: {formatDate(activeJob.finishedAt)}</div>
-                    <div>model: {activeJob.requestSummary?.model || activeJob.request?.modelId || '-'}</div>
-                    <div>ratio: {activeJob.requestSummary?.ratio || activeJob.request?.ratio || '-'}</div>
-                    <div>quality: {activeJob.requestSummary?.quality || activeJob.request?.quality || '-'}</div>
-                    <div>style: {activeJob.requestSummary?.style || activeJob.request?.style || '-'}</div>
-                    <div>storage.path: {activeJob.storage?.path || '-'}</div>
-                    <div>storage.root: {activeJob.storage?.storageRoot || '-'}</div>
-                    <div>storage.attemptedPath: {activeJob.storage?.attemptedPath || '-'}</div>
-                    <div>storage.fileName: {activeJob.storage?.fileName || '-'}</div>
-                    <div>storage.mimeType: {activeJob.storage?.mimeType || '-'}</div>
-                    <div>storage.verified: {String(activeJob.storage?.verified ?? false)}</div>
-                  </div>
+                  <div>Storage path: {activeJob.storage.path}</div>
+                  {activeJob.storage.storageRoot ? <div>Storage root: {activeJob.storage.storageRoot}</div> : null}
+                  {activeJob.storage.attemptedPath ? <div>Attempted path: {activeJob.storage.attemptedPath}</div> : null}
                 </div>
               ) : null}
             </div>
@@ -1025,48 +1019,34 @@ export default function ImagePage(): JSX.Element {
       <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-semibold text-slate-900">Geçmiş</h2>
-          <button
-            type="button"
-            onClick={() => void refreshHistory()}
-            className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700"
-          >
+          <button type="button" onClick={() => void refreshHistory()} className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">
             Yenile
           </button>
         </div>
-
         <div className="mt-4 grid gap-3">
           {loadingHistory ? (
             <div className="text-sm text-slate-500">Geçmiş yükleniyor...</div>
           ) : history.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">Henüz kayıt yok.</div>
-          ) : (
-            history.map((item) => (
-              <button
-                key={item.jobId}
-                type="button"
-                onClick={() => void openHistoryJob(item.jobId)}
-                className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusBadgeClass(item.status)}`}>
-                    {statusText(item.status)}
-                  </span>
-                  <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
-                </div>
-
-                <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
-                <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
-
-                {item.lastEvent ? (
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                    {getEventMessage(item.lastEvent)}
-                  </div>
-                ) : null}
-              </button>
-            ))
-          )}
+          ) : history.map((item) => (
+            <button
+              key={item.jobId}
+              type="button"
+              onClick={() => void openHistoryJob(item.jobId)}
+              className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-slate-800">{statusText(item.status)}</span>
+                <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
+              </div>
+              <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
+              <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
+            </button>
+          ))}
         </div>
       </section>
     </div>
   );
 }
+
+/* YÖNETİCİ BU SAYFADA GÖRÜNEN OPSİYONEL ALANLARI TÜRKÇE OLARAK İLERİDE GÖSTERMEK İSTEDİĞİ ZAMAN AŞAĞIDAKİ SAYFA ÜZERİNDEN BUNLARI AYARLAYABİLMELİDİR: src/pages/Admin/Model-Gizle-Goster.tsx */
