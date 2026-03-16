@@ -1,1204 +1,615 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-/*
-KISA AÇIKLAMA:
-Bu React sayfası worker API ile konuşur.
-20 farklı fetch stratejisini sırayla dener.
-Başarılı stratejiyi hafızaya alır ve sonra önce onu kullanır.
-*/
+type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'failed_storage';
 
-const WORKER_BASE_URL = 'https://idm.puter.work';
-const IMAGE_MODELS = [
-  { modelId: 'openai/gpt-image-1', label: 'OpenAI · GPT Image 1' },
-  { modelId: 'google/gemini-3.1-flash-image-preview', label: 'Google · Gemini 3.1 Flash Image Preview' },
-  { modelId: 'black-forest-labs/flux-1.1-pro', label: 'Black Forest Labs · Flux 1.1 Pro' },
-  { modelId: 'black-forest-labs/flux-1.1-pro-ultra', label: 'Black Forest Labs · Flux 1.1 Pro Ultra' },
-  { modelId: 'black-forest-labs/flux-kontext-max', label: 'Black Forest Labs · Flux Kontext Max' },
-  { modelId: 'black-forest-labs/flux-kontext-pro', label: 'Black Forest Labs · Flux Kontext Pro' },
-  { modelId: 'black-forest-labs/flux-1-dev', label: 'Black Forest Labs · Flux 1 Dev' },
-  { modelId: 'black-forest-labs/flux-1-schnell', label: 'Black Forest Labs · Flux 1 Schnell' },
-  { modelId: 'recraft-ai/recraft-v3', label: 'Recraft · Recraft V3' },
-  { modelId: 'recraft-ai/recraft-20b', label: 'Recraft · Recraft 20B' },
-  { modelId: 'bfl/flux-pro-1.1-ultra', label: 'BFL · Flux Pro 1.1 Ultra' },
-  { modelId: 'bfl/flux-pro', label: 'BFL · Flux Pro' },
-  { modelId: 'bfl/flux-dev', label: 'BFL · Flux Dev' },
-  { modelId: 'bfl/flux-schnell', label: 'BFL · Flux Schnell' },
-];
+type WorkerEnvelope<T> = {
+  ok: boolean;
+  code: string;
+  data: T;
+  error: { message?: string; bullets?: string[]; retryable?: boolean } | null;
+  meta?: Record<string, unknown> | null;
+  requestId?: string;
+  traceId?: string;
+  time?: string;
+  durationMs?: number;
+};
 
-const DEFAULT_MODEL_ID = IMAGE_MODELS[0].modelId;
-const DEFAULT_RATIO = '1:1';
-const DEFAULT_QUALITY = 'standard';
-const POLL_INTERVAL_MS = 2500;
-const HISTORY_LIMIT = 20;
-const STRATEGY_STORAGE_KEY = 'idm_fetch_strategy_success_v1';
-const DEBUG_LOG_LIMIT = 120;
+type ModelItem = {
+  id?: string;
+  modelId?: string;
+  modelName?: string;
+  provider?: string;
+  company?: string;
+  categoryRaw?: string;
+  badges?: string[];
+  pricing?: {
+    usdPerImage?: number | null;
+  };
+};
 
-const RATIO_OPTIONS = [
-  { value: '1:1', label: '1:1 Kare' },
-  { value: '16:9', label: '16:9 Yatay' },
-  { value: '9:16', label: '9:16 Dikey' },
-  { value: '4:3', label: '4:3 Klasik' },
-  { value: '3:4', label: '3:4 Portre' },
-];
+type ModelsPayload = {
+  items: ModelItem[];
+  total: number;
+  feature?: string;
+  source?: string;
+};
 
-const QUALITY_OPTIONS = [
-  { value: 'standard', label: 'Standart' },
-  { value: 'hd', label: 'HD' },
-];
+type JobRecord = {
+  jobId: string;
+  status: JobStatus;
+  progress?: number;
+  step?: string;
+  outputUrl?: string | null;
+  outputUrls?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  requestSummary?: {
+    model?: string;
+    promptPreview?: string;
+    ratio?: string;
+    quality?: string;
+  };
+  request?: {
+    modelId?: string;
+    ratio?: string;
+    quality?: string;
+    style?: string;
+    negativePrompt?: string;
+    n?: number;
+  };
+  storage?: {
+    path?: string | null;
+    mimeType?: string | null;
+    fileName?: string | null;
+    verified?: boolean;
+  };
+  error?: {
+    message?: string;
+    retryable?: boolean;
+  } | null;
+};
 
-const QUICK_PROMPTS = [
-  'Turuncu gözlü sevimli bir kedi, sinematik ışık, ultra detaylı, temiz arka plan',
-  'Yağmurlu gece sokakta yürüyen futuristik robot, neon ışıklar, yüksek detay',
-  'Dağın tepesinde gün doğumunda ahşap kulübe, gerçekçi, huzurlu atmosfer',
-];
+type HistoryPayload = {
+  items: JobRecord[];
+  total: number;
+  limit: number;
+  feature?: string;
+};
 
-function nowMs() {
-  return Date.now();
+const WORKER_BASE_URL = 'https://imgs.puter.work';
+const POLL_MS = 1800;
+const RATIO_OPTIONS = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+const QUALITY_OPTIONS = ['standard', 'hd'];
+const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'];
+const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed_storage']);
+
+function joinUrl(path: string): string {
+  return `${WORKER_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function safeText(value, fallback = '') {
+function modelKey(model: ModelItem): string {
+  return String(model.modelId || model.id || '').trim();
+}
+
+function modelLabel(model: ModelItem): string {
+  const provider = model.provider || model.company || 'Model';
+  const name = model.modelName || model.modelId || model.id || 'Bilinmeyen model';
+  return `${provider} · ${name}`;
+}
+
+function pickImages(job: JobRecord | null): string[] {
+  if (!job) return [];
+  const raw = [
+    ...(Array.isArray(job.outputUrls) ? job.outputUrls : []),
+    ...(job.outputUrl ? [job.outputUrl] : []),
+  ].filter(Boolean) as string[];
+  return [...new Set(raw)];
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return '-';
   try {
-    if (value === undefined || value === null) return fallback;
-    const text = String(value).trim();
-    return text || fallback;
+    return new Intl.DateTimeFormat('tr-TR', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date(value));
   } catch {
-    return fallback;
+    return value;
   }
 }
 
-function safeNumber(value, fallback = 0) {
+function statusText(status?: JobStatus): string {
+  switch (status) {
+    case 'queued': return 'Sırada';
+    case 'processing': return 'Üretiliyor';
+    case 'completed': return 'Tamamlandı';
+    case 'failed': return 'Başarısız';
+    case 'failed_storage': return 'Depolama hatası';
+    case 'cancelled': return 'İptal edildi';
+    default: return 'Bilinmiyor';
+  }
+}
+
+async function readJson<T>(response: Response): Promise<WorkerEnvelope<T>> {
   try {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : fallback;
+    return (await response.json()) as WorkerEnvelope<T>;
   } catch {
-    return fallback;
+    throw new Error('Worker geçerli JSON döndürmedi.');
   }
 }
 
-function normalizeArray(value) {
-  return Array.isArray(value) ? value : [];
-}
+async function requestWorker<T>(path: string, init?: RequestInit, retry = 1): Promise<WorkerEnvelope<T>> {
+  let lastError: unknown = null;
 
-function formatDateTime(value) {
-  const text = safeText(value);
-  if (!text) return '-';
-  try {
-    return new Date(text).toLocaleString('tr-TR');
-  } catch {
-    return text;
-  }
-}
+  for (let attempt = 0; attempt <= retry; attempt += 1) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 60000);
 
-function statusLabel(status) {
-  const s = safeText(status).toLowerCase();
-  if (s === 'queued') return 'Kuyrukta';
-  if (s === 'processing') return 'İşleniyor';
-  if (s === 'completed') return 'Tamamlandı';
-  if (s === 'failed_storage') return 'Depolama Hatası';
-  if (s === 'failed') return 'Başarısız';
-  if (s === 'cancelled') return 'İptal Edildi';
-  return s || 'Bilinmiyor';
-}
-
-function statusTone(status) {
-  const s = safeText(status).toLowerCase();
-  if (s === 'completed') return '#00c2ff';
-  if (s === 'processing' || s === 'queued') return '#f59e0b';
-  if (s === 'failed_storage' || s === 'failed') return '#ef4444';
-  if (s === 'cancelled') return '#94a3b8';
-  return '#64748b';
-}
-
-function pickJobImages(job, inlinePreview) {
-  const bag = [];
-
-  function pushIf(v) {
-    const clean = safeText(v);
-    if (clean && !bag.includes(clean)) bag.push(clean);
-  }
-
-  pushIf(job?.outputUrl);
-  pushIf(job?.url);
-  normalizeArray(job?.outputUrls).forEach(pushIf);
-  normalizeArray(job?.urls).forEach(pushIf);
-  pushIf(inlinePreview);
-
-  return bag;
-}
-
-async function readJson(response) {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return {
-      ok: false,
-      code: 'INVALID_JSON_RESPONSE',
-      error: {
-        message: text || 'Worker JSON dönmedi.',
-      },
-      data: null,
-      meta: null,
-      httpStatus: response.status,
-    };
-  }
-}
-
-function normalizeWorkerErrorMessage(payload, response, rawErrorMessage) {
-  const raw = safeText(rawErrorMessage);
-  if (raw) {
-    if (raw.includes('Failed to fetch')) return 'Worker erişimi başarısız oldu. Ağ, CORS veya domain sorunu olabilir.';
-    if (raw.includes('NetworkError')) return 'Ağ bağlantısı kurulamadı.';
-    if (raw.includes('Load failed')) return 'İstek yüklenemedi.';
-  }
-
-  const message = safeText(payload?.error?.message, '');
-  if (message) return message;
-
-  const code = safeText(payload?.code, '');
-  if (code === 'PROMPT_REQUIRED') return 'Prompt boş bırakılamaz.';
-  if (code === 'NOT_FOUND') return 'Kayıt bulunamadı.';
-  if (code === 'IMAGE_NOT_READY') return 'Görsel henüz hazır değil.';
-  if (code === 'JOB_ID_REQUIRED') return 'Job kimliği eksik.';
-  if (response?.status === 404) return 'Worker rotası bulunamadı.';
-  if (response?.status === 405) return 'Method izinli değil.';
-  if (response?.status === 429) return 'Çok sık istek atıldı.';
-  if (response?.status >= 500) return 'Sunucu tarafında hata oluştu.';
-  return 'İstek başarısız oldu.';
-}
-
-function getStoredWinningStrategyName() {
-  try {
-    return localStorage.getItem(STRATEGY_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
-}
-
-function setStoredWinningStrategyName(name) {
-  try {
-    localStorage.setItem(STRATEGY_STORAGE_KEY, name);
-  } catch {
-    // ignore
-  }
-}
-
-async function requestWorker(path, options = {}) {
-  const retryCount = Math.max(0, Math.min(20, safeNumber(options.retryCount, 2)));
-  let response;
-  let lastNetworkError = null;
-
-  for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
-    let timer = null;
     try {
-      const controller = new AbortController();
-      timer = window.setTimeout(() => controller.abort(), 60000);
-
-      response = await fetch(`${WORKER_BASE_URL}${path}`, {
-        method: options.method || 'GET',
+      const response = await fetch(joinUrl(path), {
+        ...init,
+        signal: controller.signal,
         headers: {
           'content-type': 'application/json',
-          ...(options.headers || {}),
+          ...(init?.headers || {}),
         },
-        credentials: 'include',
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: controller.signal,
       });
 
-      if (response.status >= 500 && attempt <= retryCount + 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-      } else {
-        break;
+      window.clearTimeout(timer);
+      const payload = await readJson<T>(response);
+
+      if (!response.ok || !payload.ok) {
+        const msg = payload.error?.message || `Worker isteği başarısız oldu (${response.status}).`;
+        throw new Error(msg);
       }
+
+      return payload;
     } catch (error) {
-      lastNetworkError = error;
-      if (attempt > retryCount) {
-        const isAbort = safeText(error?.name).toLowerCase() === 'aborterror';
-        throw new Error(
-          isAbort
-            ? `İstek zaman aşımına uğradı. Worker: ${WORKER_BASE_URL}${path}`
-            : `Worker bağlantısı kurulamadı. Ağ/CORS engeli olabilir. Worker: ${WORKER_BASE_URL}${path}`
-        );
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 350 * attempt));
-    } finally {
-      if (timer) window.clearTimeout(timer);
+      window.clearTimeout(timer);
+      lastError = error;
+      if (attempt === retry) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
 
-  if (!response) {
-    throw new Error(lastNetworkError ? 'Worker isteği başarısız oldu.' : 'Worker yanıt üretmedi.');
+  if (lastError instanceof DOMException && lastError.name === 'AbortError') {
+    throw new Error('Worker zaman aşımına uğradı.');
   }
-
-  const payload = await readJson(response);
-
-  if (!response.ok || payload?.ok === false) {
-    const message = normalizeWorkerErrorMessage(payload, response, '');
-    const err = new Error(message);
-    err.payload = payload;
-    err.status = response.status;
-    throw err;
+  if (lastError instanceof Error) {
+    throw lastError;
   }
-
-  return payload;
+  throw new Error('Worker isteği başarısız oldu.');
 }
 
-export default function IDMImagePage() {
-  const [workerInfo, setWorkerInfo] = useState(null);
-  const [models, setModels] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [activeJob, setActiveJob] = useState(null);
-  const [activeInlinePreview, setActiveInlinePreview] = useState('');
-  const [activeImageUrls, setActiveImageUrls] = useState([]);
-  const [pageError, setPageError] = useState('');
-  const [loadingInfo, setLoadingInfo] = useState(true);
+export default function ImagePage(): JSX.Element {
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [modelsSource, setModelsSource] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState('');
+  const [ratio, setRatio] = useState('1:1');
+  const [quality, setQuality] = useState('standard');
+  const [style, setStyle] = useState('');
+  const [count, setCount] = useState(1);
+  const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
+  const [history, setHistory] = useState<JobRecord[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [debugLogs, setDebugLogs] = useState([]);
-  // TÜRKÇE NOT: En ufak runtime hatayı arayüzde göstermek için global hata state'i eklendi.
-  const [runtimeError, setRuntimeError] = useState('');
+  const [error, setError] = useState('');
+  const [workerInfo, setWorkerInfo] = useState('');
+  const pollRef = useRef<number | null>(null);
 
-  const pollRef = useRef(null);
+  const activeImages = useMemo(() => pickImages(activeJob), [activeJob]);
+  const selectedModel = useMemo(
+    () => models.find((item) => modelKey(item) === selectedModelId) || null,
+    [models, selectedModelId],
+  );
 
-  const [form, setForm] = useState({
-    model: DEFAULT_MODEL_ID,
-    prompt: '',
-    negativePrompt: '',
-    ratio: DEFAULT_RATIO,
-    quality: DEFAULT_QUALITY,
-    style: '',
-  });
-
-  const pushDebugLog = useCallback((text) => {
-    const line = `${new Date().toLocaleTimeString('tr-TR')} - ${text}`;
-    setDebugLogs((prev) => [line, ...prev].slice(0, DEBUG_LOG_LIMIT));
-  }, []);
-
-  const clearPoll = useCallback(() => {
-    if (pollRef.current) {
-      window.clearInterval(pollRef.current);
+  const stopPolling = useCallback(() => {
+    if (pollRef.current != null) {
+      window.clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
 
-  const mergeActiveImages = useCallback((job, inlinePreview = '') => {
-    const images = pickJobImages(job, inlinePreview);
-    setActiveImageUrls(images);
-  }, []);
-
-  // TÜRKÇE NOT: Her noktadan gelen hatayı kullanıcıya net göstermek için ortak raporlama fonksiyonu.
-  const reportUiError = useCallback((title, error) => {
-    const msg = safeText(error?.message || error, 'Bilinmeyen hata');
-    setPageError(`${title}: ${msg}`);
+  const refreshHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const envelope = await requestWorker<HistoryPayload>('/jobs/history?limit=12', undefined, 0);
+      setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingHistory(false);
+    }
   }, []);
 
   const loadWorkerInfo = useCallback(async () => {
-    // TÜRKÇE NOT: Worker info çekimi sırasında oluşan hata yakalanıp üst katmana açıklamalı fırlatılır.
     try {
-      const payload = await requestWorker('/');
-      setWorkerInfo(payload?.data || null);
-    } catch (error) {
-      throw new Error(`Worker bilgi yükleme hatası: ${safeText(error?.message, 'Bilinmeyen hata')}`);
+      const envelope = await requestWorker<{ worker: string; version: string; totalModels: number }>('/', undefined, 0);
+      setWorkerInfo(`${envelope.data.worker} · v${envelope.data.version}`);
+    } catch {
+      setWorkerInfo('imgs worker');
     }
   }, []);
 
   const loadModels = useCallback(async () => {
-    // TÜRKÇE NOT: Model listesi oluşturulurken beklenmeyen bir veri hatası olursa UI açık kalsın diye try/catch kullanılır.
+    setModelsLoading(true);
+    setError('');
     try {
-      const items = IMAGE_MODELS.map((item) => ({
-        id: item.modelId,
-        modelId: item.modelId,
-        provider: item.label.split(' · ')[0],
-        modelName: item.label.split(' · ')[1] || item.modelId,
-      }));
+      const envelope = await requestWorker<ModelsPayload>('/models?feature=image&sort=price_asc&limit=100', undefined, 1);
+      const items = Array.isArray(envelope.data?.items) ? envelope.data.items : [];
       setModels(items);
-    } catch (error) {
-      throw new Error(`Model listesi hazırlanamadı: ${safeText(error?.message, 'Bilinmeyen hata')}`);
+      setModelsSource(envelope.data?.source || 'worker:/models');
+      setSelectedModelId((current) => current || modelKey(items[0]) || '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Modeller alınamadı.');
+    } finally {
+      setModelsLoading(false);
     }
   }, []);
 
-  const hydrateHistoryImages = useCallback(async (items) => {
-    const next = [];
-    for (const item of normalizeArray(items)) {
-      let job = item;
-      const hasDirectImage =
-        safeText(job?.outputUrl) ||
-        normalizeArray(job?.outputUrls).length ||
-        safeText(job?.url) ||
-        normalizeArray(job?.urls).length;
-
-      if (safeText(job?.status).toLowerCase() === 'completed' && !hasDirectImage && safeText(job?.jobId)) {
-        try {
-          const imagePayload = await requestWorker(`/jobs/image/${encodeURIComponent(job.jobId)}`);
-          const freshUrl = safeText(imagePayload?.data?.outputUrl);
-          if (freshUrl) {
-            job = {
-              ...job,
-              outputUrl: freshUrl,
-              outputUrls: [freshUrl],
-              url: freshUrl,
-              urls: [freshUrl],
-            };
-          }
-        } catch (error) {
-          pushDebugLog(`HISTORY IMAGE FAIL → ${job.jobId} → ${safeText(error?.message, 'bilinmeyen hata')}`);
-        }
-      }
-
-      next.push(job);
-    }
-    return next;
-  }, [pushDebugLog, requestWorker]);
-
-  const loadHistory = useCallback(async () => {
-    setLoadingHistory(true);
+  const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
+    if (pickImages(job).length > 0 || !job.jobId) return job;
     try {
-      const payload = await requestWorker(`/jobs/history?limit=${HISTORY_LIMIT}`);
-      const items = normalizeArray(payload?.data?.items);
-      const hydrated = await hydrateHistoryImages(items);
-      setHistory(hydrated);
-    } finally {
-      setLoadingHistory(false);
+      const envelope = await requestWorker<{ outputUrl?: string | null }>('/jobs/image/' + encodeURIComponent(job.jobId), undefined, 0);
+      const outputUrl = envelope.data?.outputUrl || null;
+      if (!outputUrl) return job;
+      return {
+        ...job,
+        outputUrl,
+        outputUrls: outputUrl ? [outputUrl] : [],
+      };
+    } catch {
+      return job;
     }
-  }, [hydrateHistoryImages, requestWorker]);
-
-  const stopIfTerminal = useCallback((job) => {
-    const s = safeText(job?.status).toLowerCase();
-    return s === 'completed' || s === 'failed' || s === 'failed_storage' || s === 'cancelled';
   }, []);
 
-  const resolveCompletedImageIfNeeded = useCallback(async (job, inlinePreview = '') => {
-    let nextJob = job;
-
-    const currentImages = pickJobImages(job, inlinePreview);
-    if (currentImages.length) {
-      mergeActiveImages(job, inlinePreview);
-      return nextJob;
-    }
-
-    if (safeText(job?.status).toLowerCase() === 'completed' && safeText(job?.jobId)) {
-      try {
-        const imagePayload = await requestWorker(`/jobs/image/${encodeURIComponent(job.jobId)}`);
-        const freshUrl = safeText(imagePayload?.data?.outputUrl);
-        if (freshUrl) {
-          nextJob = {
-            ...job,
-            outputUrl: freshUrl,
-            outputUrls: [freshUrl],
-            url: freshUrl,
-            urls: [freshUrl],
-          };
-        }
-      } catch (error) {
-        pushDebugLog(`ACTIVE IMAGE FAIL → ${job.jobId} → ${safeText(error?.message, 'bilinmeyen hata')}`);
-      }
-    }
-
-    mergeActiveImages(nextJob, inlinePreview);
-    return nextJob;
-  }, [mergeActiveImages, pushDebugLog, requestWorker]);
-
-  const pollJob = useCallback((jobId) => {
-    clearPoll();
-
-    pollRef.current = window.setInterval(async () => {
-      try {
-        const payload = await requestWorker(`/jobs/status/${encodeURIComponent(jobId)}`);
-        const job = payload?.data || null;
-        if (!job) return;
-
-        setActiveJob(job);
-        mergeActiveImages(job, activeInlinePreview);
-
-        if (stopIfTerminal(job)) {
-          clearPoll();
-          const resolvedJob = await resolveCompletedImageIfNeeded(job, activeInlinePreview);
-          setActiveJob(resolvedJob);
-          await loadHistory();
-        }
-      } catch (error) {
-        clearPoll();
-reportUiError('Job durumu okunamadı', error);
-      }
-    }, POLL_INTERVAL_MS);
-  }, [activeInlinePreview, clearPoll, loadHistory, mergeActiveImages, reportUiError, resolveCompletedImageIfNeeded, stopIfTerminal]);
-
-  const boot = useCallback(async () => {
-    setLoadingInfo(true);
-    setPageError('');
-    pushDebugLog('BOOT BAŞLADI');
+  const pollJob = useCallback(async (jobId: string) => {
+    stopPolling();
     try {
-      await Promise.all([loadWorkerInfo(), loadModels(), loadHistory()]);
-      pushDebugLog('BOOT TAMAMLANDI');
-    } catch (error) {
-reportUiError('Sayfa başlatılamadı', error);
-    } finally {
-      setLoadingInfo(false);
+      const envelope = await requestWorker<JobRecord>('/jobs/status/' + encodeURIComponent(jobId), undefined, 1);
+      let nextJob = envelope.data;
+      if (nextJob.status === 'completed') {
+        nextJob = await ensureImageUrl(nextJob);
+      }
+      setActiveJob(nextJob);
+
+      if (TERMINAL.has(nextJob.status)) {
+        setSubmitting(false);
+        await refreshHistory();
+        return;
+      }
+
+      pollRef.current = window.setTimeout(() => {
+        void pollJob(jobId);
+      }, POLL_MS);
+    } catch (err) {
+      setSubmitting(false);
+      setError(err instanceof Error ? err.message : 'Job durumu alınamadı.');
     }
-  }, [loadHistory, loadModels, loadWorkerInfo, reportUiError]);
+  }, [ensureImageUrl, refreshHistory, stopPolling]);
 
   useEffect(() => {
-    // TÜRKÇE NOT: Uygulama açılırken ve sonrasında global JS hataları da ekranda görülsün diye dinleyici eklenir.
-    const onError = (event) => {
-      setRuntimeError(`Runtime hata: ${safeText(event?.message, 'Bilinmeyen hata')}`);
-    };
-    const onRejection = (event) => {
-      const reason = event?.reason;
-      setRuntimeError(`Promise hata: ${safeText(reason?.message || reason, 'Bilinmeyen hata')}`);
-    };
+    void loadWorkerInfo();
+    void loadModels();
+    void refreshHistory();
+    return () => stopPolling();
+  }, [loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
 
-    window.addEventListener('error', onError);
-    window.addEventListener('unhandledrejection', onRejection);
+  const handleGenerate = useCallback(async () => {
+    if (!prompt.trim()) {
+      setError('Prompt zorunlu.');
+      return;
+    }
+    if (!selectedModelId) {
+      setError('Model seçmelisin.');
+      return;
+    }
 
-    boot();
-    return () => {
-      clearPoll();
-      window.removeEventListener('error', onError);
-      window.removeEventListener('unhandledrejection', onRejection);
-    };
-  }, [boot, clearPoll]);
-
-  const handleChange = useCallback((key, value) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  }, []);
-
-  const handleQuickPrompt = useCallback((text) => {
-    setForm((prev) => ({ ...prev, prompt: text }));
-  }, []);
-
-  const handleSubmit = useCallback(async (event) => {
-    event.preventDefault();
+    stopPolling();
     setSubmitting(true);
-    setPageError('');
-    clearPoll();
-    setActiveInlinePreview('');
-    setActiveImageUrls([]);
+    setError('');
+    setActiveJob(null);
 
     try {
-      const payload = await requestWorker('/generate', {
-        method: 'POST',
-        body: {
-          prompt: form.prompt,
-          model: form.model,
-          modelId: form.model,
-          ratio: form.ratio,
-          quality: form.quality,
-          style: form.style,
-          negativePrompt: form.negativePrompt,
+      const envelope = await requestWorker<JobRecord>(
+        '/generate',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            prompt: prompt.trim(),
+            negativePrompt: negativePrompt.trim(),
+            model: selectedModelId,
+            modelId: selectedModelId,
+            ratio,
+            quality,
+            style,
+            n: count,
+            responseFormat: 'url',
+            metadata: {
+              page: 'src/pages/AI/image.tsx',
+              worker: WORKER_BASE_URL,
+            },
+          }),
         },
-      });
+        1,
+      );
 
-      const job = payload?.data || null;
-      const inlinePreview = safeText(payload?.meta?.inlinePreview);
-
-      setActiveInlinePreview(inlinePreview);
-      setActiveJob(job);
-      mergeActiveImages(job, inlinePreview);
-
-      const jobId = safeText(job?.jobId);
-      if (jobId) {
-        if (stopIfTerminal(job)) {
-          const resolvedJob = await resolveCompletedImageIfNeeded(job, inlinePreview);
-          setActiveJob(resolvedJob);
-          await loadHistory();
-        } else {
-          pollJob(jobId);
-        }
-      } else {
-        await loadHistory();
+      let nextJob = envelope.data;
+      const inlinePreview = typeof envelope.meta?.inlinePreview === 'string' ? envelope.meta.inlinePreview : null;
+      if (inlinePreview && pickImages(nextJob).length === 0) {
+        nextJob = {
+          ...nextJob,
+          outputUrl: inlinePreview,
+          outputUrls: [inlinePreview],
+        };
       }
-    } catch (error) {
-      const failedJob = error?.payload?.meta?.job || null;
-      if (failedJob) {
-        setActiveJob(failedJob);
+      setActiveJob(nextJob);
+
+      if (!nextJob.jobId) {
+        throw new Error('Worker jobId döndürmedi.');
       }
-reportUiError('Üretim başlatılamadı', error);
-    } finally {
+
+      if (TERMINAL.has(nextJob.status)) {
+        setSubmitting(false);
+        await refreshHistory();
+        return;
+      }
+
+      await refreshHistory();
+      await pollJob(nextJob.jobId);
+    } catch (err) {
       setSubmitting(false);
+      setError(err instanceof Error ? err.message : 'Görsel üretimi başlatılamadı.');
     }
-  }, [clearPoll, form, loadHistory, mergeActiveImages, pollJob, reportUiError, resolveCompletedImageIfNeeded, stopIfTerminal]);
+  }, [count, negativePrompt, pollJob, prompt, quality, ratio, refreshHistory, selectedModelId, stopPolling, style]);
 
   const handleCancel = useCallback(async () => {
-    const jobId = safeText(activeJob?.jobId);
-    if (!jobId) return;
-
+    if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
     try {
-      const payload = await requestWorker('/jobs/cancel', {
+      const envelope = await requestWorker<JobRecord>('/jobs/cancel', {
         method: 'POST',
-        body: { jobId },
-      });
-      clearPoll();
-      setActiveJob(payload?.data || null);
-      mergeActiveImages(payload?.data || null, activeInlinePreview);
-      await loadHistory();
-    } catch (error) {
-reportUiError('İptal işlemi başarısız oldu', error);
+        body: JSON.stringify({ jobId: activeJob.jobId }),
+      }, 0);
+      stopPolling();
+      setSubmitting(false);
+      setActiveJob(envelope.data);
+      await refreshHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'İptal işlemi başarısız oldu.');
     }
-  }, [activeInlinePreview, activeJob, clearPoll, loadHistory, mergeActiveImages, reportUiError]);
+  }, [activeJob, refreshHistory, stopPolling]);
 
-  const handleRefreshHistory = useCallback(async () => {
-    setPageError('');
+  const openHistoryJob = useCallback(async (jobId: string) => {
+    setError('');
+    stopPolling();
     try {
-      await loadHistory();
-    } catch (error) {
-reportUiError('Geçmiş yenilenemedi', error);
+      const envelope = await requestWorker<JobRecord>('/jobs/status/' + encodeURIComponent(jobId), undefined, 0);
+      let nextJob = envelope.data;
+      if (nextJob.status === 'completed') {
+        nextJob = await ensureImageUrl(nextJob);
+      }
+      setActiveJob(nextJob);
+      if (!TERMINAL.has(nextJob.status)) {
+        setSubmitting(true);
+        await pollJob(jobId);
+      } else {
+        setSubmitting(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Geçmiş kaydı açılamadı.');
     }
-  }, [loadHistory, reportUiError]);
-
-  const handleResetStrategy = useCallback(() => {
-    try {
-      localStorage.removeItem(STRATEGY_STORAGE_KEY);
-      pushDebugLog('KAZANAN STRATEJİ SIFIRLANDI');
-    } catch {
-      pushDebugLog('STRATEJİ SIFIRLAMA BAŞARISIZ');
-    }
-  }, [pushDebugLog]);
-
-  const activeStatus = safeText(activeJob?.status).toLowerCase();
-  const activeStep = safeText(activeJob?.step, '-');
-  const activePrompt = safeText(activeJob?.requestSummary?.promptPreview || activeJob?.requestSummary?.prompt || '');
-  const activeProgress = Math.max(0, Math.min(100, Math.floor(safeNumber(activeJob?.progress, 0))));
-  const canCancel = activeStatus === 'queued' || activeStatus === 'processing';
-
-  const renderedHistory = useMemo(() => history.slice(0, HISTORY_LIMIT), [history]);
-  const rememberedStrategy = useMemo(() => getStoredWinningStrategyName(), [debugLogs]);
+  }, [ensureImageUrl, pollJob, stopPolling]);
 
   return (
-    <div style={styles.page}>
-      <div style={styles.hero}>
-        <div>
-          <div style={styles.eyebrow}>IMAGE WORKER</div>
-          <h1 style={styles.title}>20 stratejili worker istemcisi</h1>
-          <p style={styles.subtitle}>
-            Bu sayfa sadece <code style={styles.code}>{WORKER_BASE_URL}</code> ile konuşur.
-            Modeller kataloğundaki image model listesini kullanır. Depolama mantığı me.puter üstündedir.
-          </p>
-        </div>
-
-        <div style={styles.routeBox}>
-          <div style={styles.routeTitle}>Aktif route&apos;lar</div>
-          <div style={styles.routeWrap}>
-            {['/models', '/generate', '/jobs/status/:id', '/jobs/history', '/jobs/cancel', '/jobs/image/:id'].map((item) => (
-              <span key={item} style={styles.routePill}>{item}</span>
-            ))}
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6">
+      <div className="rounded-3xl border border-slate-800 bg-slate-950 p-6 text-slate-100 shadow-2xl">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Görsel Üretim</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Tek kaynak: <strong>{WORKER_BASE_URL}</strong> · Model kaynağı: <strong>/models</strong>
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
+            </p>
           </div>
-
-          <div style={{ marginTop: 16 }}>
-            <div style={styles.metaLabel}>HATIRLANAN STRATEJİ</div>
-            <div style={styles.metaValue}>{rememberedStrategy || 'Henüz yok'}</div>
-          </div>
-
-          <div style={{ marginTop: 12 }}>
-            <button type="button" onClick={handleResetStrategy} style={styles.secondaryButton}>
-              Stratejiyi Sıfırla
-            </button>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
+            <div>Seçili model: {selectedModel ? modelLabel(selectedModel) : 'yok'}</div>
+            <div className="mt-1 text-xs text-slate-400">Fiyat: {selectedModel?.pricing?.usdPerImage ?? '-'} USD / görsel</div>
           </div>
         </div>
       </div>
 
-      {pageError ? (
-        <div style={styles.errorBox}>{pageError}</div>
+      {error ? (
+        <div className="rounded-2xl border border-red-700 bg-red-950/70 px-4 py-3 text-sm text-red-100">
+          {error}
+        </div>
       ) : null}
 
-      {runtimeError ? (
-        <div style={styles.errorBox}>{runtimeError}</div>
-      ) : null}
+      <div className="grid gap-6 lg:grid-cols-[1.1fr,0.9fr]">
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Üretim ayarları</h2>
+          <div className="mt-4 grid gap-4">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">Prompt</span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={6}
+                className="rounded-2xl border border-slate-300 px-4 py-3 outline-none ring-0 focus:border-slate-500"
+                placeholder="Örn: sisli İstanbul sokaklarında neon ışıklı sinematik gece sahnesi"
+              />
+            </label>
 
-      <div style={styles.grid}>
-        <section style={styles.panel}>
-          <div style={styles.panelHead}>
-            <h2 style={styles.panelTitle}>Üretim ayarları</h2>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">Negatif prompt</span>
+              <textarea
+                value={negativePrompt}
+                onChange={(e) => setNegativePrompt(e.target.value)}
+                rows={3}
+                className="rounded-2xl border border-slate-300 px-4 py-3 outline-none ring-0 focus:border-slate-500"
+                placeholder="İstenmeyen detaylar"
+              />
+            </label>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Model</span>
+                <select
+                  value={selectedModelId}
+                  onChange={(e) => setSelectedModelId(e.target.value)}
+                  className="rounded-2xl border border-slate-300 px-4 py-3"
+                  disabled={modelsLoading}
+                >
+                  {models.map((item) => (
+                    <option key={modelKey(item)} value={modelKey(item)}>
+                      {modelLabel(item)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Oran</span>
+                <select value={ratio} onChange={(e) => setRatio(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
+                  {RATIO_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Kalite</span>
+                <select value={quality} onChange={(e) => setQuality(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
+                  {QUALITY_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-slate-700">Stil</span>
+                <select value={style} onChange={(e) => setStyle(e.target.value)} className="rounded-2xl border border-slate-300 px-4 py-3">
+                  {STYLE_OPTIONS.map((item) => <option key={item} value={item}>{item || 'Varsayılan'}</option>)}
+                </select>
+              </label>
+            </div>
+
+            <label className="grid gap-2 md:max-w-xs">
+              <span className="text-sm font-medium text-slate-700">Adet</span>
+              <input
+                type="number"
+                min={1}
+                max={1}
+                step={1}
+                value={count}
+                onChange={(e) => setCount(Math.max(1, Math.min(1, Number(e.target.value) || 1)))}
+                className="rounded-2xl border border-slate-300 px-4 py-3"
+              />
+            </label>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => void handleGenerate()}
+                disabled={submitting || modelsLoading}
+                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submitting ? 'Üretiliyor...' : 'Görsel üret'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancel()}
+                disabled={!activeJob || TERMINAL.has(activeJob.status) || !submitting}
+                className="rounded-2xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                İptal et
+              </button>
+            </div>
           </div>
-
-          <form onSubmit={handleSubmit}>
-            <label style={styles.label}>Model</label>
-            <select
-              value={form.model}
-              onChange={(e) => handleChange('model', e.target.value)}
-              style={styles.select}
-            >
-              {models.length ? models.map((item) => {
-                const id = safeText(item?.modelId || item?.id);
-                const provider = safeText(item?.provider || item?.company);
-                const modelName = safeText(item?.modelName || id);
-                return <option key={id} value={id}>{provider ? `${provider} · ${modelName}` : modelName}</option>;
-              }) : IMAGE_MODELS.map((item) => (
-                <option key={item.modelId} value={item.modelId}>{item.label}</option>
-              ))}
-            </select>
-
-            <label style={styles.label}>Prompt</label>
-            <textarea
-              value={form.prompt}
-              onChange={(e) => handleChange('prompt', e.target.value)}
-              placeholder="Örnek: Turuncu bir kedi, sinematik ışık, ultra detay"
-              style={styles.textarea}
-            />
-
-            <div style={styles.quickWrap}>
-              {QUICK_PROMPTS.map((item, index) => (
-                <button
-                  key={index}
-                  type="button"
-                  onClick={() => handleQuickPrompt(item)}
-                  style={styles.quickButton}
-                >
-                  Hazır Prompt {index + 1}
-                </button>
-              ))}
-            </div>
-
-            <label style={styles.label}>Negatif prompt</label>
-            <input
-              value={form.negativePrompt}
-              onChange={(e) => handleChange('negativePrompt', e.target.value)}
-              placeholder="Örnek: blurry, watermark, low quality"
-              style={styles.input}
-            />
-
-            <div style={styles.twoCol}>
-              <div>
-                <label style={styles.label}>Oran</label>
-                <select
-                  value={form.ratio}
-                  onChange={(e) => handleChange('ratio', e.target.value)}
-                  style={styles.select}
-                >
-                  {RATIO_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>{item.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={styles.label}>Kalite</label>
-                <select
-                  value={form.quality}
-                  onChange={(e) => handleChange('quality', e.target.value)}
-                  style={styles.select}
-                >
-                  {QUALITY_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>{item.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <label style={styles.label}>Stil notu</label>
-            <input
-              value={form.style}
-              onChange={(e) => handleChange('style', e.target.value)}
-              placeholder="Örnek: cinematic, realistic, soft light"
-              style={styles.input}
-            />
-
-            <div style={styles.actionRow}>
-              <button type="submit" disabled={submitting || !safeText(form.prompt)} style={styles.primaryButton}>
-                {submitting ? 'Üretiliyor...' : 'Görsel Üret'}
-              </button>
-
-              <button type="button" disabled={!canCancel} onClick={handleCancel} style={styles.secondaryButton}>
-                İptal
-              </button>
-            </div>
-          </form>
         </section>
 
-        <section style={styles.panel}>
-          <div style={styles.panelHead}>
-            <h2 style={styles.panelTitle}>Aktif job</h2>
-            <span style={{ ...styles.statusPill, borderColor: statusTone(activeStatus), color: statusTone(activeStatus) }}>
-              {statusLabel(activeStatus || 'idle')}
-            </span>
-          </div>
-
-          {!activeJob ? (
-            <div style={styles.emptyText}>Henüz aktif job yok.</div>
-          ) : (
-            <>
-              <div style={styles.jobMetaGrid}>
-                <div>
-                  <div style={styles.metaLabel}>JOB ID</div>
-                  <div style={styles.metaValue}>{safeText(activeJob?.jobId, '-')}</div>
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-900">Aktif iş</h2>
+          {activeJob ? (
+            <div className="mt-4 space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-slate-700">Durum: {statusText(activeJob.status)}</span>
+                  <span className="text-slate-500">Job: {activeJob.jobId}</span>
                 </div>
-
-                <div>
-                  <div style={styles.metaLabel}>İLERLEME</div>
-                  <div style={styles.metaValue}>{activeProgress}%</div>
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-slate-900 transition-all duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, activeJob.progress || 0))}%` }}
+                  />
                 </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={styles.metaLabel}>ADIM</div>
-                  <div style={styles.stepText}>{activeStep}</div>
-                </div>
-
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <div style={styles.metaLabel}>PROMPT</div>
-                  <div style={styles.metaValue}>{activePrompt || '-'}</div>
-                </div>
-
-                <div>
-                  <div style={styles.metaLabel}>MODEL</div>
-                  <div style={styles.metaValue}>{safeText(activeJob?.model || activeJob?.requestSummary?.model, form.model || DEFAULT_MODEL_ID)}</div>
-                </div>
-
-                <div>
-                  <div style={styles.metaLabel}>BİTTİ</div>
-                  <div style={styles.metaValue}>{formatDateTime(activeJob?.finishedAt)}</div>
+                <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                  <span>{activeJob.step || 'Bekleniyor'}</span>
+                  <span>%{Math.max(0, Math.min(100, activeJob.progress || 0))}</span>
                 </div>
               </div>
 
-              <div style={styles.progressBarOuter}>
-                <div style={{ ...styles.progressBarInner, width: `${activeProgress}%` }} />
-              </div>
-
-              {activeStatus === 'failed_storage' ? (
-                <div style={styles.warnBox}>
-                  Görsel üretimi tamamlandı ama kalıcı depolama başarısız oldu.
+              {activeJob.error?.message ? (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                  {activeJob.error.message}
                 </div>
               ) : null}
 
-              {activeStatus === 'failed' ? (
-                <div style={styles.warnBox}>
-                  İş başarısız oldu. Promptu sadeleştirip tekrar deneyin.
-                </div>
-              ) : null}
-
-              <div style={styles.previewWrap}>
-                {activeImageUrls.length ? (
-                  activeImageUrls.map((src, index) => (
+              {activeImages.length > 0 ? (
+                <div className="grid gap-4">
+                  {activeImages.map((src) => (
                     <img
-                      key={`${src}-${index}`}
+                      key={src}
                       src={src}
-                      alt={`Üretilen görsel ${index + 1}`}
-                      style={styles.previewImage}
+                      alt="Üretilen görsel"
+                      className="w-full rounded-2xl border border-slate-200 object-cover shadow-sm"
                     />
-                  ))
-                ) : (
-                  <div style={styles.emptyPreview}>Görsel henüz hazır değil. Worker tamamlayınca burada görünür.</div>
-                )}
-              </div>
-            </>
-          )}
-        </section>
-
-        <section style={styles.panel}>
-          <div style={styles.panelHead}>
-            <h2 style={styles.panelTitle}>Job geçmişi</h2>
-            <button type="button" onClick={handleRefreshHistory} style={styles.secondaryButton}>
-              {loadingHistory ? 'Yenileniyor...' : 'Yenile'}
-            </button>
-          </div>
-
-          {renderedHistory.length === 0 ? (
-            <div style={styles.emptyText}>Geçmiş bulunamadı.</div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+                  Görsel hazır olduğunda burada görünecek.
+                </div>
+              )}
+            </div>
           ) : (
-            <div style={styles.historyList}>
-              {renderedHistory.map((job) => {
-                const imgs = pickJobImages(job);
-                const firstImage = imgs[0] || '';
-                const tone = statusTone(job?.status);
-
-                return (
-                  <button
-                    key={job.jobId}
-                    type="button"
-                    onClick={() => {
-                      setActiveJob(job);
-                      setActiveInlinePreview('');
-                      mergeActiveImages(job, '');
-                    }}
-                    style={{ ...styles.historyCard, borderColor: tone }}
-                  >
-                    <div style={styles.historyTop}>
-                      <div style={styles.historyTitle}>{safeText(job?.requestSummary?.promptPreview, 'İsimsiz job')}</div>
-                      <span style={{ ...styles.statusPill, borderColor: tone, color: tone }}>
-                        {statusLabel(job?.status)}
-                      </span>
-                    </div>
-
-                    <div style={styles.historyDate}>{formatDateTime(job?.createdAt)}</div>
-
-                    <div style={styles.historyMetaRow}>
-                      <span>{safeText(job?.model, DEFAULT_MODEL_ID)}</span>
-                      <span>{Math.max(0, Math.min(100, Math.floor(safeNumber(job?.progress, 0))))}%</span>
-                    </div>
-
-                    {firstImage ? (
-                      <img src={firstImage} alt="Geçmiş görsel" style={styles.historyThumb} />
-                    ) : (
-                      <div style={styles.historyNoImage}>Önizleme yok</div>
-                    )}
-                  </button>
-                );
-              })}
+            <div className="mt-4 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+              Henüz aktif iş yok.
             </div>
           )}
         </section>
       </div>
 
-      <div style={{ ...styles.panel, marginTop: 24 }}>
-        <div style={styles.panelHead}>
-          <h2 style={styles.panelTitle}>Debug log</h2>
-          <div style={styles.metaValue}>{loadingInfo ? 'Başlatılıyor...' : 'Hazır'}</div>
+      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-xl font-semibold text-slate-900">Geçmiş</h2>
+          <button type="button" onClick={() => void refreshHistory()} className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">
+            Yenile
+          </button>
         </div>
-
-        <div style={styles.debugBox}>
-          {debugLogs.length ? (
-            debugLogs.map((line, index) => (
-              <div key={`${line}-${index}`} style={styles.debugLine}>{line}</div>
-            ))
-          ) : (
-            <div style={styles.emptyText}>Henüz log yok.</div>
-          )}
+        <div className="mt-4 grid gap-3">
+          {loadingHistory ? (
+            <div className="text-sm text-slate-500">Geçmiş yükleniyor...</div>
+          ) : history.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500">Henüz kayıt yok.</div>
+          ) : history.map((item) => (
+            <button
+              key={item.jobId}
+              type="button"
+              onClick={() => void openHistoryJob(item.jobId)}
+              className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-slate-400 hover:bg-white"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-slate-800">{statusText(item.status)}</span>
+                <span className="text-xs text-slate-500">{formatDate(item.updatedAt || item.createdAt)}</span>
+              </div>
+              <div className="text-sm text-slate-700">{item.requestSummary?.promptPreview || 'Prompt kaydı yok'}</div>
+              <div className="text-xs text-slate-500">{item.requestSummary?.model || item.request?.modelId || '-'}</div>
+            </button>
+          ))}
         </div>
-      </div>
-
-      <div style={styles.footerInfo}>
-        <div>Worker: {safeText(workerInfo?.worker, 'idm')}</div>
-        <div>Sürüm: {safeText(workerInfo?.version, '-')}</div>
-        <div>Model: {models[0]?.modelId || DEFAULT_MODEL_ID}</div>
-        <div>Zaman: {formatDateTime(new Date().toISOString())}</div>
-      </div>
+      </section>
     </div>
   );
 }
-
-const styles = {
-  page: {
-    minHeight: '100vh',
-    background: '#05060a',
-    color: '#f8fafc',
-    padding: '24px',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-  },
-  hero: {
-    display: 'grid',
-    gridTemplateColumns: '1.5fr 1fr',
-    gap: '20px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '24px',
-    padding: '24px',
-    background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))',
-    marginBottom: '24px',
-  },
-  eyebrow: {
-    fontSize: '12px',
-    letterSpacing: '4px',
-    color: '#00c2ff',
-    marginBottom: '8px',
-  },
-  title: {
-    fontSize: '28px',
-    lineHeight: 1.1,
-    margin: 0,
-    marginBottom: '12px',
-  },
-  subtitle: {
-    fontSize: '16px',
-    color: '#cbd5e1',
-    margin: 0,
-    lineHeight: 1.6,
-  },
-  code: {
-    background: 'rgba(255,255,255,0.08)',
-    padding: '2px 8px',
-    borderRadius: '8px',
-  },
-  routeBox: {
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '20px',
-    padding: '18px',
-    background: '#020307',
-  },
-  routeTitle: {
-    fontSize: '16px',
-    marginBottom: '14px',
-  },
-  routeWrap: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '10px',
-  },
-  routePill: {
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: '999px',
-    padding: '8px 12px',
-    fontSize: '13px',
-    color: '#e2e8f0',
-  },
-  errorBox: {
-    marginBottom: '20px',
-    border: '1px solid rgba(239,68,68,0.5)',
-    background: 'rgba(239,68,68,0.12)',
-    borderRadius: '16px',
-    padding: '14px 16px',
-    color: '#fecaca',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr 1fr',
-    gap: '20px',
-    alignItems: 'start',
-  },
-  panel: {
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '24px',
-    padding: '20px',
-    background: '#090b12',
-  },
-  panelHead: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '12px',
-    marginBottom: '18px',
-  },
-  panelTitle: {
-    margin: 0,
-    fontSize: '18px',
-  },
-  label: {
-    display: 'block',
-    fontSize: '14px',
-    color: '#e2e8f0',
-    marginBottom: '8px',
-    marginTop: '14px',
-  },
-  input: {
-    width: '100%',
-    boxSizing: 'border-box',
-    borderRadius: '16px',
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: '#05060a',
-    color: '#fff',
-    padding: '12px 14px',
-    outline: 'none',
-  },
-  textarea: {
-    width: '100%',
-    boxSizing: 'border-box',
-    minHeight: '140px',
-    resize: 'vertical',
-    borderRadius: '16px',
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: '#05060a',
-    color: '#fff',
-    padding: '12px 14px',
-    outline: 'none',
-  },
-  select: {
-    width: '100%',
-    boxSizing: 'border-box',
-    borderRadius: '16px',
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: '#05060a',
-    color: '#fff',
-    padding: '12px 14px',
-    outline: 'none',
-  },
-  twoCol: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: '14px',
-  },
-  quickWrap: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '10px',
-    marginTop: '12px',
-  },
-  quickButton: {
-    borderRadius: '999px',
-    border: '1px solid rgba(0,194,255,0.35)',
-    background: 'rgba(0,194,255,0.08)',
-    color: '#8ae7ff',
-    padding: '9px 12px',
-    cursor: 'pointer',
-  },
-  actionRow: {
-    display: 'flex',
-    gap: '12px',
-    marginTop: '18px',
-  },
-  primaryButton: {
-    borderRadius: '16px',
-    border: '1px solid rgba(0,194,255,0.4)',
-    background: '#00c2ff',
-    color: '#03131a',
-    fontWeight: 700,
-    padding: '12px 16px',
-    cursor: 'pointer',
-  },
-  secondaryButton: {
-    borderRadius: '16px',
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: 'transparent',
-    color: '#fff',
-    padding: '12px 16px',
-    cursor: 'pointer',
-  },
-  statusPill: {
-    border: '1px solid rgba(255,255,255,0.14)',
-    borderRadius: '999px',
-    padding: '6px 10px',
-    fontSize: '12px',
-    letterSpacing: '1px',
-    whiteSpace: 'nowrap',
-  },
-  jobMetaGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: '14px',
-  },
-  metaLabel: {
-    fontSize: '12px',
-    color: '#94a3b8',
-    marginBottom: '6px',
-    letterSpacing: '1px',
-  },
-  metaValue: {
-    fontSize: '15px',
-    color: '#f8fafc',
-    lineHeight: 1.5,
-    wordBreak: 'break-word',
-  },
-  stepText: {
-    fontSize: '15px',
-    lineHeight: 1.7,
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    color: '#f8fafc',
-  },
-  progressBarOuter: {
-    height: '10px',
-    background: 'rgba(255,255,255,0.08)',
-    borderRadius: '999px',
-    overflow: 'hidden',
-    marginTop: '16px',
-  },
-  progressBarInner: {
-    height: '100%',
-    background: '#00c2ff',
-    borderRadius: '999px',
-    transition: 'width 0.25s ease',
-  },
-  previewWrap: {
-    marginTop: '18px',
-    display: 'grid',
-    gap: '14px',
-  },
-  previewImage: {
-    width: '100%',
-    display: 'block',
-    borderRadius: '18px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: '#020307',
-  },
-  emptyPreview: {
-    minHeight: '260px',
-    borderRadius: '18px',
-    border: '1px dashed rgba(255,255,255,0.12)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: '#94a3b8',
-    textAlign: 'center',
-    padding: '20px',
-    background: '#05060a',
-  },
-  warnBox: {
-    marginTop: '14px',
-    border: '1px solid rgba(245,158,11,0.35)',
-    background: 'rgba(245,158,11,0.08)',
-    color: '#fde68a',
-    borderRadius: '16px',
-    padding: '12px 14px',
-    lineHeight: 1.6,
-  },
-  emptyText: {
-    color: '#94a3b8',
-    lineHeight: 1.6,
-  },
-  historyList: {
-    display: 'grid',
-    gap: '14px',
-  },
-  historyCard: {
-    textAlign: 'left',
-    width: '100%',
-    borderRadius: '18px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: '#071018',
-    padding: '14px',
-    color: '#fff',
-    cursor: 'pointer',
-  },
-  historyTop: {
-    display: 'flex',
-    alignItems: 'start',
-    justifyContent: 'space-between',
-    gap: '10px',
-    marginBottom: '8px',
-  },
-  historyTitle: {
-    fontSize: '18px',
-    fontWeight: 600,
-    lineHeight: 1.35,
-  },
-  historyDate: {
-    color: '#94a3b8',
-    fontSize: '14px',
-    marginBottom: '10px',
-  },
-  historyMetaRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: '10px',
-    color: '#cbd5e1',
-    fontSize: '13px',
-    marginBottom: '12px',
-  },
-  historyThumb: {
-    width: '100%',
-    display: 'block',
-    borderRadius: '14px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: '#020307',
-  },
-  historyNoImage: {
-    minHeight: '90px',
-    borderRadius: '14px',
-    border: '1px dashed rgba(255,255,255,0.12)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: '#94a3b8',
-    background: '#05060a',
-  },
-  footerInfo: {
-    marginTop: '24px',
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '16px',
-    color: '#94a3b8',
-    fontSize: '13px',
-  },
-  debugBox: {
-    maxHeight: '320px',
-    overflow: 'auto',
-    borderRadius: '16px',
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: '#05060a',
-    padding: '12px',
-  },
-  debugLine: {
-    fontSize: '12px',
-    lineHeight: 1.6,
-    color: '#cbd5e1',
-    borderBottom: '1px solid rgba(255,255,255,0.04)',
-    paddingBottom: '6px',
-    marginBottom: '6px',
-    wordBreak: 'break-word',
-  },
-};
