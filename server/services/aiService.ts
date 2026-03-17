@@ -5,12 +5,87 @@
 
 import { kv } from '../db/kv.js';
 import { fileSystem } from '../db/fs.js';
+import { puterServiceSession } from './puterServiceSession.js';
 
 type AIFeature = 'chat' | 'image' | 'tts' | 'video' | 'photoToVideo';
+type FeatureConfigKey = 'chat' | 'image' | 'tts' | 'video' | 'ocr';
 type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'canceled' | 'not_found';
 type LedgerAction = 'reserve' | 'commit' | 'refund' | 'usage';
 
 const OWNER_RUNTIME_TIMEOUT_MS = 20000;
+
+const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
+  image: {
+    feature: 'image',
+    selectedPage: 'image.tsx',
+    compatiblePages: ['image.tsx'],
+    primaryWorkerKey: 'imgs',
+    fallbackWorkerKeys: ['api-cagrilari'],
+    modelSourceKey: 'models-worker',
+    customWorkerUrl: '',
+    customModelUrl: '',
+    useDefault: true,
+    enabled: true,
+    contractVersion: 'v1',
+    shortDescription: 'Varsayılan görsel worker zinciri',
+  },
+  chat: {
+    feature: 'chat',
+    selectedPage: 'Chat.tsx',
+    compatiblePages: ['Chat.tsx', 'Chat1.tsx'],
+    primaryWorkerKey: 'api-cagrilari',
+    fallbackWorkerKeys: [],
+    modelSourceKey: 'models-worker',
+    customWorkerUrl: '',
+    customModelUrl: '',
+    useDefault: true,
+    enabled: true,
+    contractVersion: 'v1',
+    shortDescription: 'Varsayılan sohbet worker akışı',
+  },
+  video: {
+    feature: 'video',
+    selectedPage: 'video.tsx',
+    compatiblePages: ['video.tsx'],
+    primaryWorkerKey: 'api-cagrilari',
+    fallbackWorkerKeys: [],
+    modelSourceKey: 'models-worker',
+    customWorkerUrl: '',
+    customModelUrl: '',
+    useDefault: true,
+    enabled: true,
+    contractVersion: 'v1',
+    shortDescription: 'Varsayılan video worker akışı',
+  },
+  tts: {
+    feature: 'tts',
+    selectedPage: 'TTS.tsx',
+    compatiblePages: ['TTS.tsx'],
+    primaryWorkerKey: 'api-cagrilari',
+    fallbackWorkerKeys: [],
+    modelSourceKey: 'models-worker',
+    customWorkerUrl: '',
+    customModelUrl: '',
+    useDefault: true,
+    enabled: true,
+    contractVersion: 'v1',
+    shortDescription: 'Varsayılan TTS worker akışı',
+  },
+  ocr: {
+    feature: 'ocr',
+    selectedPage: 'image.tsx',
+    compatiblePages: ['image.tsx'],
+    primaryWorkerKey: 'api-cagrilari',
+    fallbackWorkerKeys: [],
+    modelSourceKey: 'models-worker',
+    customWorkerUrl: '',
+    customModelUrl: '',
+    useDefault: true,
+    enabled: true,
+    contractVersion: 'v1',
+    shortDescription: 'OCR için varsayılan pipeline',
+  },
+};
 
 interface ModelRecord {
   id: string;
@@ -103,24 +178,12 @@ function readEnv(...keys: string[]) {
   return undefined;
 }
 
-function getOwnerRuntimeConfig() {
+async function getOwnerRuntimeConfig() {
+  const creds = await puterServiceSession.getEffectiveRuntimeCredentials();
   return {
-    baseUrl:
-      readEnv(
-        'PUTER_OWNER_AI_BASE_URL',
-        'OWNER_RUNTIME_BASE_URL',
-        'PUTER_OWNER_RUNTIME_BASE_URL'
-      ) || 'https://api-cagrilari.puter.work',
-    statusBaseUrl:
-      readEnv(
-        'PUTER_OWNER_JOB_STATUS_BASE_URL',
-        'OWNER_RUNTIME_JOB_STATUS_BASE_URL'
-      ) || 'https://is-durumu.puter.work',
-    token: readEnv(
-      'PUTER_OWNER_AI_TOKEN',
-      'OWNER_RUNTIME_TOKEN',
-      'PUTER_OWNER_RUNTIME_TOKEN'
-    ),
+    baseUrl: creds.baseUrl,
+    statusBaseUrl: creds.statusBaseUrl,
+    token: creds.token,
   };
 }
 
@@ -190,7 +253,7 @@ async function callOwnerRuntime<T>(
   payload: unknown,
   options?: { baseUrl?: string }
 ): Promise<T> {
-  const { baseUrl, token } = getOwnerRuntimeConfig();
+  const { baseUrl, token } = await getOwnerRuntimeConfig();
   const targetBaseUrl = (options?.baseUrl || baseUrl)?.replace(/\/$/, '');
 
   if (!targetBaseUrl) {
@@ -299,9 +362,70 @@ async function writeAsset(userId: string, type: 'image' | 'audio', base64: strin
 }
 
 export const aiService = {
+  // DELILX: workers config registry frontend/route bağımlılığını kırmadan KV'de kalıcı policy olarak tutulur.
+  async getWorkersConfig() {
+    const stored = (await kv.get('settings:workers')) || {};
+    const merged: Record<string, any> = {};
+    for (const key of Object.keys(DEFAULT_WORKERS_CONFIG)) {
+      merged[key] = {
+        ...DEFAULT_WORKERS_CONFIG[key as FeatureConfigKey],
+        ...(stored[key] || {}),
+      };
+    }
+    return merged;
+  },
+
+  async getEffectiveFeatureConfig(feature: string) {
+    const cfg = await this.getWorkersConfig();
+    const normalized = feature === 'photoToVideo' ? 'video' : (feature || '').toLowerCase();
+    return cfg[normalized] || cfg.image;
+  },
+
+  async saveWorkersConfig(input: Record<string, any>, updatedBy = 'system') {
+    const current = await this.getWorkersConfig();
+    const next: Record<string, any> = { ...current };
+    for (const key of Object.keys(input || {})) {
+      if (!next[key]) continue;
+      const patch = input[key] || {};
+      const customWorkerUrl = String(patch.customWorkerUrl || '').trim();
+      const customModelUrl = String(patch.customModelUrl || '').trim();
+      if (customWorkerUrl && !/^https:\/\//i.test(customWorkerUrl)) {
+        const e = new Error(`${key} customWorkerUrl geçersiz`);
+        (e as any).code = 'INVALID_WORKER_URL';
+        throw e;
+      }
+      if (customModelUrl && !/^https:\/\//i.test(customModelUrl)) {
+        const e = new Error(`${key} customModelUrl geçersiz`);
+        (e as any).code = 'INVALID_MODEL_URL';
+        throw e;
+      }
+      next[key] = {
+        ...next[key],
+        ...patch,
+        updatedBy,
+        updatedAt: new Date().toISOString(),
+      };
+      await kv.set(`settings:workers:${key}`, next[key]);
+    }
+    await kv.set('settings:workers', next);
+    await kv.set('workerRegistry:items', Object.values(next).map((v: any) => ({
+      key: v.primaryWorkerKey,
+      feature: v.feature,
+      baseUrl: v.customWorkerUrl || 'default',
+      contractVersion: v.contractVersion || 'v1',
+      updatedAt: v.updatedAt || new Date().toISOString(),
+    })));
+    await kv.set('modelRegistry:items', Object.values(next).map((v: any) => ({
+      feature: v.feature,
+      modelSourceKey: v.modelSourceKey,
+      customModelUrl: v.customModelUrl || '',
+      updatedAt: v.updatedAt || new Date().toISOString(),
+    })));
+    return next;
+  },
+
   isOwnerRuntimeConfigured() {
-    const { baseUrl } = getOwnerRuntimeConfig();
-    return Boolean(baseUrl);
+    return Boolean(process.env.PUTER_OWNER_AI_BASE_URL || process.env.OWNER_RUNTIME_BASE_URL || process.env.PUTER_OWNER_RUNTIME_BASE_URL);
   },
 
   // Part 4: backend owns model filtering/sorting so pages consume one consistent catalog projection.
@@ -392,10 +516,13 @@ export const aiService = {
     }
     user.kullanilan_kredi = Number(user.kullanilan_kredi || 0) + amount;
     await kv.set(`users:${userId}`, user);
+    await kv.set(`creditReservation:${requestId}`, { id: requestId, userId, feature, amount, status: 'reserved', requestId, jobId: jobId || null, created_at: new Date().toISOString() });
     return this.createLedgerEntry(userId, 'reserve', -amount, `${feature} kredi rezervasyonu`, requestId, jobId);
   },
 
-  async commitCredit(userId: string, amount: number, requestId: string, feature: string, jobId?: string) {
+  async commitCredit(userId: string, amount: number, requestId: string, feature: string, jobId?: string, internalCostTry = 0) {
+    await kv.set(`creditReservation:${requestId}`, { id: requestId, userId, feature, amount, status: 'committed', requestId, jobId: jobId || null, updated_at: new Date().toISOString() });
+    await kv.set(`adminCost:${requestId}`, { id: requestId, requestId, userId, feature, status: 'committed', internalCostTry, ownerKaynagi: 'me.puter', created_at: new Date().toISOString() });
     return this.createLedgerEntry(userId, 'commit', 0, `${feature} kredi commit`, requestId, jobId);
   },
 
@@ -404,6 +531,8 @@ export const aiService = {
     if (!user) fail('Kullanıcı bulunamadı', 'UNAUTHORIZED');
     user.kullanilan_kredi = Math.max(0, Number(user.kullanilan_kredi || 0) - amount);
     await kv.set(`users:${userId}`, user);
+    await kv.set(`creditReservation:${requestId}`, { id: requestId, userId, feature, amount, status: 'rolled_back', requestId, jobId: jobId || null, updated_at: new Date().toISOString() });
+    await kv.set(`adminCost:${requestId}`, { id: requestId, requestId, userId, feature, status: 'rolled_back', internalCostTry: 0, ownerKaynagi: 'me.puter', created_at: new Date().toISOString() });
     return this.createLedgerEntry(userId, 'refund', amount, `${feature} kredi iadesi`, requestId, jobId);
   },
 
@@ -628,7 +757,7 @@ export const aiService = {
       if (!output) fail('Output asset yazılamadı', 'ASSET_WRITE_FAILED');
 
       if (current.creditCommitted === 0) {
-        await this.commitCredit(current.userId, current.creditReserved, current.requestId, current.feature, current.id);
+        await this.commitCredit(current.userId, current.creditReserved, current.requestId, current.feature, current.id, current.internalCostTry);
       }
 
       const completedAt = new Date().toISOString();
@@ -741,6 +870,8 @@ export const aiService = {
     const requestId = createRequestId('req');
     const clientRequestId = normalizeClientRequestId(input.clientRequestId);
     const billing = estimateBilling(input.feature, model, input.payload);
+    const effectiveConfig = await this.getEffectiveFeatureConfig(input.feature);
+    const correlationId = createRequestId('corr');
 
     const runtimeInput: OwnerRuntimeCall = {
       feature: input.feature,
@@ -748,14 +879,14 @@ export const aiService = {
       modelId: model.id,
       requestId,
       clientRequestId,
-      payload: input.payload,
+      payload: { ...input.payload, _meta: { appUserId: input.userId, feature: input.feature, selectedWorkerKey: effectiveConfig?.primaryWorkerKey || null, selectedModelSource: effectiveConfig?.modelSourceKey || null, correlationId } },
     };
 
     if (input.feature === 'chat') {
       await this.reserveCredit(input.userId, billing.cost, requestId, 'chat');
       try {
         const runtime = await callOwnerRuntime<{ response?: string; text?: string; meta?: Record<string, unknown> }>('chat', runtimeInput);
-        await this.commitCredit(input.userId, billing.cost, requestId, 'chat');
+        await this.commitCredit(input.userId, billing.cost, requestId, 'chat', undefined, billing.internalCost);
         await this.upsertUsage({
           userId: input.userId,
           feature: 'chat',
@@ -772,7 +903,7 @@ export const aiService = {
           requestId,
           modelId: model.id,
           billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-          meta: runtime.meta || null,
+          meta: { ...(runtime.meta || {}), effectiveConfig, correlationId },
         };
       } catch (error: any) {
         await this.refundCredit(input.userId, billing.cost, requestId, 'chat');
@@ -799,7 +930,7 @@ export const aiService = {
         const base64Image = runtime.base64Image || runtime.imageBase64;
         if (!base64Image) fail('Görsel üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
         const asset = await writeAsset(input.userId, 'image', base64Image, 'png');
-        await this.commitCredit(input.userId, billing.cost, requestId, 'image');
+        await this.commitCredit(input.userId, billing.cost, requestId, 'image', undefined, billing.internalCost);
         await this.upsertUsage({
           userId: input.userId,
           feature: 'image',
@@ -817,7 +948,7 @@ export const aiService = {
           requestId,
           modelId: model.id,
           billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-          meta: runtime.meta || null,
+          meta: { ...(runtime.meta || {}), effectiveConfig, correlationId },
         };
       } catch (error: any) {
         await this.refundCredit(input.userId, billing.cost, requestId, 'image');
@@ -844,7 +975,7 @@ export const aiService = {
         const base64Audio = runtime.base64Audio || runtime.audioBase64;
         if (!base64Audio) fail('Ses üretilemedi', 'OWNER_RUNTIME_CALL_FAILED');
         const asset = await writeAsset(input.userId, 'audio', base64Audio, 'mp3');
-        await this.commitCredit(input.userId, billing.cost, requestId, 'tts');
+        await this.commitCredit(input.userId, billing.cost, requestId, 'tts', undefined, billing.internalCost);
         await this.upsertUsage({
           userId: input.userId,
           feature: 'tts',
@@ -862,7 +993,7 @@ export const aiService = {
           requestId,
           modelId: model.id,
           billing: { creditReserved: billing.cost, creditCommitted: billing.cost, internalCostTry: billing.internalCost },
-          meta: runtime.meta || null,
+          meta: { ...(runtime.meta || {}), effectiveConfig, correlationId },
         };
       } catch (error: any) {
         await this.refundCredit(input.userId, billing.cost, requestId, 'tts');

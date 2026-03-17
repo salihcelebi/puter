@@ -140,7 +140,17 @@ userRouter.get('/credits', async (req: AuthRequest, res) => {
     const allLedger = await kv.list('creditLedger:');
     const userLedger = allLedger
       .map((item) => item.value)
-      .filter((entry) => entry.kullanici_id === req.user.id)
+      .filter((entry) => String(entry.kullanici_id || entry.userId || '') === String(req.user.id))
+      .map((entry) => ({
+        ...entry,
+        id: String(entry.id || ''),
+        created_at: String(entry.created_at || entry.createdAt || new Date().toISOString()),
+        miktar: Number(entry.miktar ?? entry.amount ?? 0),
+        onceki_bakiye: Number(entry.onceki_bakiye ?? entry.beforeBalance ?? 0),
+        sonraki_bakiye: Number(entry.sonraki_bakiye ?? entry.afterBalance ?? 0),
+        aciklama: String(entry.aciklama || entry.reason || 'Kredi işlemi'),
+        islem_tipi: String(entry.islem_tipi || 'adjustment'),
+      }))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     res.json(userLedger);

@@ -97,14 +97,24 @@ adminRouter.post('/users/:id/credits', requirePermission('manage_credits'), asyn
     await kv.set(`users:${user.id}`, user);
 
     const ledgerId = `creditLedger:${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const nowIso = new Date().toISOString();
+    const previousBalance = Number(user.toplam_kredi || 0) - delta;
     await kv.set(ledgerId, {
       id: ledgerId,
+      kullanici_id: user.id,
       userId: user.id,
+      islem_tipi: action === 'add' ? 'adjustment' : 'usage',
+      action: action === 'add' ? 'topup' : 'usage',
+      miktar: delta,
       amount: parsedAmount,
-      action,
+      onceki_bakiye: Math.max(0, previousBalance),
+      sonraki_bakiye: nextBalance,
+      aciklama: reason || 'Admin kredi işlemi',
       reason: reason || 'Admin kredi işlemi',
-      createdAt: new Date().toISOString(),
+      created_at: nowIso,
+      createdAt: nowIso,
       actorId: req.user?.id || null,
+      muhasebe_notu: 'Owner Kaynağı: me.puter | Kullanıcı Kredisi: uygulama içi bakiye',
     });
 
     return res.json({ success: true, newBalance: nextBalance });
@@ -666,5 +676,75 @@ adminRouter.put('/models/bulk/update', async (req: AuthRequest, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Toplu güncelleme başarısız' });
+  }
+});
+
+// DELILX: workers config endpointleri feature→page→worker seçimlerini kalıcı KV policy olarak yönetir.
+adminRouter.get('/workers-config', requirePermission('manage_users'), async (req: AuthRequest, res) => {
+  try {
+    const { aiService } = await import('../services/aiService.js');
+    const config = await aiService.getWorkersConfig();
+    return res.json(config);
+  } catch (error) {
+    console.error('workers-config get error', error);
+    return res.status(500).json({ error: 'Workers config alınamadı', code: 'WORKERS_CONFIG_READ_FAILED' });
+  }
+});
+
+adminRouter.put('/workers-config', requirePermission('manage_users'), async (req: AuthRequest, res) => {
+  try {
+    const { aiService } = await import('../services/aiService.js');
+    const saved = await aiService.saveWorkersConfig(req.body || {}, req.user?.email || req.user?.id || 'admin');
+    return res.json({ success: true, config: saved });
+  } catch (error: any) {
+    return res.status(400).json({ error: error?.message || 'Workers config kaydedilemedi', code: error?.code || 'WORKERS_CONFIG_SAVE_FAILED' });
+  }
+});
+
+adminRouter.get('/workers-registry', requirePermission('manage_users'), async (_req: AuthRequest, res) => {
+  try {
+    const items = await kv.get('workerRegistry:items');
+    return res.json(items || []);
+  } catch {
+    return res.status(500).json({ error: 'Workers registry alınamadı', code: 'WORKERS_REGISTRY_READ_FAILED' });
+  }
+});
+
+adminRouter.get('/workers/effective-config', requirePermission('manage_users'), async (req: AuthRequest, res) => {
+  try {
+    const { aiService } = await import('../services/aiService.js');
+    const feature = String(req.query.feature || 'image');
+    const config = await aiService.getEffectiveFeatureConfig(feature);
+    return res.json(config);
+  } catch {
+    return res.status(500).json({ error: 'Effective config alınamadı', code: 'WORKERS_EFFECTIVE_CONFIG_FAILED' });
+  }
+});
+
+adminRouter.post('/workers/test', requirePermission('manage_users'), async (req: AuthRequest, res) => {
+  try {
+    const { feature = 'image' } = req.body || {};
+    const { aiService } = await import('../services/aiService.js');
+    const config = await aiService.getEffectiveFeatureConfig(String(feature));
+    const healthy = !config.customWorkerUrl || /^https:\/\//i.test(String(config.customWorkerUrl));
+    return res.json({ success: true, healthy, feature, config });
+  } catch {
+    return res.status(500).json({ error: 'Workers test başarısız', code: 'WORKERS_TEST_FAILED' });
+  }
+});
+
+adminRouter.get('/workers/diagnostics', requirePermission('manage_users'), async (_req: AuthRequest, res) => {
+  try {
+    const { puterServiceSession } = await import('../services/puterServiceSession.js');
+    const health = await puterServiceSession.getSessionHealthSummary();
+    const reservations = await kv.list('creditReservation:');
+    const adminCosts = await kv.list('adminCost:');
+    return res.json({
+      session: health,
+      reservationCount: reservations.length,
+      adminCostCount: adminCosts.length,
+    });
+  } catch {
+    return res.status(500).json({ error: 'Workers diagnostics alınamadı', code: 'WORKERS_DIAGNOSTICS_FAILED' });
   }
 });
