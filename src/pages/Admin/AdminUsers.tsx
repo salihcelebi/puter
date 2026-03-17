@@ -77,25 +77,6 @@ export default function AdminUsers() {
     }
   };
 
-  const filteredUsers = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return users;
-
-    return users.filter((u) => {
-      return [
-        u.email,
-        u.kullanici_adi,
-        u.gorunen_ad,
-        u.id,
-        u.rol,
-        u.permission_summary || '',
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [users, searchTerm]);
-
   const selectedPermissionSummary = useMemo(() => {
     if (!selectedUser) return { acik: 0, kapali: PERMISSION_KEYS.length };
     const safe = permissionsDraft;
@@ -354,22 +335,6 @@ export default function AdminUsers() {
             className="w-full pl-9 pr-4 py-2 bg-white border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
-
-      <div className="flex gap-2 flex-wrap">
-        {[['all', 'Tümü'], ['admins', 'Sadece adminler'], ['users', 'Sadece userlar'], ['active', 'Sadece aktif'], ['passive', 'Sadece pasif'], ['permissionDenied', 'Sadece permission denied yaşayanlar']].map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setActiveFilter(key as any)}
-            className={`px-3 py-2 rounded-lg border text-sm ${activeFilter === key ? 'bg-black text-white border-black' : 'bg-white border-zinc-200 text-zinc-700'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex gap-2 items-center">
-        <button onClick={handleBulkApply} disabled={selectedIds.size === 0} className="px-3 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50">Seçililere Toplu Uygula</button>
-        <span className="text-sm text-zinc-500">Seçili kullanıcı: {selectedIds.size}</span>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -432,8 +397,14 @@ export default function AdminUsers() {
                       <button onClick={() => toggleUserStatus(user.id, user.aktif_mi)} className={`p-2 rounded-lg ${user.aktif_mi ? 'text-red-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50'}`} title={user.aktif_mi ? 'Pasife Al' : 'Aktifleştir'}>
                         {user.aktif_mi ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
                       </button>
-                    </div>
-                  )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {selectedUser && (
         <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedUser(null)}>
