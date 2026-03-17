@@ -1,1 +1,2329 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'; import toast from 'react-hot-toast'; const PAGE_IDS = ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'] as const; type PageId = typeof PAGE_IDS[number]; const WORKER_CLASS_KEYS = ['api', 'model', 'orchestrator', 'job', 'test'] as const; type WorkerClassKey = typeof WORKER_CLASS_KEYS[number]; type WorkerItem = { id: string; name: string; description: string; url: string; classKey: WorkerClassKey; supportedPages: PageId[]; defaultFor?: PageId[]; health?: 'Hazır' | 'Sorunlu' | 'Bilinmiyor'; lastTestResult?: 'Başarılı' | 'Başarısız' | 'Henüz test edilmedi'; }; type WorkerRegistry = Record<WorkerClassKey, WorkerItem[]>; type PageConfig = { pageId: PageId; title: string; description: string; featureLabel: string; workerSelections: Record<WorkerClassKey, string[]>; customModelUrl: string; rawCodeUrl: string; editCodeUrl: string; compatibilityForceSave: boolean; updatedAt?: string; updatedBy?: string; lastSavedDiff?: Array<{ field: string; oldValue: string; newValue: string }>; }; type PageConfigMap = Record<PageId, PageConfig>; type WorkerTestCheck = { label: string; ok: boolean; detail: string; }; type PageTestResult = { pageId: PageId; checkedAt: string; healthy: boolean; summary: string; suggestion: string; checks: WorkerTestCheck[]; }; type PageDiagnostics = { sessionStatus: 'Hazır' | 'Sorunlu' | 'Bilinmiyor'; lastTestStatus: 'Başarılı' | 'Başarısız' | 'Bilinmiyor'; reservationCount: number | string; adminCostCount: number | string; updatedAt?: string; updatedBy?: string; advanced?: Record<string, unknown>; }; type DiagnosticsMap = Partial<Record<PageId, PageDiagnostics>>; type TestMap = Partial<Record<PageId, PageTestResult>>; type AddWorkerDraft = { classKey: WorkerClassKey; name: string; description: string; url: string; supportedPages: PageId[]; markAsDefaultForCurrentPage: boolean; autoSelectForCurrentPage: boolean; }; type ResetStartResponse = { approvalToken: string; summary?: string[]; }; const PAGE_META: Record< PageId, { title: string; featureLabel: string; description: string; shortDescription: string; } > = { 'image.tsx': { title: 'image.tsx', featureLabel: 'Görsel Üretim', description: 'Görsel üretim sayfasının hangi worker sınıflarıyla çalışacağını yönetir.', shortDescription: 'Resim üretim akışı', }, 'chat.tsx': { title: 'chat.tsx', featureLabel: 'Sohbet', description: 'Sohbet sayfasının hangi worker sınıflarıyla çalışacağını yönetir.', shortDescription: 'Sohbet ve metin akışı', }, 'video.tsx': { title: 'video.tsx', featureLabel: 'Video', description: 'Video sayfasının hangi worker sınıflarıyla çalışacağını yönetir.', shortDescription: 'Video üretim akışı', }, 'tts.tsx': { title: 'tts.tsx', featureLabel: 'Seslendirme', description: 'Seslendirme sayfasının hangi worker sınıflarıyla çalışacağını yönetir.', shortDescription: 'Metinden ses akışı', }, 'ocr.tsx': { title: 'ocr.tsx', featureLabel: 'OCR', description: 'OCR sayfasının hangi worker sınıflarıyla çalışacağını yönetir.', shortDescription: 'Görselden yazı okuma akışı', }, }; const WORKER_CLASS_META: Record< WorkerClassKey, { title: string; subtitle: string; color: string; emptyHint: string; } > = { api: { title: 'SINIF 1 = API ÇAĞIRAN İŞÇİLER', subtitle: '( CHAT , IMG, VIDEO , TTS MODELLERİ ) işi yapanlar', color: 'border-blue-200 bg-blue-50', emptyHint: 'Bu sınıfta seçim yoksa istek yapacak çalışan servis kalmayabilir.', }, model: { title: 'SINIF 2 = MODEL ÇEKEN İŞÇİLER', subtitle: '( CHAT , IMG, VIDEO , TTS MODELLERİ ) seçenekleri getirenler', color: 'border-emerald-200 bg-emerald-50', emptyHint: 'Bu sınıfta seçim yoksa model listesi getirilemeyebilir.', }, orchestrator: { title: 'SINIF 3 = ORKESTRA ŞEFİ', subtitle: 'effective-config / orchestration / nereye gidileceğine karar verenler', color: 'border-violet-200 bg-violet-50', emptyHint: 'Bu sınıfta seçim yoksa sistem yönlendirmesi beklediğiniz gibi çalışmayabilir.', }, job: { title: 'SINIF 4 = İŞ TAKİP UZMANI', subtitle: 'job-status / history / işin ne durumda olduğunu takip edenler', color: 'border-amber-200 bg-amber-50', emptyHint: 'Bu sınıfta seçim yoksa iş takibi ve geçmiş görünümü eksik kalabilir.', }, test: { title: 'SINIF 5 = TEST DEDEKTİFİ', subtitle: 'test / diagnostics / sistemde sorun var mı diye kontrol edenler', color: 'border-rose-200 bg-rose-50', emptyHint: 'Bu sınıfta seçim yoksa test ve tanı kontrolleri eksik kalabilir.', }, }; const DEFAULT_WORKER_REGISTRY: WorkerRegistry = { api: [ { id: 'im-api-worker', name: 'im-api-worker', description: 'Image isteklerini gerçekten yapan ana worker.', url: 'https://im.puter.work', classKey: 'api', supportedPages: ['image.tsx'], defaultFor: ['image.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'chat-api-worker', name: 'chat-api-worker', description: 'Sohbet ve metin üretim çağrılarını yapan ana worker.', url: 'https://api-cagrilari.puter.work/chat', classKey: 'api', supportedPages: ['chat.tsx'], defaultFor: ['chat.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'video-api-worker', name: 'video-api-worker', description: 'Video üretim çağrılarını yapan ana worker.', url: 'https://api-cagrilari.puter.work/video', classKey: 'api', supportedPages: ['video.tsx'], defaultFor: ['video.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'tts-api-worker', name: 'tts-api-worker', description: 'Metni sese çeviren ana worker.', url: 'https://api-cagrilari.puter.work/tts', classKey: 'api', supportedPages: ['tts.tsx'], defaultFor: ['tts.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'ocr-api-worker', name: 'ocr-api-worker', description: 'OCR isteklerini yapan ana worker.', url: 'https://api-cagrilari.puter.work/ocr', classKey: 'api', supportedPages: ['ocr.tsx'], defaultFor: ['ocr.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'shared-fallback-api', name: 'shared-fallback-api', description: 'Genel yedek API worker.', url: 'https://api-cagrilari.puter.work', classKey: 'api', supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }, ], model: [ { id: 'im-model-source', name: 'im-model-source', description: 'Image model seçeneklerini getirir.', url: 'https://im.puter.work/models', classKey: 'model', supportedPages: ['image.tsx'], defaultFor: ['image.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'chat-model-source', name: 'chat-model-source', description: 'Sohbet model seçeneklerini getirir.', url: 'https://api-cagrilari.puter.work/chat/models', classKey: 'model', supportedPages: ['chat.tsx'], defaultFor: ['chat.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'video-model-source', name: 'video-model-source', description: 'Video model seçeneklerini getirir.', url: 'https://api-cagrilari.puter.work/video/models', classKey: 'model', supportedPages: ['video.tsx'], defaultFor: ['video.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'tts-model-source', name: 'tts-model-source', description: 'Seslendirme model seçeneklerini getirir.', url: 'https://api-cagrilari.puter.work/tts/models', classKey: 'model', supportedPages: ['tts.tsx'], defaultFor: ['tts.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'ocr-model-source', name: 'ocr-model-source', description: 'OCR model seçeneklerini getirir.', url: 'https://api-cagrilari.puter.work/ocr/models', classKey: 'model', supportedPages: ['ocr.tsx'], defaultFor: ['ocr.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'shared-model-cache', name: 'shared-model-cache', description: 'Önbellekten ortak model listesi getirir.', url: 'https://is-durumu.puter.work/model-cache', classKey: 'model', supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }, ], orchestrator: [ { id: 'image-orchestrator', name: 'image-orchestrator', description: 'Image için effective-config ve yönlendirme kararlarını verir.', url: 'https://is-durumu.puter.work/orchestrate/image', classKey: 'orchestrator', supportedPages: ['image.tsx'], defaultFor: ['image.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'chat-orchestrator', name: 'chat-orchestrator', description: 'Sohbet için effective-config ve yönlendirme kararlarını verir.', url: 'https://is-durumu.puter.work/orchestrate/chat', classKey: 'orchestrator', supportedPages: ['chat.tsx'], defaultFor: ['chat.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'video-orchestrator', name: 'video-orchestrator', description: 'Video için effective-config ve yönlendirme kararlarını verir.', url: 'https://is-durumu.puter.work/orchestrate/video', classKey: 'orchestrator', supportedPages: ['video.tsx'], defaultFor: ['video.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'tts-orchestrator', name: 'tts-orchestrator', description: 'TTS için effective-config ve yönlendirme kararlarını verir.', url: 'https://is-durumu.puter.work/orchestrate/tts', classKey: 'orchestrator', supportedPages: ['tts.tsx'], defaultFor: ['tts.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'ocr-orchestrator', name: 'ocr-orchestrator', description: 'OCR için effective-config ve yönlendirme kararlarını verir.', url: 'https://is-durumu.puter.work/orchestrate/ocr', classKey: 'orchestrator', supportedPages: ['ocr.tsx'], defaultFor: ['ocr.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'smart-router', name: 'smart-router', description: 'Birden fazla worker varsa akıllı yönlendirme yapar.', url: 'https://is-durumu.puter.work/orchestrate/router', classKey: 'orchestrator', supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }, ], job: [ { id: 'image-job-status', name: 'image-job-status', description: 'Image işleri için durum ve geçmiş takibi yapar.', url: 'https://is-durumu.puter.work/jobs/image', classKey: 'job', supportedPages: ['image.tsx'], defaultFor: ['image.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'chat-job-status', name: 'chat-job-status', description: 'Sohbet işleri için durum ve geçmiş takibi yapar.', url: 'https://is-durumu.puter.work/jobs/chat', classKey: 'job', supportedPages: ['chat.tsx'], defaultFor: ['chat.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'video-job-status', name: 'video-job-status', description: 'Video işleri için durum ve geçmiş takibi yapar.', url: 'https://is-durumu.puter.work/jobs/video', classKey: 'job', supportedPages: ['video.tsx'], defaultFor: ['video.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'tts-job-status', name: 'tts-job-status', description: 'TTS işleri için durum ve geçmiş takibi yapar.', url: 'https://is-durumu.puter.work/jobs/tts', classKey: 'job', supportedPages: ['tts.tsx'], defaultFor: ['tts.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'ocr-job-status', name: 'ocr-job-status', description: 'OCR işleri için durum ve geçmiş takibi yapar.', url: 'https://is-durumu.puter.work/jobs/ocr', classKey: 'job', supportedPages: ['ocr.tsx'], defaultFor: ['ocr.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'history-tracker', name: 'history-tracker', description: 'Ortak geçmiş ve iş günlüğü izler.', url: 'https://is-durumu.puter.work/history', classKey: 'job', supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }, ], test: [ { id: 'image-diagnostics', name: 'image-diagnostics', description: 'Image worker test ve tanı kontrolünü yapar.', url: 'https://is-durumu.puter.work/diagnostics/image', classKey: 'test', supportedPages: ['image.tsx'], defaultFor: ['image.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'chat-diagnostics', name: 'chat-diagnostics', description: 'Chat worker test ve tanı kontrolünü yapar.', url: 'https://is-durumu.puter.work/diagnostics/chat', classKey: 'test', supportedPages: ['chat.tsx'], defaultFor: ['chat.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'video-diagnostics', name: 'video-diagnostics', description: 'Video worker test ve tanı kontrolünü yapar.', url: 'https://is-durumu.puter.work/diagnostics/video', classKey: 'test', supportedPages: ['video.tsx'], defaultFor: ['video.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'tts-diagnostics', name: 'tts-diagnostics', description: 'TTS worker test ve tanı kontrolünü yapar.', url: 'https://is-durumu.puter.work/diagnostics/tts', classKey: 'test', supportedPages: ['tts.tsx'], defaultFor: ['tts.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'ocr-diagnostics', name: 'ocr-diagnostics', description: 'OCR worker test ve tanı kontrolünü yapar.', url: 'https://is-durumu.puter.work/diagnostics/ocr', classKey: 'test', supportedPages: ['ocr.tsx'], defaultFor: ['ocr.tsx'], health: 'Hazır', lastTestResult: 'Henüz test edilmedi', }, { id: 'deep-health-check', name: 'deep-health-check', description: 'Daha derin sağlık ve bağlantı testi yapar.', url: 'https://is-durumu.puter.work/diagnostics/deep', classKey: 'test', supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }, ], }; const DEFAULT_PAGE_CONFIGS: PageConfigMap = { 'image.tsx': { pageId: 'image.tsx', title: PAGE_META['image.tsx'].title, featureLabel: PAGE_META['image.tsx'].featureLabel, description: PAGE_META['image.tsx'].description, workerSelections: { api: ['im-api-worker', 'shared-fallback-api'], model: ['im-model-source'], orchestrator: ['image-orchestrator'], job: ['image-job-status'], test: ['image-diagnostics'], }, customModelUrl: 'https://im.puter.work/models', rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js', editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js', compatibilityForceSave: false, }, 'chat.tsx': { pageId: 'chat.tsx', title: PAGE_META['chat.tsx'].title, featureLabel: PAGE_META['chat.tsx'].featureLabel, description: PAGE_META['chat.tsx'].description, workerSelections: { api: ['chat-api-worker', 'shared-fallback-api'], model: ['chat-model-source'], orchestrator: ['chat-orchestrator'], job: ['chat-job-status'], test: ['chat-diagnostics'], }, customModelUrl: 'https://api-cagrilari.puter.work/chat/models', rawCodeUrl: '', editCodeUrl: '', compatibilityForceSave: false, }, 'video.tsx': { pageId: 'video.tsx', title: PAGE_META['video.tsx'].title, featureLabel: PAGE_META['video.tsx'].featureLabel, description: PAGE_META['video.tsx'].description, workerSelections: { api: ['video-api-worker', 'shared-fallback-api'], model: ['video-model-source'], orchestrator: ['video-orchestrator'], job: ['video-job-status'], test: ['video-diagnostics'], }, customModelUrl: 'https://api-cagrilari.puter.work/video/models', rawCodeUrl: '', editCodeUrl: '', compatibilityForceSave: false, }, 'tts.tsx': { pageId: 'tts.tsx', title: PAGE_META['tts.tsx'].title, featureLabel: PAGE_META['tts.tsx'].featureLabel, description: PAGE_META['tts.tsx'].description, workerSelections: { api: ['tts-api-worker', 'shared-fallback-api'], model: ['tts-model-source'], orchestrator: ['tts-orchestrator'], job: ['tts-job-status'], test: ['tts-diagnostics'], }, customModelUrl: 'https://api-cagrilari.puter.work/tts/models', rawCodeUrl: '', editCodeUrl: '', compatibilityForceSave: false, }, 'ocr.tsx': { pageId: 'ocr.tsx', title: PAGE_META['ocr.tsx'].title, featureLabel: PAGE_META['ocr.tsx'].featureLabel, description: PAGE_META['ocr.tsx'].description, workerSelections: { api: ['ocr-api-worker', 'shared-fallback-api'], model: ['ocr-model-source'], orchestrator: ['ocr-orchestrator'], job: ['ocr-job-status'], test: ['ocr-diagnostics'], }, customModelUrl: 'https://api-cagrilari.puter.work/ocr/models', rawCodeUrl: '', editCodeUrl: '', compatibilityForceSave: false, }, }; function cx(...parts: Array<string | false | null | undefined>) { return parts.filter(Boolean).join(' '); } function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)); } function uniqueById(items: WorkerItem[]) { const map = new Map<string, WorkerItem>(); items.forEach((item) => { map.set(item.id, item); }); return Array.from(map.values()); } function slugify(input: string) { return input .toLowerCase() .trim() .replace(/[^a-z0-9]+/gi, '-') .replace(/(^-|-$)/g, ''); } function ensureUniqueWorkerId(registry: WorkerRegistry, classKey: WorkerClassKey, baseId: string) { const existingIds = new Set(registry[classKey].map((item) => item.id)); if (!existingIds.has(baseId)) return baseId; let i = 2; while (existingIds.has(${baseId}-${i})) i += 1; return ${baseId}-${i}; } function formatDate(value?: string) { if (!value) return '-'; const date = new Date(value); if (Number.isNaN(date.getTime())) return value; return date.toLocaleString('tr-TR'); } function isHttpsUrl(value?: string) { if (!value) return false; try { const url = new URL(value); return url.protocol === 'https:'; } catch { return false; } } async function safeJson<T>(url: string, init?: RequestInit): Promise<T> { const res = await fetch(url, init); const text = await res.text(); const contentType = res.headers.get('content-type') || ''; if (/<!doctype|<html/i.test(text)) { throw new Error('Sunucu JSON yerine HTML döndü. Endpoint veya worker adresini kontrol edin.'); } if (!contentType.includes('application/json')) { throw new Error('JSON içerik tipi bekleniyordu.'); } let data: any = {}; try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('Geçersiz JSON yanıtı alındı.'); } if (!res.ok) { throw new Error(data?.error || 'İstek başarısız oldu.'); } return data as T; } function mergeRegistry(base: WorkerRegistry, incoming?: Partial<Record<WorkerClassKey, WorkerItem[]>>) { const next = clone(base); if (!incoming) return next; WORKER_CLASS_KEYS.forEach((classKey) => { const merged = [...next[classKey], ...(incoming[classKey] || [])].map((item) => ({ ...item, classKey, supportedPages: (item.supportedPages || []).filter(Boolean) as PageId[], defaultFor: (item.defaultFor || []).filter(Boolean) as PageId[], })); next[classKey] = uniqueById(merged); }); return next; } function mergePageConfig(defaultConfig: PageConfig, incoming?: Partial<PageConfig>): PageConfig { if (!incoming) return clone(defaultConfig); return { ...clone(defaultConfig), ...incoming, workerSelections: { api: incoming.workerSelections?.api || defaultConfig.workerSelections.api, model: incoming.workerSelections?.model || defaultConfig.workerSelections.model, orchestrator: incoming.workerSelections?.orchestrator || defaultConfig.workerSelections.orchestrator, job: incoming.workerSelections?.job || defaultConfig.workerSelections.job, test: incoming.workerSelections?.test || defaultConfig.workerSelections.test, }, }; } function buildPlaceholderWorker( classKey: WorkerClassKey, id: string, pageId: PageId, url = '', description = 'Eski yapıdan taşınan worker.' ): WorkerItem { return { id, name: id, description, url, classKey, supportedPages: [pageId], defaultFor: [], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }; } function normalizePayload(payload: any): { pages: PageConfigMap; registry: WorkerRegistry } { let registry = clone(DEFAULT_WORKER_REGISTRY); let pages = clone(DEFAULT_PAGE_CONFIGS); if (payload?.workerRegistry) { registry = mergeRegistry(registry, payload.workerRegistry); } if (payload?.pages) { PAGE_IDS.forEach((pageId) => { pages[pageId] = mergePageConfig(DEFAULT_PAGE_CONFIGS[pageId], payload.pages[pageId]); }); return { pages, registry }; } const legacyMap: Record<string, PageId> = { image: 'image.tsx', chat: 'chat.tsx', video: 'video.tsx', tts: 'tts.tsx', ocr: 'ocr.tsx', }; Object.entries(legacyMap).forEach(([legacyKey, pageId]) => { const legacy = payload?.[legacyKey]; if (!legacy) return; if (legacy.primaryWorkerKey && !registry.api.find((item) => item.id === legacy.primaryWorkerKey)) { registry.api.push(buildPlaceholderWorker('api', legacy.primaryWorkerKey, pageId, legacy.customWorkerUrl || '')); } if (legacy.modelSourceKey && !registry.model.find((item) => item.id === legacy.modelSourceKey)) { registry.model.push(buildPlaceholderWorker('model', legacy.modelSourceKey, pageId, legacy.customModelUrl || '')); } pages[pageId] = mergePageConfig(DEFAULT_PAGE_CONFIGS[pageId], { customModelUrl: legacy.customModelUrl || DEFAULT_PAGE_CONFIGS[pageId].customModelUrl, rawCodeUrl: legacy.rawCodeUrl || DEFAULT_PAGE_CONFIGS[pageId].rawCodeUrl, editCodeUrl: legacy.editCodeUrl || DEFAULT_PAGE_CONFIGS[pageId].editCodeUrl, updatedAt: legacy.updatedAt, updatedBy: legacy.updatedBy, workerSelections: { api: legacy.primaryWorkerKey ? [legacy.primaryWorkerKey] : DEFAULT_PAGE_CONFIGS[pageId].workerSelections.api, model: legacy.modelSourceKey ? [legacy.modelSourceKey] : DEFAULT_PAGE_CONFIGS[pageId].workerSelections.model, orchestrator: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.orchestrator, job: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.job, test: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.test, }, }); }); return { pages, registry }; } function computePageDiff(before: PageConfig, after: PageConfig) { const fields: Array<keyof PageConfig> = ['customModelUrl', 'rawCodeUrl', 'editCodeUrl', 'compatibilityForceSave']; const result: Array<{ field: string; oldValue: string; newValue: string }> = []; fields.forEach((field) => { const oldValue = String(before[field] ?? ''); const newValue = String(after[field] ?? ''); if (oldValue !== newValue) { result.push({ field: String(field), oldValue, newValue }); } }); WORKER_CLASS_KEYS.forEach((classKey) => { const oldValue = (before.workerSelections[classKey] || []).join(', '); const newValue = (after.workerSelections[classKey] || []).join(', '); if (oldValue !== newValue) { result.push({ field: ${classKey} worker seçimleri, oldValue, newValue, }); } }); return result; } function evaluateCompatibility(pageId: PageId, pageConfig: PageConfig, registry: WorkerRegistry) { const incompatible: Array<{ classKey: WorkerClassKey; worker: WorkerItem | null; workerId: string }> = []; const missingClasses: WorkerClassKey[] = []; WORKER_CLASS_KEYS.forEach((classKey) => { const selectedIds = pageConfig.workerSelections[classKey] || []; if (selectedIds.length === 0) { missingClasses.push(classKey); return; } selectedIds.forEach((workerId) => { const worker = registry[classKey].find((item) => item.id === workerId) || null; if (!worker || !worker.supportedPages.includes(pageId)) { incompatible.push({ classKey, worker, workerId }); } }); }); return { incompatible, missingClasses, hasHardWarning: incompatible.length > 0, hasSoftWarning: missingClasses.length > 0, }; } function getDefaultSelectionsForPage(pageId: PageId, registry: WorkerRegistry) { const defaults: Record<WorkerClassKey, WorkerItem[]> = { api: [], model: [], orchestrator: [], job: [], test: [], }; WORKER_CLASS_KEYS.forEach((classKey) => { defaults[classKey] = registry[classKey].filter((item) => (item.defaultFor || []).includes(pageId)); }); return defaults; } function mergeLocalTestIntoRegistry(registry: WorkerRegistry, classKey: WorkerClassKey, selectedIds: string[], ok: boolean) { const next = clone(registry); next[classKey] = next[classKey].map((item) => selectedIds.includes(item.id) ? { ...item, lastTestResult: ok ? 'Başarılı' : 'Başarısız', health: ok ? 'Hazır' : 'Sorunlu', } : item ); return next; } function SectionCard({ title, subtitle, children, right, className, }: { title: string; subtitle?: string; children: ReactNode; right?: ReactNode; className?: string; }) { return ( <div className={cx('rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm', className)}> <div className="flex flex-col gap-3 border-b border-zinc-100 pb-4 md:flex-row md:items-start md:justify-between"> <div> <h2 className="text-lg font-semibold text-zinc-950">{title}</h2> {subtitle ? <p className="mt-1 text-sm text-zinc-500">{subtitle}</p> : null} </div> {right} </div> <div className="pt-4">{children}</div> </div> ); } function SmallBadge({ children, tone = 'neutral', }: { children: ReactNode; tone?: 'neutral' | 'success' | 'warning' | 'danger'; }) { const classes = tone === 'success' ? 'bg-emerald-100 text-emerald-700' : tone === 'warning' ? 'bg-amber-100 text-amber-700' : tone === 'danger' ? 'bg-red-100 text-red-700' : 'bg-zinc-100 text-zinc-700'; return <span className={cx('inline-flex rounded-full px-2.5 py-1 text-xs font-medium', classes)}>{children}</span>; } function StatCard({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) { return ( <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-xs font-medium text-zinc-500">{label}</div> <div className="mt-1 text-sm font-semibold text-zinc-950">{value}</div> {hint ? <div className="mt-2 text-xs text-zinc-500">{hint}</div> : null} </div> ); } function FieldHint({ children }: { children: ReactNode }) { return <p className="mt-2 text-xs leading-5 text-zinc-500">{children}</p>; } function WorkerChecklistCard({ classKey, pageId, registry, selectedIds, onToggle, onAddWorker, }: { classKey: WorkerClassKey; pageId: PageId; registry: WorkerRegistry; selectedIds: string[]; onToggle: (classKey: WorkerClassKey, workerId: string) => void; onAddWorker: (classKey: WorkerClassKey) => void; }) { const meta = WORKER_CLASS_META[classKey]; const workers = registry[classKey]; return ( <div className={cx('rounded-3xl border p-4 shadow-sm', meta.color)}> <div className="flex flex-col gap-3 border-b border-black/5 pb-4 md:flex-row md:items-start md:justify-between"> <div> <h3 className="text-base font-semibold text-zinc-950">{meta.title}</h3> <p className="mt-1 text-sm text-zinc-600">{meta.subtitle}</p> </div> <button type="button" onClick={() => onAddWorker(classKey)} className="rounded-xl bg-white px-3 py-2 text-sm font-medium text-zinc-900 shadow-sm ring-1 ring-zinc-200" > + Yeni worker ekle </button> </div> <div className="mt-4 space-y-3"> {workers.map((worker) => { const checked = selectedIds.includes(worker.id); const supported = worker.supportedPages.includes(pageId); const isDefault = (worker.defaultFor || []).includes(pageId); return ( <label key={worker.id} className={cx( 'block rounded-2xl border bg-white p-4 transition', checked ? 'border-black shadow-sm' : 'border-zinc-200', !supported && checked ? 'ring-2 ring-amber-300' : '' )} > <div className="flex items-start gap-3"> <input type="checkbox" className="mt-1 h-4 w-4 rounded border-zinc-300" checked={checked} onChange={() => onToggle(classKey, worker.id)} /> <div className="min-w-0 flex-1"> <div className="flex flex-wrap items-center gap-2"> <div className="text-sm font-semibold text-zinc-950">{worker.name}</div> {isDefault ? <SmallBadge tone="success">Varsayılan</SmallBadge> : null} {!supported ? <SmallBadge tone="warning">Bu sayfaya doğal uyumlu değil</SmallBadge> : null} <SmallBadge tone={worker.health === 'Hazır' ? 'success' : worker.health === 'Sorunlu' ? 'danger' : 'neutral'}> {worker.health || 'Bilinmiyor'} </SmallBadge> </div> <div className="mt-2 text-sm text-zinc-600">{worker.description}</div> <div className="mt-3 grid gap-2 text-xs text-zinc-500 md:grid-cols-3"> <div> <span className="font-medium text-zinc-700">URL:</span> {worker.url || '-'} </div> <div> <span className="font-medium text-zinc-700">Desteklediği sayfalar:</span>{' '} {worker.supportedPages.join(', ') || '-'} </div> <div> <span className="font-medium text-zinc-700">En son test sonucu:</span> {worker.lastTestResult || 'Henüz test edilmedi'} </div> </div> </div> </div> </label> ); })} {workers.length === 0 ? ( <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-4 text-sm text-zinc-600">{meta.emptyHint}</div> ) : null} </div> </div> ); } function LinkFieldCard({ title, value, placeholder, onChange, }: { title: string; value: string; placeholder: string; onChange: (value: string) => void; }) { const copy = async () => { if (!value) { toast.error('Önce bir bağlantı girmeniz gerekiyor.'); return; } await navigator.clipboard.writeText(value); toast.success('Bağlantı kopyalandı.'); }; const validate = () => { if (!value) { toast.error('Önce bir bağlantı girmeniz gerekiyor.'); return; } if (!isHttpsUrl(value)) { toast.error('Bu alana geçerli https adresi girmeniz gerekiyor.'); return; } toast.success('Bağlantı biçimi geçerli görünüyor.'); }; return ( <div className="rounded-2xl border border-zinc-200 p-4"> <label className="block text-sm font-medium text-zinc-900">{title}</label> <input className={cx( 'mt-2 w-full rounded-xl border p-3 text-sm', value && !isHttpsUrl(value) ? 'border-red-300 bg-red-50' : 'border-zinc-200' )} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} /> <div className="mt-3 flex flex-wrap gap-2"> <button type="button" onClick={copy} className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium"> Kopyala </button> <a href={value && isHttpsUrl(value) ? value : '#'} target="_blank" rel="noreferrer" onClick={(e) => { if (!value || !isHttpsUrl(value)) { e.preventDefault(); toast.error('Önce geçerli bir https bağlantısı girmeniz gerekiyor.'); } }} className={cx( 'rounded-lg px-3 py-1.5 text-xs font-medium', value && isHttpsUrl(value) ? 'bg-zinc-100 text-zinc-900' : 'cursor-not-allowed bg-zinc-50 text-zinc-400' )} > Yeni sekmede aç </a> <button type="button" onClick={validate} className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium"> Doğrula </button> </div> </div> ); } function AddWorkerDialog({ open, currentPageId, draft, onChange, onClose, onSubmit, }: { open: boolean; currentPageId: PageId | null; draft: AddWorkerDraft; onChange: (patch: Partial<AddWorkerDraft>) => void; onClose: () => void; onSubmit: () => void; }) { if (!open || !currentPageId) return null; return ( <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"> <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl"> <div className="flex items-start justify-between gap-3"> <div> <h3 className="text-xl font-semibold text-zinc-950">Yeni worker ekle</h3> <p className="mt-1 text-sm text-zinc-500"> Her sınıf için yeni worker ekleyebilir, istersek hemen seçebiliriz. </p> </div> <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium"> Kapat </button> </div> <div className="mt-6 grid gap-4 md:grid-cols-2"> <div> <label className="block text-sm font-medium text-zinc-900">Worker sınıfı</label> <input value={WORKER_CLASS_META[draft.classKey].title} readOnly className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm" /> </div> <div> <label className="block text-sm font-medium text-zinc-900">Worker adı</label> <input value={draft.name} onChange={(e) => onChange({ name: e.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm" placeholder="Örnek: image-smart-fallback" /> </div> <div className="md:col-span-2"> <label className="block text-sm font-medium text-zinc-900">Kısa görev açıklaması</label> <input value={draft.description} onChange={(e) => onChange({ description: e.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm" placeholder="Örnek: Image için alternatif fallback worker." /> </div> <div className="md:col-span-2"> <label className="block text-sm font-medium text-zinc-900">Worker URL</label> <input value={draft.url} onChange={(e) => onChange({ url: e.target.value })} className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm" placeholder="https://..." /> <FieldHint>Bu alana geçerli https adresi girmeniz gerekiyor.</FieldHint> </div> <div className="md:col-span-2"> <div className="text-sm font-medium text-zinc-900">Desteklediği sayfalar</div> <div className="mt-3 grid gap-2 md:grid-cols-2"> {PAGE_IDS.map((pageId) => { const checked = draft.supportedPages.includes(pageId); return ( <label key={pageId} className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3"> <input type="checkbox" checked={checked} onChange={() => { const next = checked ? draft.supportedPages.filter((item) => item !== pageId) : [...draft.supportedPages, pageId]; onChange({ supportedPages: next }); }} /> <span className="text-sm text-zinc-800">{pageId}</span> </label> ); })} </div> </div> <div className="md:col-span-2 grid gap-2"> <label className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3"> <input type="checkbox" checked={draft.markAsDefaultForCurrentPage} onChange={(e) => onChange({ markAsDefaultForCurrentPage: e.target.checked })} /> <span className="text-sm text-zinc-800">Bu worker’ı seçili sayfa için varsayılan olarak işaretle</span> </label> <label className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3"> <input type="checkbox" checked={draft.autoSelectForCurrentPage} onChange={(e) => onChange({ autoSelectForCurrentPage: e.target.checked })} /> <span className="text-sm text-zinc-800">Bu worker’ı ekler eklemez seçili sayfada işaretle</span> </label> </div> </div> <div className="mt-6 flex justify-end gap-2"> <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium"> Vazgeç </button> <button type="button" onClick={onSubmit} className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white"> Worker’ı ekle </button> </div> </div> </div> ); } function ResetDialog({ open, pageId, step, summary, loading, onClose, onStart, onConfirm, }: { open: boolean; pageId: PageId | null; step: 1 | 2 | 3; summary: string[]; loading: boolean; onClose: () => void; onStart: () => void; onConfirm: () => void; }) { if (!open || !pageId) return null; return ( <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"> <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl"> <div className="flex items-start justify-between gap-3"> <div> <h3 className="text-xl font-semibold text-zinc-950">Güvenli sıfırlama</h3> <p className="mt-1 text-sm text-zinc-500"> Şifre tarayıcıda tutulmaz. Reset isteği backend’e gider, backend oturumu doğrular, sonra ikinci adım için onay token’ı üretir. </p> </div> <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium"> Kapat </button> </div> <div className="mt-6 grid gap-3 md:grid-cols-3"> {[1, 2, 3].map((item) => ( <div key={item} className={cx( 'rounded-2xl border p-4', step === item ? 'border-black bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-900' )} > <div className="text-xs font-semibold uppercase">Aşama {item}</div> <div className="mt-1 text-sm font-semibold"> {item === 1 ? 'Ne sıfırlanacak?' : item === 2 ? 'Bu 5 değişiklik yapılacak' : 'Evet, sıfırla'} </div> </div> ))} </div> {step === 1 ? ( <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5"> <div className="text-sm font-semibold text-zinc-900">{pageId} için sıfırlanacak ana alanlar</div> <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700"> <li>5 sınıftaki worker seçimleri varsayılana dönecek.</li> <li>Özel model adresi varsayılan adrese dönecek.</li> <li>Raw ve düzenleme bağlantıları varsayılan adrese dönecek.</li> <li>Force kaydet tercihi kapanacak.</li> <li>Test ve tanı görünümü yeni ayarlara göre yeniden üretilecek.</li> </ul> <div className="mt-5 flex justify-end gap-2"> <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium"> Hayır </button> <button type="button" onClick={onStart} disabled={loading} className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white" > {loading ? 'Hazırlanıyor...' : 'Devam et'} </button> </div> </div> ) : null} {step === 2 ? ( <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5"> <div className="text-sm font-semibold text-zinc-900">Bu 5 değişiklik yapılacak</div> <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700"> {summary.map((item) => ( <li key={item}>{item}</li> ))} </ul> <div className="mt-5 flex justify-end gap-2"> <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium"> Hayır </button> <button type="button" onClick={onConfirm} disabled={loading} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white" > {loading ? 'Sıfırlanıyor...' : 'Evet, sıfırla'} </button> </div> </div> ) : null} {step === 3 ? ( <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-zinc-800"> Sıfırlama tamamlandı. Sayfa varsayılan ayarlarına döndü. </div> ) : null} </div> </div> ); } export default function AdminWorkersSec() { const [selectedPageId, setSelectedPageId] = useState<PageId | null>(null); const [pages, setPages] = useState<PageConfigMap>(clone(DEFAULT_PAGE_CONFIGS)); const [originalPages, setOriginalPages] = useState<PageConfigMap>(clone(DEFAULT_PAGE_CONFIGS)); const [workerRegistry, setWorkerRegistry] = useState<WorkerRegistry>(clone(DEFAULT_WORKER_REGISTRY)); const [originalRegistry, setOriginalRegistry] = useState<WorkerRegistry>(clone(DEFAULT_WORKER_REGISTRY)); const [tests, setTests] = useState<TestMap>({}); const [diagnostics, setDiagnostics] = useState<DiagnosticsMap>({}); const [loading, setLoading] = useState<{ load: boolean; save: boolean; forceSave: boolean; test: boolean; diagnostics: boolean; resetStart: boolean; resetConfirm: boolean; }>({ load: false, save: false, forceSave: false, test: false, diagnostics: false, resetStart: false, resetConfirm: false, }); const [errorCard, setErrorCard] = useState<{ title: string; detail: string; action: string } | null>(null); const [addWorkerOpen, setAddWorkerOpen] = useState(false); const [addWorkerDraft, setAddWorkerDraft] = useState<AddWorkerDraft>({ classKey: 'api', name: '', description: '', url: '', supportedPages: [], markAsDefaultForCurrentPage: false, autoSelectForCurrentPage: true, }); const [resetOpen, setResetOpen] = useState(false); const [resetStep, setResetStep] = useState<1 | 2 | 3>(1); const [resetSummary, setResetSummary] = useState<string[]>([]); const [approvalToken, setApprovalToken] = useState(''); const currentPage = selectedPageId ? pages[selectedPageId] : null; const originalCurrentPage = selectedPageId ? originalPages[selectedPageId] : null; const compatibility = useMemo(() => { if (!selectedPageId || !currentPage) { return { incompatible: [], missingClasses: [], hasHardWarning: false, hasSoftWarning: false, }; } return evaluateCompatibility(selectedPageId, currentPage, workerRegistry); }, [selectedPageId, currentPage, workerRegistry]); const defaultSelections = useMemo(() => { if (!selectedPageId) { return { api: [], model: [], orchestrator: [], job: [], test: [], } as Record<WorkerClassKey, WorkerItem[]>; } return getDefaultSelectionsForPage(selectedPageId, workerRegistry); }, [selectedPageId, workerRegistry]); const selectedWorkerCount = useMemo(() => { if (!currentPage) return 0; return WORKER_CLASS_KEYS.reduce((sum, classKey) => sum + (currentPage.workerSelections[classKey]?.length || 0), 0); }, [currentPage]); const boot = async () => { try { setLoading((prev) => ({ ...prev, load: true })); const data = await safeJson<any>('/api/admin/workers-config'); const normalized = normalizePayload(data); setPages(normalized.pages); setOriginalPages(clone(normalized.pages)); setWorkerRegistry(normalized.registry); setOriginalRegistry(clone(normalized.registry)); } catch (e: any) { setErrorCard({ title: 'Ayarlar yüklenemedi.', detail: e.message || 'Beklenmeyen bir hata oluştu.', action: 'Bağlantıyı kontrol edip tekrar deneyin.', }); toast.error(e.message || 'Yükleme başarısız.'); } finally { setLoading((prev) => ({ ...prev, load: false })); } }; useEffect(() => { boot(); }, []); useEffect(() => { if (!selectedPageId) return; const loadDiagnostics = async () => { try { setLoading((prev) => ({ ...prev, diagnostics: true })); const data = await safeJson<PageDiagnostics>(/api/admin/workers/diagnostics?pageId=${encodeURIComponent(selectedPageId)}); setDiagnostics((prev) => ({ ...prev, [selectedPageId]: data })); } catch (e: any) { setDiagnostics((prev) => ({ ...prev, [selectedPageId]: { sessionStatus: 'Bilinmiyor', lastTestStatus: 'Bilinmiyor', reservationCount: '-', adminCostCount: '-', updatedAt: '', updatedBy: '', advanced: {}, }, })); } finally { setLoading((prev) => ({ ...prev, diagnostics: false })); } }; loadDiagnostics(); }, [selectedPageId]); const patchCurrentPage = (patch: Partial<PageConfig>) => { if (!selectedPageId) return; setPages((prev) => ({ ...prev, [selectedPageId]: { ...prev[selectedPageId], ...patch, }, })); }; const toggleWorkerSelection = (classKey: WorkerClassKey, workerId: string) => { if (!selectedPageId || !currentPage) return; const currentSelected = currentPage.workerSelections[classKey] || []; const exists = currentSelected.includes(workerId); const nextSelected = exists ? currentSelected.filter((id) => id !== workerId) : [...currentSelected, workerId]; patchCurrentPage({ workerSelections: { ...currentPage.workerSelections, [classKey]: nextSelected, }, }); }; const resetLocalToDefaults = () => { if (!selectedPageId) return; setPages((prev) => ({ ...prev, [selectedPageId]: clone(DEFAULT_PAGE_CONFIGS[selectedPageId]), })); toast.success(${selectedPageId} için varsayılan ayar yüklendi.); }; const openAddWorker = (classKey: WorkerClassKey) => { if (!selectedPageId) return; setAddWorkerDraft({ classKey, name: '', description: '', url: '', supportedPages: [selectedPageId], markAsDefaultForCurrentPage: false, autoSelectForCurrentPage: true, }); setAddWorkerOpen(true); }; const submitAddWorker = () => { if (!selectedPageId) return; if (!addWorkerDraft.name.trim()) { toast.error('Worker adı gerekli.'); return; } if (!addWorkerDraft.description.trim()) { toast.error('Kısa görev açıklaması gerekli.'); return; } if (!isHttpsUrl(addWorkerDraft.url)) { toast.error('Geçerli bir https worker adresi girmeniz gerekiyor.'); return; } if (addWorkerDraft.supportedPages.length === 0) { toast.error('En az bir desteklenen sayfa seçmeniz gerekiyor.'); return; } const baseId = slugify(addWorkerDraft.name); const workerId = ensureUniqueWorkerId(workerRegistry, addWorkerDraft.classKey, baseId); const newWorker: WorkerItem = { id: workerId, name: addWorkerDraft.name.trim(), description: addWorkerDraft.description.trim(), url: addWorkerDraft.url.trim(), classKey: addWorkerDraft.classKey, supportedPages: addWorkerDraft.supportedPages, defaultFor: addWorkerDraft.markAsDefaultForCurrentPage ? [selectedPageId] : [], health: 'Bilinmiyor', lastTestResult: 'Henüz test edilmedi', }; setWorkerRegistry((prev) => ({ ...prev, [addWorkerDraft.classKey]: [...prev[addWorkerDraft.classKey], newWorker], })); if (addWorkerDraft.autoSelectForCurrentPage && currentPage) { const selected = currentPage.workerSelections[addWorkerDraft.classKey] || []; patchCurrentPage({ workerSelections: { ...currentPage.workerSelections, [addWorkerDraft.classKey]: [...selected, workerId], }, }); } setAddWorkerOpen(false); toast.success('Yeni worker eklendi.'); }; const validateBeforeSave = (forceOverride: boolean) => { if (!selectedPageId || !currentPage) return 'Önce bir sayfa seçmeniz gerekiyor.'; if (currentPage.customModelUrl && !isHttpsUrl(currentPage.customModelUrl)) { return 'Özel model adresi için geçerli https adresi girmeniz gerekiyor.'; } if (currentPage.rawCodeUrl && !isHttpsUrl(currentPage.rawCodeUrl)) { return 'Raw bağlantısı için geçerli https adresi girmeniz gerekiyor.'; } if (currentPage.editCodeUrl && !isHttpsUrl(currentPage.editCodeUrl)) { return 'Düzenleme bağlantısı için geçerli https adresi girmeniz gerekiyor.'; } if (compatibility.hasHardWarning && !forceOverride && !currentPage.compatibilityForceSave) { return 'Seçtiğiniz workerlardan en az biri bu sayfa için alışılmadık görünüyor. Force kaydetmeden önce uyarıyı okuyun.'; } return ''; }; const savePage = async (forceOverride = false) => { if (!selectedPageId || !currentPage || !originalCurrentPage) return; const validationError = validateBeforeSave(forceOverride); if (validationError) { setErrorCard({ title: 'Kaydetmeden önce düzeltmeniz gereken bir durum var.', detail: validationError, action: 'Uyarıyı düzeltin ya da bilinçli olarak force kaydet kullanın.', }); toast.error(validationError); return; } const actionKey = forceOverride ? 'forceSave' : 'save'; try { setLoading((prev) => ({ ...prev, [actionKey]: true })); setErrorCard(null); const payload = { version: 'page-worker-center-v2', pageId: selectedPageId, forceSave: forceOverride || currentPage.compatibilityForceSave, pageConfig: { ...currentPage, compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave, }, workerRegistry, }; await safeJson('/api/admin/workers-config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), }); const diff = computePageDiff(originalCurrentPage, { ...currentPage, compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave, }); setPages((prev) => ({ ...prev, [selectedPageId]: { ...prev[selectedPageId], compatibilityForceSave: forceOverride || prev[selectedPageId].compatibilityForceSave, updatedAt: new Date().toISOString(), updatedBy: 'salih celebi', lastSavedDiff: diff, }, })); setOriginalPages((prev) => ({ ...prev, [selectedPageId]: { ...pages[selectedPageId], compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave, updatedAt: new Date().toISOString(), updatedBy: 'salih celebi', lastSavedDiff: diff, }, })); setOriginalRegistry(clone(workerRegistry)); toast.success(forceOverride ? 'Force kayıt tamamlandı.' : 'Ayarlar kaydedildi.'); } catch (e: any) { setErrorCard({ title: forceOverride ? 'Force kayıt başarısız oldu.' : 'Kaydetme başarısız oldu.', detail: e.message || 'Beklenmeyen bir hata oluştu.', action: 'Sayfa ayarlarını ve backend endpointini kontrol edip tekrar deneyin.', }); toast.error(e.message || 'Kaydetme başarısız.'); } finally { setLoading((prev) => ({ ...prev, [actionKey]: false })); } }; const runTest = async () => { if (!selectedPageId || !currentPage) return; try { setLoading((prev) => ({ ...prev, test: true })); setErrorCard(null); const result = await safeJson<PageTestResult>('/api/admin/workers/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: selectedPageId, pageConfig: currentPage, workerRegistry, }), }); setTests((prev) => ({ ...prev, [selectedPageId]: result, })); const ok = result.healthy; let nextRegistry = clone(workerRegistry); WORKER_CLASS_KEYS.forEach((classKey) => { const selectedIds = currentPage.workerSelections[classKey] || []; nextRegistry = mergeLocalTestIntoRegistry(nextRegistry, classKey, selectedIds, ok); }); setWorkerRegistry(nextRegistry); toast.success(ok ? 'Test başarılı.' : 'Test tamamlandı, düzeltmeniz gereken noktalar var.'); } catch (e: any) { const fallback: PageTestResult = { pageId: selectedPageId, checkedAt: new Date().toISOString(), healthy: false, summary: 'Test tamamlanamadı.', suggestion: 'Worker URL, model URL ve backend test endpointini kontrol edin.', checks: [ { label: 'Worker URL erişilebilir mi', ok: false, detail: 'Kontrol yapılamadı.' }, { label: 'Model URL erişilebilir mi', ok: false, detail: 'Kontrol yapılamadı.' }, { label: 'JSON dönüyor mu', ok: false, detail: 'Kontrol yapılamadı.' }, { label: 'HTML fallback var mı', ok: false, detail: 'Kontrol yapılamadı.' }, ], }; setTests((prev) => ({ ...prev, [selectedPageId]: fallback, })); setErrorCard({ title: 'Test sırasında sorun oluştu.', detail: e.message || 'Worker testi tamamlanamadı.', action: 'Worker bağlantılarını ve test endpointini kontrol edip tekrar deneyin.', }); toast.error(e.message || 'Test başarısız.'); } finally { setLoading((prev) => ({ ...prev, test: false })); } }; const refreshDiagnostics = async () => { if (!selectedPageId) return; try { setLoading((prev) => ({ ...prev, diagnostics: true })); const data = await safeJson<PageDiagnostics>(/api/admin/workers/diagnostics?pageId=${encodeURIComponent(selectedPageId)}); setDiagnostics((prev) => ({ ...prev, [selectedPageId]: data, })); toast.success('Tanı bilgileri güncellendi.'); } catch (e: any) { setErrorCard({ title: 'Tanı bilgileri alınamadı.', detail: e.message || 'Beklenmeyen bir hata oluştu.', action: 'Diagnostics endpointini ve bağlantıları kontrol edin.', }); toast.error(e.message || 'Tanı başarısız.'); } finally { setLoading((prev) => ({ ...prev, diagnostics: false })); } }; const openReset = () => { if (!selectedPageId) return; setResetOpen(true); setResetStep(1); setResetSummary([]); setApprovalToken(''); }; const startResetFlow = async () => { if (!selectedPageId) return; try { setLoading((prev) => ({ ...prev, resetStart: true })); const response = await safeJson<ResetStartResponse>('/api/admin/workers/reset/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: selectedPageId }), }); setApprovalToken(response.approvalToken); setResetSummary( response.summary || [ 'API worker seçimleri varsayılan hale dönecek.', 'Model worker seçimleri varsayılan hale dönecek.', 'Orkestra yönlendirmesi varsayılan hale dönecek.', 'İş takibi ve test worker seçimleri varsayılan hale dönecek.', 'Özel bağlantılar ve force kaydet tercihi temizlenecek.', ] ); setResetStep(2); toast.success('Sıfırlama özeti hazır.'); } catch (e: any) { setErrorCard({ title: 'Sıfırlama başlatılamadı.', detail: e.message || 'Onay tokenı alınamadı.', action: 'Backend reset akışını kontrol edin.', }); toast.error(e.message || 'Sıfırlama başlatılamadı.'); } finally { setLoading((prev) => ({ ...prev, resetStart: false })); } }; const confirmResetFlow = async () => { if (!selectedPageId || !approvalToken) return; try { setLoading((prev) => ({ ...prev, resetConfirm: true })); await safeJson('/api/admin/workers/reset/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: selectedPageId, approvalToken, }), }); const resetConfig = clone(DEFAULT_PAGE_CONFIGS[selectedPageId]); const diff = computePageDiff(pages[selectedPageId], resetConfig); setPages((prev) => ({ ...prev, [selectedPageId]: { ...resetConfig, updatedAt: new Date().toISOString(), updatedBy: 'salih celebi', lastSavedDiff: diff, }, })); setOriginalPages((prev) => ({ ...prev, [selectedPageId]: { ...resetConfig, updatedAt: new Date().toISOString(), updatedBy: 'salih celebi', lastSavedDiff: diff, }, })); setTests((prev) => ({ ...prev, [selectedPageId]: undefined, })); setResetStep(3); toast.success('Sayfa varsayılan ayarlarına döndü.'); setTimeout(() => { setResetOpen(false); setResetStep(1); setResetSummary([]); setApprovalToken(''); }, 700); } catch (e: any) { setErrorCard({ title: 'Sıfırlama tamamlanamadı.', detail: e.message || 'Beklenmeyen bir hata oluştu.', action: 'Backend reset onay akışını kontrol edip tekrar deneyin.', }); toast.error(e.message || 'Sıfırlama başarısız.'); } finally { setLoading((prev) => ({ ...prev, resetConfirm: false })); } }; const currentTest = selectedPageId ? tests[selectedPageId] : undefined; const currentDiagnostics = selectedPageId ? diagnostics[selectedPageId] : undefined; return ( <div className="min-h-screen bg-zinc-100 text-zinc-900"> <header className="border-b border-zinc-200 bg-white/95 backdrop-blur"> <div className="mx-auto max-w-[1600px] px-4 py-5 md:px-6"> <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"> <div> <h1 className="text-3xl font-bold tracking-tight">Workers Yönetimi</h1> <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600"> Bu ekran, sayfa bazlı worker seçimini yönetir. Önce soldan bir sayfa seçilir, sonra yalnızca o sayfanın ayarları açılır. </p> </div> <div className="grid grid-cols-2 gap-3 md:w-[440px]"> <StatCard label="Bu ekran ne yapar?" value="Sayfa seç → worker sınıflarını yönet" /> <StatCard label="Ne test edilir?" value="Bağlantı, JSON, fallback, tanı" /> </div> </div> </div> </header> <div className="mx-auto flex max-w-[1600px] gap-6 px-4 py-6 md:px-6"> <aside className="sticky top-6 h-[calc(100vh-8rem)] w-full max-w-[320px] self-start rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm"> <div className="border-b border-zinc-100 pb-4"> <div className="text-sm font-semibold text-zinc-950">Sayfalar</div> <div className="mt-1 text-sm text-zinc-500">Önce buradan bir sayfa seçin. Ayarlar başta görünmez.</div> </div> <div className="mt-4 space-y-3"> {PAGE_IDS.map((pageId) => { const page = pages[pageId]; const totalSelected = WORKER_CLASS_KEYS.reduce( (sum, classKey) => sum + (page.workerSelections[classKey]?.length || 0), 0 ); const isActive = selectedPageId === pageId; return ( <button key={pageId} type="button" onClick={() => { setSelectedPageId(pageId); setErrorCard(null); }} className={cx( 'w-full rounded-2xl border p-4 text-left transition', isActive ? 'border-black bg-zinc-950 text-white shadow-sm' : 'border-zinc-200 bg-white hover:border-zinc-300' )} > <div className="flex items-start justify-between gap-3"> <div> <div className={cx('text-sm font-semibold', isActive ? 'text-white' : 'text-zinc-950')}>{page.title}</div> <div className={cx('mt-1 text-xs', isActive ? 'text-zinc-300' : 'text-zinc-500')}>{PAGE_META[pageId].shortDescription}</div> </div> <SmallBadge tone={isActive ? 'success' : 'neutral'}>{page.featureLabel}</SmallBadge> </div> <div className={cx('mt-3 text-xs', isActive ? 'text-zinc-300' : 'text-zinc-500')}> 5 sınıf • {totalSelected} seçim </div> </button> ); })} </div> </aside> <main className="min-w-0 flex-1"> {!selectedPageId || !currentPage ? ( <div className="rounded-3xl border border-dashed border-zinc-300 bg-white p-10 text-center shadow-sm"> <div className="mx-auto max-w-2xl"> <h2 className="text-2xl font-semibold text-zinc-950">Önce soldan bir sayfa seçin</h2> <p className="mt-3 text-sm leading-6 text-zinc-600"> Bu panel form gibi değil, sayfa bazlı çalışan bir yönetim merkezi gibi davranır. Bir sayfa seçildiğinde o sayfanın API işçileri, model çeken işçileri, orkestra şefi, iş takip uzmanı ve test dedektifi görünür. </p> <div className="mt-8 grid gap-4 md:grid-cols-3"> <StatCard label="Adım 1" value="Sayfa seç" hint="Sol panelden image.tsx, chat.tsx gibi bir sayfa seçilir." /> <StatCard label="Adım 2" value="Worker sınıflarını işaretle" hint="Her sınıfta birden fazla worker seçilebilir." /> <StatCard label="Adım 3" value="Test et ve kaydet" hint="Uyum uzmanı uyarı verirse force kayıt seçeneği bulunur." /> </div> </div> </div> ) : ( <div className="space-y-6"> <SectionCard title={${currentPage.title} — ${currentPage.featureLabel}} subtitle={currentPage.description} right={ <div className="flex flex-wrap gap-2"> <SmallBadge tone="neutral">{selectedWorkerCount} worker seçili</SmallBadge> <SmallBadge tone={compatibility.hasHardWarning ? 'warning' : 'success'}> {compatibility.hasHardWarning ? 'Uyum uyarısı var' : 'Uyum iyi görünüyor'} </SmallBadge> </div> } > <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"> <StatCard label="Seçili sayfa" value={currentPage.title} hint="Ayarlar yalnızca bu sayfa için gösteriliyor." /> <StatCard label="Force kayıt" value={currentPage.compatibilityForceSave ? 'Açık' : 'Kapalı'} hint="Uyumsuz seçim varsa bilinçli kayıt için kullanılır." /> <StatCard label="Son değiştiren" value={currentPage.updatedBy || '-'} hint={Son değişiklik: ${formatDate(currentPage.updatedAt)}} /> <StatCard label="Son test" value={currentTest?.healthy ? 'Başarılı' : currentTest ? 'Başarısız' : 'Henüz çalıştırılmadı'} hint={currentTest ? formatDate(currentTest.checkedAt) : 'Önce Test Et düğmesini kullanın.'} /> </div> <div className="mt-5 flex flex-wrap gap-2"> <button type="button" onClick={runTest} disabled={loading.test} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white" > {loading.test ? 'Test ediliyor...' : 'Test Et'} </button> <button type="button" onClick={refreshDiagnostics} disabled={loading.diagnostics} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900" > {loading.diagnostics ? 'Tanı yenileniyor...' : 'Tanı'} </button> <button type="button" onClick={() => savePage(false)} disabled={loading.save} className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white" > {loading.save ? 'Kaydediliyor...' : 'Kaydet'} </button> <button type="button" onClick={() => savePage(true)} disabled={loading.forceSave} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white" > {loading.forceSave ? 'Force kaydediliyor...' : 'Force ile Kaydet'} </button> <button type="button" onClick={resetLocalToDefaults} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900" > Varsayılanı Yükle </button> <button type="button" onClick={openReset} className="rounded-xl bg-red-50 px-4 py-2 text-sm font-medium text-red-700" > Güvenli Sıfırla </button> </div> </SectionCard> {errorCard ? ( <SectionCard title={errorCard.title} subtitle={errorCard.action} className="border-red-200 bg-red-50"> <div className="text-sm text-zinc-700">{errorCard.detail}</div> </SectionCard> ) : null} <SectionCard title="Canlı Önizleme" subtitle="Bu kart, seçili sayfanın şu anda hangi worker sınıflarıyla çalışacak şekilde ayarlandığını özetler." > <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5"> {WORKER_CLASS_KEYS.map((classKey) => ( <StatCard key={classKey} label={WORKER_CLASS_META[classKey].title} value={(currentPage.workerSelections[classKey] || []).join(', ') || '-'} hint={WORKER_CLASS_META[classKey].subtitle} /> ))} </div> </SectionCard> <SectionCard title="Varsayılan Ayarlar" subtitle="Sistemde her zaman varsayılan seçimler vardır. İsterseniz bu kutuya bakıp önerilen yapıya dönebilirsiniz." > <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5"> {WORKER_CLASS_KEYS.map((classKey) => ( <StatCard key={classKey} label={WORKER_CLASS_META[classKey].title} value={defaultSelections[classKey].map((item) => item.name).join(', ') || '-'} /> ))} </div> </SectionCard> {WORKER_CLASS_KEYS.map((classKey) => ( <WorkerChecklistCard key={classKey} classKey={classKey} pageId={selectedPageId} registry={workerRegistry} selectedIds={currentPage.workerSelections[classKey] || []} onToggle={toggleWorkerSelection} onAddWorker={openAddWorker} /> ))} <SectionCard title="Sayfa Uyum Uzmanı" subtitle="Yanlış veya alışılmadık worker seçilirse burada uyarı görünür. İsterseniz yine de force kayıt yapabilirsiniz." right={ <label className="flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-sm"> <input type="checkbox" checked={currentPage.compatibilityForceSave} onChange={(e) => patchCurrentPage({ compatibilityForceSave: e.target.checked })} /> Force kaydetmeye izin ver </label> } > <div className="grid gap-4 xl:grid-cols-2"> <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-sm font-semibold text-zinc-950">Uyumluluk özeti</div> <div className="mt-3 space-y-3 text-sm text-zinc-700"> <div> <strong>Doğrudan uyarı:</strong>{' '} {compatibility.hasHardWarning ? ${compatibility.incompatible.length} worker alışılmadık görünüyor. : 'Yok.'} </div> <div> <strong>Eksik sınıf:</strong>{' '} {compatibility.hasSoftWarning ? compatibility.missingClasses.map((item) => WORKER_CLASS_META[item].title).join(', ') : 'Yok.'} </div> </div> </div> <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-sm font-semibold text-zinc-950">Ne yapmanız gerekiyor?</div> <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700"> {compatibility.incompatible.length > 0 ? ( compatibility.incompatible.map((item) => ( <li key={${item.classKey}-${item.workerId}}> <strong>{item.worker?.name || item.workerId}</strong> worker’ı <strong>{selectedPageId}</strong> için doğal uyumlu değil. </li> )) ) : ( <li>Şu anda kritik uyum uyarısı görünmüyor.</li> )} {compatibility.missingClasses.map((classKey) => ( <li key={classKey}>{WORKER_CLASS_META[classKey].emptyHint}</li> ))} </ul> <div className="mt-4 flex flex-wrap gap-2"> <button type="button" onClick={() => savePage(true)} disabled={loading.forceSave} className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white" > {loading.forceSave ? 'Force kaydediliyor...' : 'Force ile Kaydet'} </button> <button type="button" onClick={resetLocalToDefaults} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900" > Önerilen varsayılanı geri yükle </button> </div> </div> </div> </SectionCard> <SectionCard title="Test Sonuç Paneli" subtitle="Test yalnızca toast atmaz. Sonuç burada kalıcı görünür." > {!currentTest ? ( <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-sm text-zinc-600"> Bu sayfa için test henüz çalıştırılmadı. Test Et düğmesine basınca worker URL, model URL, JSON ve HTML fallback kontrol edilir. </div> ) : ( <div className="space-y-4"> <div className="flex flex-wrap items-center gap-2"> <SmallBadge tone={currentTest.healthy ? 'success' : 'danger'}> {currentTest.healthy ? 'Başarılı' : 'Başarısız'} </SmallBadge> <span className="text-sm text-zinc-500">Son kontrol: {formatDate(currentTest.checkedAt)}</span> </div> <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"> {currentTest.checks.map((check) => ( <StatCard key={check.label} label={check.label} value={check.ok ? 'Evet' : 'Hayır'} hint={check.detail} /> ))} </div> <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-sm font-semibold text-zinc-950">Türkçe açıklama</div> <div className="mt-2 text-sm text-zinc-700">{currentTest.summary}</div> <div className="mt-4 text-sm font-semibold text-zinc-950">Ne yapmalıyım?</div> <div className="mt-2 text-sm text-zinc-700">{currentTest.suggestion}</div> </div> </div> )} </SectionCard> <SectionCard title="Tanı Özeti" subtitle="Ham log yerine kullanıcı dostu özet gösterilir." > <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6"> <StatCard label="Servis oturumu" value={currentDiagnostics?.sessionStatus || 'Bilinmiyor'} /> <StatCard label="Son test" value={currentDiagnostics?.lastTestStatus || 'Bilinmiyor'} /> <StatCard label="Rezervasyon sayısı" value={currentDiagnostics?.reservationCount ?? '-'} /> <StatCard label="Admin maliyet kaydı" value={currentDiagnostics?.adminCostCount ?? '-'} /> <StatCard label="Son güncelleme" value={formatDate(currentDiagnostics?.updatedAt)} /> <StatCard label="Son kaydeden kullanıcı" value={currentDiagnostics?.updatedBy || '-'} /> </div> </SectionCard> <SectionCard title="Gelişmiş Bağlantılar" subtitle="Worker değil ama yönetim için önemli URL alanları burada tutulur." > <div className="grid gap-4 xl:grid-cols-3"> <LinkFieldCard title="Özel Model Adresi" value={currentPage.customModelUrl} onChange={(value) => patchCurrentPage({ customModelUrl: value })} placeholder="https://..." /> <LinkFieldCard title="Raw (kodun düz metin hali)" value={currentPage.rawCodeUrl} onChange={(value) => patchCurrentPage({ rawCodeUrl: value })} placeholder="https://..." /> <LinkFieldCard title="Düzenleme bağlantısı" value={currentPage.editCodeUrl} onChange={(value) => patchCurrentPage({ editCodeUrl: value })} placeholder="https://..." /> </div> </SectionCard> <SectionCard title="Son kayıt özeti" subtitle="En son işlemde hangi alanların değiştiğini burada görürsünüz." > {currentPage.lastSavedDiff && currentPage.lastSavedDiff.length > 0 ? ( <div className="space-y-3"> {currentPage.lastSavedDiff.map((item, index) => ( <div key={${item.field}-${index}} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-sm font-semibold text-zinc-950">{item.field}</div> <div className="mt-3 grid gap-2 md:grid-cols-2"> <div className="text-sm text-zinc-700"> <span className="font-medium text-zinc-900">Önceki değer:</span> {item.oldValue || '-'} </div> <div className="text-sm text-zinc-700"> <span className="font-medium text-zinc-900">Yeni değer:</span> {item.newValue || '-'} </div> </div> </div> ))} </div> ) : ( <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-sm text-zinc-600"> Henüz kayıt yapılmadı ya da değişiklik özeti yok. </div> )} </SectionCard> <SectionCard title="Nasıl çalışır?" subtitle="Kullanım kılavuzu doğrudan sayfanın içindedir." > <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7"> {[ 'Özellik yerine sayfa seç', 'Sınıfları incele', 'İstediğin workerları işaretle', 'Gerekirse yeni worker ekle', 'Uyum uzmanı uyarılarını oku', 'Test et', 'Kaydet ya da force kaydet', ].map((item, index) => ( <div key={item} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4"> <div className="text-xs font-semibold uppercase text-indigo-600">Adım {index + 1}</div> <div className="mt-1 text-sm font-semibold text-zinc-950">{item}</div> </div> ))} </div> </SectionCard> </div> )} </main> </div> <footer className="border-t border-zinc-200 bg-white"> <div className="mx-auto flex max-w-[1600px] flex-col gap-2 px-4 py-4 text-sm text-zinc-600 md:flex-row md:items-center md:justify-between md:px-6"> <div> {selectedPageId ? ( <> Son sayfa: <strong className="text-zinc-900">{selectedPageId}</strong> </> ) : ( 'Henüz sayfa seçilmedi.' )} </div> <div> Son değiştiren: <strong className="text-zinc-900">{selectedPageId ? pages[selectedPageId].updatedBy || '-' : '-'}</strong> </div> <div> Son test: <strong className="text-zinc-900">{selectedPageId && tests[selectedPageId] ? (tests[selectedPageId]?.healthy ? 'Başarılı' : 'Başarısız') : '-'}</strong> </div> </div> </footer> <AddWorkerDialog open={addWorkerOpen} currentPageId={selectedPageId} draft={addWorkerDraft} onChange={(patch) => setAddWorkerDraft((prev) => ({ ...prev, ...patch }))} onClose={() => setAddWorkerOpen(false)} onSubmit={submitAddWorker} /> <ResetDialog open={resetOpen} pageId={selectedPageId} step={resetStep} summary={resetSummary} loading={loading.resetStart || loading.resetConfirm} onClose={() => setResetOpen(false)} onStart={startResetFlow} onConfirm={confirmResetFlow} /> </div> ); }
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import toast from 'react-hot-toast';
+
+const PAGE_IDS = ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'] as const;
+type PageId = typeof PAGE_IDS[number];
+
+const WORKER_CLASS_KEYS = ['api', 'model', 'orchestrator', 'job', 'test'] as const;
+type WorkerClassKey = typeof WORKER_CLASS_KEYS[number];
+
+type WorkerItem = {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  classKey: WorkerClassKey;
+  supportedPages: PageId[];
+  defaultFor?: PageId[];
+  health?: 'Hazır' | 'Sorunlu' | 'Bilinmiyor';
+  lastTestResult?: 'Başarılı' | 'Başarısız' | 'Henüz test edilmedi';
+};
+
+type WorkerRegistry = Record<WorkerClassKey, WorkerItem[]>;
+
+type PageConfig = {
+  pageId: PageId;
+  title: string;
+  description: string;
+  featureLabel: string;
+  workerSelections: Record<WorkerClassKey, string[]>;
+  customModelUrl: string;
+  rawCodeUrl: string;
+  editCodeUrl: string;
+  compatibilityForceSave: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+  lastSavedDiff?: Array<{ field: string; oldValue: string; newValue: string }>;
+};
+
+type PageConfigMap = Record<PageId, PageConfig>;
+
+type WorkerTestCheck = {
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
+type PageTestResult = {
+  pageId: PageId;
+  checkedAt: string;
+  healthy: boolean;
+  summary: string;
+  suggestion: string;
+  checks: WorkerTestCheck[];
+};
+
+type PageDiagnostics = {
+  sessionStatus: 'Hazır' | 'Sorunlu' | 'Bilinmiyor';
+  lastTestStatus: 'Başarılı' | 'Başarısız' | 'Bilinmiyor';
+  reservationCount: number | string;
+  adminCostCount: number | string;
+  updatedAt?: string;
+  updatedBy?: string;
+  advanced?: Record<string, unknown>;
+};
+
+type DiagnosticsMap = Partial<Record<PageId, PageDiagnostics>>;
+type TestMap = Partial<Record<PageId, PageTestResult>>;
+
+type AddWorkerDraft = {
+  classKey: WorkerClassKey;
+  name: string;
+  description: string;
+  url: string;
+  supportedPages: PageId[];
+  markAsDefaultForCurrentPage: boolean;
+  autoSelectForCurrentPage: boolean;
+};
+
+type ResetStartResponse = {
+  approvalToken: string;
+  summary?: string[];
+};
+
+const PAGE_META: Record<
+  PageId,
+  {
+    title: string;
+    featureLabel: string;
+    description: string;
+    shortDescription: string;
+  }
+> = {
+  'image.tsx': {
+    title: 'image.tsx',
+    featureLabel: 'Görsel Üretim',
+    description: 'Görsel üretim sayfasının hangi worker sınıflarıyla çalışacağını yönetir.',
+    shortDescription: 'Resim üretim akışı',
+  },
+  'chat.tsx': {
+    title: 'chat.tsx',
+    featureLabel: 'Sohbet',
+    description: 'Sohbet sayfasının hangi worker sınıflarıyla çalışacağını yönetir.',
+    shortDescription: 'Sohbet ve metin akışı',
+  },
+  'video.tsx': {
+    title: 'video.tsx',
+    featureLabel: 'Video',
+    description: 'Video sayfasının hangi worker sınıflarıyla çalışacağını yönetir.',
+    shortDescription: 'Video üretim akışı',
+  },
+  'tts.tsx': {
+    title: 'tts.tsx',
+    featureLabel: 'Seslendirme',
+    description: 'Seslendirme sayfasının hangi worker sınıflarıyla çalışacağını yönetir.',
+    shortDescription: 'Metinden ses akışı',
+  },
+  'ocr.tsx': {
+    title: 'ocr.tsx',
+    featureLabel: 'OCR',
+    description: 'OCR sayfasının hangi worker sınıflarıyla çalışacağını yönetir.',
+    shortDescription: 'Görselden yazı okuma akışı',
+  },
+};
+
+const WORKER_CLASS_META: Record<
+  WorkerClassKey,
+  {
+    title: string;
+    subtitle: string;
+    color: string;
+    emptyHint: string;
+  }
+> = {
+  api: {
+    title: 'SINIF 1 = API ÇAĞIRAN İŞÇİLER',
+    subtitle: '( CHAT , IMG, VIDEO , TTS MODELLERİ ) işi yapanlar',
+    color: 'border-blue-200 bg-blue-50',
+    emptyHint: 'Bu sınıfta seçim yoksa istek yapacak çalışan servis kalmayabilir.',
+  },
+  model: {
+    title: 'SINIF 2 = MODEL ÇEKEN İŞÇİLER',
+    subtitle: '( CHAT , IMG, VIDEO , TTS MODELLERİ ) seçenekleri getirenler',
+    color: 'border-emerald-200 bg-emerald-50',
+    emptyHint: 'Bu sınıfta seçim yoksa model listesi getirilemeyebilir.',
+  },
+  orchestrator: {
+    title: 'SINIF 3 = ORKESTRA ŞEFİ',
+    subtitle: 'effective-config / orchestration / nereye gidileceğine karar verenler',
+    color: 'border-violet-200 bg-violet-50',
+    emptyHint: 'Bu sınıfta seçim yoksa sistem yönlendirmesi beklediğiniz gibi çalışmayabilir.',
+  },
+  job: {
+    title: 'SINIF 4 = İŞ TAKİP UZMANI',
+    subtitle: 'job-status / history / işin ne durumda olduğunu takip edenler',
+    color: 'border-amber-200 bg-amber-50',
+    emptyHint: 'Bu sınıfta seçim yoksa iş takibi ve geçmiş görünümü eksik kalabilir.',
+  },
+  test: {
+    title: 'SINIF 5 = TEST DEDEKTİFİ',
+    subtitle: 'test / diagnostics / sistemde sorun var mı diye kontrol edenler',
+    color: 'border-rose-200 bg-rose-50',
+    emptyHint: 'Bu sınıfta seçim yoksa test ve tanı kontrolleri eksik kalabilir.',
+  },
+};
+
+const DEFAULT_WORKER_REGISTRY: WorkerRegistry = {
+  api: [
+    {
+      id: 'im-api-worker',
+      name: 'im-api-worker',
+      description: 'Image isteklerini gerçekten yapan ana worker.',
+      url: 'https://im.puter.work',
+      classKey: 'api',
+      supportedPages: ['image.tsx'],
+      defaultFor: ['image.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'chat-api-worker',
+      name: 'chat-api-worker',
+      description: 'Sohbet ve metin üretim çağrılarını yapan ana worker.',
+      url: 'https://api-cagrilari.puter.work/chat',
+      classKey: 'api',
+      supportedPages: ['chat.tsx'],
+      defaultFor: ['chat.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'video-api-worker',
+      name: 'video-api-worker',
+      description: 'Video üretim çağrılarını yapan ana worker.',
+      url: 'https://api-cagrilari.puter.work/video',
+      classKey: 'api',
+      supportedPages: ['video.tsx'],
+      defaultFor: ['video.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'tts-api-worker',
+      name: 'tts-api-worker',
+      description: 'Metni sese çeviren ana worker.',
+      url: 'https://api-cagrilari.puter.work/tts',
+      classKey: 'api',
+      supportedPages: ['tts.tsx'],
+      defaultFor: ['tts.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'ocr-api-worker',
+      name: 'ocr-api-worker',
+      description: 'OCR isteklerini yapan ana worker.',
+      url: 'https://api-cagrilari.puter.work/ocr',
+      classKey: 'api',
+      supportedPages: ['ocr.tsx'],
+      defaultFor: ['ocr.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'shared-fallback-api',
+      name: 'shared-fallback-api',
+      description: 'Genel yedek API worker.',
+      url: 'https://api-cagrilari.puter.work',
+      classKey: 'api',
+      supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+  ],
+  model: [
+    {
+      id: 'im-model-source',
+      name: 'im-model-source',
+      description: 'Image model seçeneklerini getirir.',
+      url: 'https://im.puter.work/models',
+      classKey: 'model',
+      supportedPages: ['image.tsx'],
+      defaultFor: ['image.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'chat-model-source',
+      name: 'chat-model-source',
+      description: 'Sohbet model seçeneklerini getirir.',
+      url: 'https://api-cagrilari.puter.work/chat/models',
+      classKey: 'model',
+      supportedPages: ['chat.tsx'],
+      defaultFor: ['chat.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'video-model-source',
+      name: 'video-model-source',
+      description: 'Video model seçeneklerini getirir.',
+      url: 'https://api-cagrilari.puter.work/video/models',
+      classKey: 'model',
+      supportedPages: ['video.tsx'],
+      defaultFor: ['video.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'tts-model-source',
+      name: 'tts-model-source',
+      description: 'Seslendirme model seçeneklerini getirir.',
+      url: 'https://api-cagrilari.puter.work/tts/models',
+      classKey: 'model',
+      supportedPages: ['tts.tsx'],
+      defaultFor: ['tts.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'ocr-model-source',
+      name: 'ocr-model-source',
+      description: 'OCR model seçeneklerini getirir.',
+      url: 'https://api-cagrilari.puter.work/ocr/models',
+      classKey: 'model',
+      supportedPages: ['ocr.tsx'],
+      defaultFor: ['ocr.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'shared-model-cache',
+      name: 'shared-model-cache',
+      description: 'Önbellekten ortak model listesi getirir.',
+      url: 'https://is-durumu.puter.work/model-cache',
+      classKey: 'model',
+      supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+  ],
+  orchestrator: [
+    {
+      id: 'image-orchestrator',
+      name: 'image-orchestrator',
+      description: 'Image için effective-config ve yönlendirme kararlarını verir.',
+      url: 'https://is-durumu.puter.work/orchestrate/image',
+      classKey: 'orchestrator',
+      supportedPages: ['image.tsx'],
+      defaultFor: ['image.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'chat-orchestrator',
+      name: 'chat-orchestrator',
+      description: 'Sohbet için effective-config ve yönlendirme kararlarını verir.',
+      url: 'https://is-durumu.puter.work/orchestrate/chat',
+      classKey: 'orchestrator',
+      supportedPages: ['chat.tsx'],
+      defaultFor: ['chat.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'video-orchestrator',
+      name: 'video-orchestrator',
+      description: 'Video için effective-config ve yönlendirme kararlarını verir.',
+      url: 'https://is-durumu.puter.work/orchestrate/video',
+      classKey: 'orchestrator',
+      supportedPages: ['video.tsx'],
+      defaultFor: ['video.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'tts-orchestrator',
+      name: 'tts-orchestrator',
+      description: 'TTS için effective-config ve yönlendirme kararlarını verir.',
+      url: 'https://is-durumu.puter.work/orchestrate/tts',
+      classKey: 'orchestrator',
+      supportedPages: ['tts.tsx'],
+      defaultFor: ['tts.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'ocr-orchestrator',
+      name: 'ocr-orchestrator',
+      description: 'OCR için effective-config ve yönlendirme kararlarını verir.',
+      url: 'https://is-durumu.puter.work/orchestrate/ocr',
+      classKey: 'orchestrator',
+      supportedPages: ['ocr.tsx'],
+      defaultFor: ['ocr.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'smart-router',
+      name: 'smart-router',
+      description: 'Birden fazla worker varsa akıllı yönlendirme yapar.',
+      url: 'https://is-durumu.puter.work/orchestrate/router',
+      classKey: 'orchestrator',
+      supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+  ],
+  job: [
+    {
+      id: 'image-job-status',
+      name: 'image-job-status',
+      description: 'Image işleri için durum ve geçmiş takibi yapar.',
+      url: 'https://is-durumu.puter.work/jobs/image',
+      classKey: 'job',
+      supportedPages: ['image.tsx'],
+      defaultFor: ['image.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'chat-job-status',
+      name: 'chat-job-status',
+      description: 'Sohbet işleri için durum ve geçmiş takibi yapar.',
+      url: 'https://is-durumu.puter.work/jobs/chat',
+      classKey: 'job',
+      supportedPages: ['chat.tsx'],
+      defaultFor: ['chat.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'video-job-status',
+      name: 'video-job-status',
+      description: 'Video işleri için durum ve geçmiş takibi yapar.',
+      url: 'https://is-durumu.puter.work/jobs/video',
+      classKey: 'job',
+      supportedPages: ['video.tsx'],
+      defaultFor: ['video.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'tts-job-status',
+      name: 'tts-job-status',
+      description: 'TTS işleri için durum ve geçmiş takibi yapar.',
+      url: 'https://is-durumu.puter.work/jobs/tts',
+      classKey: 'job',
+      supportedPages: ['tts.tsx'],
+      defaultFor: ['tts.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'ocr-job-status',
+      name: 'ocr-job-status',
+      description: 'OCR işleri için durum ve geçmiş takibi yapar.',
+      url: 'https://is-durumu.puter.work/jobs/ocr',
+      classKey: 'job',
+      supportedPages: ['ocr.tsx'],
+      defaultFor: ['ocr.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'history-tracker',
+      name: 'history-tracker',
+      description: 'Ortak geçmiş ve iş günlüğü izler.',
+      url: 'https://is-durumu.puter.work/history',
+      classKey: 'job',
+      supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+  ],
+  test: [
+    {
+      id: 'image-diagnostics',
+      name: 'image-diagnostics',
+      description: 'Image worker test ve tanı kontrolünü yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/image',
+      classKey: 'test',
+      supportedPages: ['image.tsx'],
+      defaultFor: ['image.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'chat-diagnostics',
+      name: 'chat-diagnostics',
+      description: 'Chat worker test ve tanı kontrolünü yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/chat',
+      classKey: 'test',
+      supportedPages: ['chat.tsx'],
+      defaultFor: ['chat.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'video-diagnostics',
+      name: 'video-diagnostics',
+      description: 'Video worker test ve tanı kontrolünü yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/video',
+      classKey: 'test',
+      supportedPages: ['video.tsx'],
+      defaultFor: ['video.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'tts-diagnostics',
+      name: 'tts-diagnostics',
+      description: 'TTS worker test ve tanı kontrolünü yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/tts',
+      classKey: 'test',
+      supportedPages: ['tts.tsx'],
+      defaultFor: ['tts.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'ocr-diagnostics',
+      name: 'ocr-diagnostics',
+      description: 'OCR worker test ve tanı kontrolünü yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/ocr',
+      classKey: 'test',
+      supportedPages: ['ocr.tsx'],
+      defaultFor: ['ocr.tsx'],
+      health: 'Hazır',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+    {
+      id: 'deep-health-check',
+      name: 'deep-health-check',
+      description: 'Daha derin sağlık ve bağlantı testi yapar.',
+      url: 'https://is-durumu.puter.work/diagnostics/deep',
+      classKey: 'test',
+      supportedPages: ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    },
+  ],
+};
+
+const DEFAULT_PAGE_CONFIGS: PageConfigMap = {
+  'image.tsx': {
+    pageId: 'image.tsx',
+    title: PAGE_META['image.tsx'].title,
+    featureLabel: PAGE_META['image.tsx'].featureLabel,
+    description: PAGE_META['image.tsx'].description,
+    workerSelections: {
+      api: ['im-api-worker', 'shared-fallback-api'],
+      model: ['im-model-source'],
+      orchestrator: ['image-orchestrator'],
+      job: ['image-job-status'],
+      test: ['image-diagnostics'],
+    },
+    customModelUrl: 'https://im.puter.work/models',
+    rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js',
+    editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js',
+    compatibilityForceSave: false,
+  },
+  'chat.tsx': {
+    pageId: 'chat.tsx',
+    title: PAGE_META['chat.tsx'].title,
+    featureLabel: PAGE_META['chat.tsx'].featureLabel,
+    description: PAGE_META['chat.tsx'].description,
+    workerSelections: {
+      api: ['chat-api-worker', 'shared-fallback-api'],
+      model: ['chat-model-source'],
+      orchestrator: ['chat-orchestrator'],
+      job: ['chat-job-status'],
+      test: ['chat-diagnostics'],
+    },
+    customModelUrl: 'https://api-cagrilari.puter.work/chat/models',
+    rawCodeUrl: '',
+    editCodeUrl: '',
+    compatibilityForceSave: false,
+  },
+  'video.tsx': {
+    pageId: 'video.tsx',
+    title: PAGE_META['video.tsx'].title,
+    featureLabel: PAGE_META['video.tsx'].featureLabel,
+    description: PAGE_META['video.tsx'].description,
+    workerSelections: {
+      api: ['video-api-worker', 'shared-fallback-api'],
+      model: ['video-model-source'],
+      orchestrator: ['video-orchestrator'],
+      job: ['video-job-status'],
+      test: ['video-diagnostics'],
+    },
+    customModelUrl: 'https://api-cagrilari.puter.work/video/models',
+    rawCodeUrl: '',
+    editCodeUrl: '',
+    compatibilityForceSave: false,
+  },
+  'tts.tsx': {
+    pageId: 'tts.tsx',
+    title: PAGE_META['tts.tsx'].title,
+    featureLabel: PAGE_META['tts.tsx'].featureLabel,
+    description: PAGE_META['tts.tsx'].description,
+    workerSelections: {
+      api: ['tts-api-worker', 'shared-fallback-api'],
+      model: ['tts-model-source'],
+      orchestrator: ['tts-orchestrator'],
+      job: ['tts-job-status'],
+      test: ['tts-diagnostics'],
+    },
+    customModelUrl: 'https://api-cagrilari.puter.work/tts/models',
+    rawCodeUrl: '',
+    editCodeUrl: '',
+    compatibilityForceSave: false,
+  },
+  'ocr.tsx': {
+    pageId: 'ocr.tsx',
+    title: PAGE_META['ocr.tsx'].title,
+    featureLabel: PAGE_META['ocr.tsx'].featureLabel,
+    description: PAGE_META['ocr.tsx'].description,
+    workerSelections: {
+      api: ['ocr-api-worker', 'shared-fallback-api'],
+      model: ['ocr-model-source'],
+      orchestrator: ['ocr-orchestrator'],
+      job: ['ocr-job-status'],
+      test: ['ocr-diagnostics'],
+    },
+    customModelUrl: 'https://api-cagrilari.puter.work/ocr/models',
+    rawCodeUrl: '',
+    editCodeUrl: '',
+    compatibilityForceSave: false,
+  },
+};
+
+function cx(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(' ');
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function uniqueById(items: WorkerItem[]) {
+  const map = new Map<string, WorkerItem>();
+  items.forEach((item) => {
+    map.set(item.id, item);
+  });
+  return Array.from(map.values());
+}
+
+function slugify(input: string) {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function ensureUniqueWorkerId(registry: WorkerRegistry, classKey: WorkerClassKey, baseId: string) {
+  const existingIds = new Set(registry[classKey].map((item) => item.id));
+  if (!existingIds.has(baseId)) return baseId;
+  let i = 2;
+  while (existingIds.has(`${baseId}-${i}`)) i += 1;
+  return `${baseId}-${i}`;
+}
+
+function formatDate(value?: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('tr-TR');
+}
+
+function isHttpsUrl(value?: string) {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+async function safeJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+
+  if (/<!doctype|<html/i.test(text)) {
+    throw new Error('Sunucu JSON yerine HTML döndü. Endpoint veya worker adresini kontrol edin.');
+  }
+
+  if (!contentType.includes('application/json')) {
+    throw new Error('JSON içerik tipi bekleniyordu.');
+  }
+
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error('Geçersiz JSON yanıtı alındı.');
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.error || 'İstek başarısız oldu.');
+  }
+
+  return data as T;
+}
+
+function mergeRegistry(base: WorkerRegistry, incoming?: Partial<Record<WorkerClassKey, WorkerItem[]>>) {
+  const next = clone(base);
+  if (!incoming) return next;
+
+  WORKER_CLASS_KEYS.forEach((classKey) => {
+    const merged = [...next[classKey], ...(incoming[classKey] || [])].map((item) => ({
+      ...item,
+      classKey,
+      supportedPages: (item.supportedPages || []).filter(Boolean) as PageId[],
+      defaultFor: (item.defaultFor || []).filter(Boolean) as PageId[],
+    }));
+    next[classKey] = uniqueById(merged);
+  });
+
+  return next;
+}
+
+function mergePageConfig(defaultConfig: PageConfig, incoming?: Partial<PageConfig>): PageConfig {
+  if (!incoming) return clone(defaultConfig);
+
+  return {
+    ...clone(defaultConfig),
+    ...incoming,
+    workerSelections: {
+      api: incoming.workerSelections?.api || defaultConfig.workerSelections.api,
+      model: incoming.workerSelections?.model || defaultConfig.workerSelections.model,
+      orchestrator: incoming.workerSelections?.orchestrator || defaultConfig.workerSelections.orchestrator,
+      job: incoming.workerSelections?.job || defaultConfig.workerSelections.job,
+      test: incoming.workerSelections?.test || defaultConfig.workerSelections.test,
+    },
+  };
+}
+
+function buildPlaceholderWorker(
+  classKey: WorkerClassKey,
+  id: string,
+  pageId: PageId,
+  url = '',
+  description = 'Eski yapıdan taşınan worker.'
+): WorkerItem {
+  return {
+    id,
+    name: id,
+    description,
+    url,
+    classKey,
+    supportedPages: [pageId],
+    defaultFor: [],
+    health: 'Bilinmiyor',
+    lastTestResult: 'Henüz test edilmedi',
+  };
+}
+
+function normalizePayload(payload: any): { pages: PageConfigMap; registry: WorkerRegistry } {
+  let registry = clone(DEFAULT_WORKER_REGISTRY);
+  let pages = clone(DEFAULT_PAGE_CONFIGS);
+
+  if (payload?.workerRegistry) {
+    registry = mergeRegistry(registry, payload.workerRegistry);
+  }
+
+  if (payload?.pages) {
+    PAGE_IDS.forEach((pageId) => {
+      pages[pageId] = mergePageConfig(DEFAULT_PAGE_CONFIGS[pageId], payload.pages[pageId]);
+    });
+    return { pages, registry };
+  }
+
+  const legacyMap: Record<string, PageId> = {
+    image: 'image.tsx',
+    chat: 'chat.tsx',
+    video: 'video.tsx',
+    tts: 'tts.tsx',
+    ocr: 'ocr.tsx',
+  };
+
+  Object.entries(legacyMap).forEach(([legacyKey, pageId]) => {
+    const legacy = payload?.[legacyKey];
+    if (!legacy) return;
+
+    if (legacy.primaryWorkerKey && !registry.api.find((item) => item.id === legacy.primaryWorkerKey)) {
+      registry.api.push(buildPlaceholderWorker('api', legacy.primaryWorkerKey, pageId, legacy.customWorkerUrl || ''));
+    }
+
+    if (legacy.modelSourceKey && !registry.model.find((item) => item.id === legacy.modelSourceKey)) {
+      registry.model.push(buildPlaceholderWorker('model', legacy.modelSourceKey, pageId, legacy.customModelUrl || ''));
+    }
+
+    pages[pageId] = mergePageConfig(DEFAULT_PAGE_CONFIGS[pageId], {
+      customModelUrl: legacy.customModelUrl || DEFAULT_PAGE_CONFIGS[pageId].customModelUrl,
+      rawCodeUrl: legacy.rawCodeUrl || DEFAULT_PAGE_CONFIGS[pageId].rawCodeUrl,
+      editCodeUrl: legacy.editCodeUrl || DEFAULT_PAGE_CONFIGS[pageId].editCodeUrl,
+      updatedAt: legacy.updatedAt,
+      updatedBy: legacy.updatedBy,
+      workerSelections: {
+        api: legacy.primaryWorkerKey ? [legacy.primaryWorkerKey] : DEFAULT_PAGE_CONFIGS[pageId].workerSelections.api,
+        model: legacy.modelSourceKey ? [legacy.modelSourceKey] : DEFAULT_PAGE_CONFIGS[pageId].workerSelections.model,
+        orchestrator: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.orchestrator,
+        job: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.job,
+        test: DEFAULT_PAGE_CONFIGS[pageId].workerSelections.test,
+      },
+    });
+  });
+
+  return { pages, registry };
+}
+
+function computePageDiff(before: PageConfig, after: PageConfig) {
+  const fields: Array<keyof PageConfig> = ['customModelUrl', 'rawCodeUrl', 'editCodeUrl', 'compatibilityForceSave'];
+  const result: Array<{ field: string; oldValue: string; newValue: string }> = [];
+
+  fields.forEach((field) => {
+    const oldValue = String(before[field] ?? '');
+    const newValue = String(after[field] ?? '');
+    if (oldValue !== newValue) {
+      result.push({ field: String(field), oldValue, newValue });
+    }
+  });
+
+  WORKER_CLASS_KEYS.forEach((classKey) => {
+    const oldValue = (before.workerSelections[classKey] || []).join(', ');
+    const newValue = (after.workerSelections[classKey] || []).join(', ');
+    if (oldValue !== newValue) {
+      result.push({
+        field: `${classKey} worker seçimleri`,
+        oldValue,
+        newValue,
+      });
+    }
+  });
+
+  return result;
+}
+
+function evaluateCompatibility(pageId: PageId, pageConfig: PageConfig, registry: WorkerRegistry) {
+  const incompatible: Array<{ classKey: WorkerClassKey; worker: WorkerItem | null; workerId: string }> = [];
+  const missingClasses: WorkerClassKey[] = [];
+
+  WORKER_CLASS_KEYS.forEach((classKey) => {
+    const selectedIds = pageConfig.workerSelections[classKey] || [];
+    if (selectedIds.length === 0) {
+      missingClasses.push(classKey);
+      return;
+    }
+
+    selectedIds.forEach((workerId) => {
+      const worker = registry[classKey].find((item) => item.id === workerId) || null;
+      if (!worker || !worker.supportedPages.includes(pageId)) {
+        incompatible.push({ classKey, worker, workerId });
+      }
+    });
+  });
+
+  return {
+    incompatible,
+    missingClasses,
+    hasHardWarning: incompatible.length > 0,
+    hasSoftWarning: missingClasses.length > 0,
+  };
+}
+
+function getDefaultSelectionsForPage(pageId: PageId, registry: WorkerRegistry) {
+  const defaults: Record<WorkerClassKey, WorkerItem[]> = {
+    api: [],
+    model: [],
+    orchestrator: [],
+    job: [],
+    test: [],
+  };
+
+  WORKER_CLASS_KEYS.forEach((classKey) => {
+    defaults[classKey] = registry[classKey].filter((item) => (item.defaultFor || []).includes(pageId));
+  });
+
+  return defaults;
+}
+
+function mergeLocalTestIntoRegistry(registry: WorkerRegistry, classKey: WorkerClassKey, selectedIds: string[], ok: boolean) {
+  const next = clone(registry);
+  next[classKey] = next[classKey].map((item) =>
+    selectedIds.includes(item.id)
+      ? {
+          ...item,
+          lastTestResult: ok ? 'Başarılı' : 'Başarısız',
+          health: ok ? 'Hazır' : 'Sorunlu',
+        }
+      : item
+  );
+  return next;
+}
+
+function SectionCard({
+  title,
+  subtitle,
+  children,
+  right,
+  className,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  right?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cx('rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm', className)}>
+      <div className="flex flex-col gap-3 border-b border-zinc-100 pb-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-950">{title}</h2>
+          {subtitle ? <p className="mt-1 text-sm text-zinc-500">{subtitle}</p> : null}
+        </div>
+        {right}
+      </div>
+      <div className="pt-4">{children}</div>
+    </div>
+  );
+}
+
+function SmallBadge({
+  children,
+  tone = 'neutral',
+}: {
+  children: ReactNode;
+  tone?: 'neutral' | 'success' | 'warning' | 'danger';
+}) {
+  const classes =
+    tone === 'success'
+      ? 'bg-emerald-100 text-emerald-700'
+      : tone === 'warning'
+      ? 'bg-amber-100 text-amber-700'
+      : tone === 'danger'
+      ? 'bg-red-100 text-red-700'
+      : 'bg-zinc-100 text-zinc-700';
+
+  return <span className={cx('inline-flex rounded-full px-2.5 py-1 text-xs font-medium', classes)}>{children}</span>;
+}
+
+function StatCard({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
+  return (
+    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+      <div className="text-xs font-medium text-zinc-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-zinc-950">{value}</div>
+      {hint ? <div className="mt-2 text-xs text-zinc-500">{hint}</div> : null}
+    </div>
+  );
+}
+
+function FieldHint({ children }: { children: ReactNode }) {
+  return <p className="mt-2 text-xs leading-5 text-zinc-500">{children}</p>;
+}
+
+function WorkerChecklistCard({
+  classKey,
+  pageId,
+  registry,
+  selectedIds,
+  onToggle,
+  onAddWorker,
+}: {
+  classKey: WorkerClassKey;
+  pageId: PageId;
+  registry: WorkerRegistry;
+  selectedIds: string[];
+  onToggle: (classKey: WorkerClassKey, workerId: string) => void;
+  onAddWorker: (classKey: WorkerClassKey) => void;
+}) {
+  const meta = WORKER_CLASS_META[classKey];
+  const workers = registry[classKey];
+
+  return (
+    <div className={cx('rounded-3xl border p-4 shadow-sm', meta.color)}>
+      <div className="flex flex-col gap-3 border-b border-black/5 pb-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-zinc-950">{meta.title}</h3>
+          <p className="mt-1 text-sm text-zinc-600">{meta.subtitle}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onAddWorker(classKey)}
+          className="rounded-xl bg-white px-3 py-2 text-sm font-medium text-zinc-900 shadow-sm ring-1 ring-zinc-200"
+        >
+          + Yeni worker ekle
+        </button>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {workers.map((worker) => {
+          const checked = selectedIds.includes(worker.id);
+          const supported = worker.supportedPages.includes(pageId);
+          const isDefault = (worker.defaultFor || []).includes(pageId);
+
+          return (
+            <label
+              key={worker.id}
+              className={cx(
+                'block rounded-2xl border bg-white p-4 transition',
+                checked ? 'border-black shadow-sm' : 'border-zinc-200',
+                !supported && checked ? 'ring-2 ring-amber-300' : ''
+              )}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 rounded border-zinc-300"
+                  checked={checked}
+                  onChange={() => onToggle(classKey, worker.id)}
+                />
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold text-zinc-950">{worker.name}</div>
+                    {isDefault ? <SmallBadge tone="success">Varsayılan</SmallBadge> : null}
+                    {!supported ? <SmallBadge tone="warning">Bu sayfaya doğal uyumlu değil</SmallBadge> : null}
+                    <SmallBadge tone={worker.health === 'Hazır' ? 'success' : worker.health === 'Sorunlu' ? 'danger' : 'neutral'}>
+                      {worker.health || 'Bilinmiyor'}
+                    </SmallBadge>
+                  </div>
+
+                  <div className="mt-2 text-sm text-zinc-600">{worker.description}</div>
+
+                  <div className="mt-3 grid gap-2 text-xs text-zinc-500 md:grid-cols-3">
+                    <div>
+                      <span className="font-medium text-zinc-700">URL:</span> {worker.url || '-'}
+                    </div>
+                    <div>
+                      <span className="font-medium text-zinc-700">Desteklediği sayfalar:</span>{' '}
+                      {worker.supportedPages.join(', ') || '-'}
+                    </div>
+                    <div>
+                      <span className="font-medium text-zinc-700">En son test sonucu:</span> {worker.lastTestResult || 'Henüz test edilmedi'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </label>
+          );
+        })}
+
+        {workers.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-4 text-sm text-zinc-600">{meta.emptyHint}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LinkFieldCard({
+  title,
+  value,
+  placeholder,
+  onChange,
+}: {
+  title: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const copy = async () => {
+    if (!value) {
+      toast.error('Önce bir bağlantı girmeniz gerekiyor.');
+      return;
+    }
+    await navigator.clipboard.writeText(value);
+    toast.success('Bağlantı kopyalandı.');
+  };
+
+  const validate = () => {
+    if (!value) {
+      toast.error('Önce bir bağlantı girmeniz gerekiyor.');
+      return;
+    }
+    if (!isHttpsUrl(value)) {
+      toast.error('Bu alana geçerli https adresi girmeniz gerekiyor.');
+      return;
+    }
+    toast.success('Bağlantı biçimi geçerli görünüyor.');
+  };
+
+  return (
+    <div className="rounded-2xl border border-zinc-200 p-4">
+      <label className="block text-sm font-medium text-zinc-900">{title}</label>
+      <input
+        className={cx(
+          'mt-2 w-full rounded-xl border p-3 text-sm',
+          value && !isHttpsUrl(value) ? 'border-red-300 bg-red-50' : 'border-zinc-200'
+        )}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={copy} className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium">
+          Kopyala
+        </button>
+        <a
+          href={value && isHttpsUrl(value) ? value : '#'}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => {
+            if (!value || !isHttpsUrl(value)) {
+              e.preventDefault();
+              toast.error('Önce geçerli bir https bağlantısı girmeniz gerekiyor.');
+            }
+          }}
+          className={cx(
+            'rounded-lg px-3 py-1.5 text-xs font-medium',
+            value && isHttpsUrl(value) ? 'bg-zinc-100 text-zinc-900' : 'cursor-not-allowed bg-zinc-50 text-zinc-400'
+          )}
+        >
+          Yeni sekmede aç
+        </a>
+        <button type="button" onClick={validate} className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium">
+          Doğrula
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AddWorkerDialog({
+  open,
+  currentPageId,
+  draft,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  currentPageId: PageId | null;
+  draft: AddWorkerDraft;
+  onChange: (patch: Partial<AddWorkerDraft>) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  if (!open || !currentPageId) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xl font-semibold text-zinc-950">Yeni worker ekle</h3>
+            <p className="mt-1 text-sm text-zinc-500">
+              Her sınıf için yeni worker ekleyebilir, istersek hemen seçebiliriz.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium">
+            Kapat
+          </button>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-zinc-900">Worker sınıfı</label>
+            <input
+              value={WORKER_CLASS_META[draft.classKey].title}
+              readOnly
+              className="mt-2 w-full rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-zinc-900">Worker adı</label>
+            <input
+              value={draft.name}
+              onChange={(e) => onChange({ name: e.target.value })}
+              className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm"
+              placeholder="Örnek: image-smart-fallback"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-zinc-900">Kısa görev açıklaması</label>
+            <input
+              value={draft.description}
+              onChange={(e) => onChange({ description: e.target.value })}
+              className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm"
+              placeholder="Örnek: Image için alternatif fallback worker."
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-zinc-900">Worker URL</label>
+            <input
+              value={draft.url}
+              onChange={(e) => onChange({ url: e.target.value })}
+              className="mt-2 w-full rounded-xl border border-zinc-200 p-3 text-sm"
+              placeholder="https://..."
+            />
+            <FieldHint>Bu alana geçerli https adresi girmeniz gerekiyor.</FieldHint>
+          </div>
+
+          <div className="md:col-span-2">
+            <div className="text-sm font-medium text-zinc-900">Desteklediği sayfalar</div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {PAGE_IDS.map((pageId) => {
+                const checked = draft.supportedPages.includes(pageId);
+                return (
+                  <label key={pageId} className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = checked
+                          ? draft.supportedPages.filter((item) => item !== pageId)
+                          : [...draft.supportedPages, pageId];
+                        onChange({ supportedPages: next });
+                      }}
+                    />
+                    <span className="text-sm text-zinc-800">{pageId}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="md:col-span-2 grid gap-2">
+            <label className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3">
+              <input
+                type="checkbox"
+                checked={draft.markAsDefaultForCurrentPage}
+                onChange={(e) => onChange({ markAsDefaultForCurrentPage: e.target.checked })}
+              />
+              <span className="text-sm text-zinc-800">Bu worker’ı seçili sayfa için varsayılan olarak işaretle</span>
+            </label>
+
+            <label className="flex items-center gap-2 rounded-xl border border-zinc-200 p-3">
+              <input
+                type="checkbox"
+                checked={draft.autoSelectForCurrentPage}
+                onChange={(e) => onChange({ autoSelectForCurrentPage: e.target.checked })}
+              />
+              <span className="text-sm text-zinc-800">Bu worker’ı ekler eklemez seçili sayfada işaretle</span>
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium">
+            Vazgeç
+          </button>
+          <button type="button" onClick={onSubmit} className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white">
+            Worker’ı ekle
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResetDialog({
+  open,
+  pageId,
+  step,
+  summary,
+  loading,
+  onClose,
+  onStart,
+  onConfirm,
+}: {
+  open: boolean;
+  pageId: PageId | null;
+  step: 1 | 2 | 3;
+  summary: string[];
+  loading: boolean;
+  onClose: () => void;
+  onStart: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open || !pageId) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xl font-semibold text-zinc-950">Güvenli sıfırlama</h3>
+            <p className="mt-1 text-sm text-zinc-500">
+              Şifre tarayıcıda tutulmaz. Reset isteği backend’e gider, backend oturumu doğrular, sonra ikinci adım için onay token’ı üretir.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-3 py-2 text-sm font-medium">
+            Kapat
+          </button>
+        </div>
+
+        <div className="mt-6 grid gap-3 md:grid-cols-3">
+          {[1, 2, 3].map((item) => (
+            <div
+              key={item}
+              className={cx(
+                'rounded-2xl border p-4',
+                step === item ? 'border-black bg-zinc-950 text-white' : 'border-zinc-200 bg-white text-zinc-900'
+              )}
+            >
+              <div className="text-xs font-semibold uppercase">Aşama {item}</div>
+              <div className="mt-1 text-sm font-semibold">
+                {item === 1 ? 'Ne sıfırlanacak?' : item === 2 ? 'Bu 5 değişiklik yapılacak' : 'Evet, sıfırla'}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {step === 1 ? (
+          <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5">
+            <div className="text-sm font-semibold text-zinc-900">{pageId} için sıfırlanacak ana alanlar</div>
+            <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700">
+              <li>5 sınıftaki worker seçimleri varsayılana dönecek.</li>
+              <li>Özel model adresi varsayılan adrese dönecek.</li>
+              <li>Raw ve düzenleme bağlantıları varsayılan adrese dönecek.</li>
+              <li>Force kaydet tercihi kapanacak.</li>
+              <li>Test ve tanı görünümü yeni ayarlara göre yeniden üretilecek.</li>
+            </ul>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium">
+                Hayır
+              </button>
+              <button
+                type="button"
+                onClick={onStart}
+                disabled={loading}
+                className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white"
+              >
+                {loading ? 'Hazırlanıyor...' : 'Devam et'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {step === 2 ? (
+          <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-5">
+            <div className="text-sm font-semibold text-zinc-900">Bu 5 değişiklik yapılacak</div>
+            <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700">
+              {summary.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={onClose} className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium">
+                Hayır
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={loading}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white"
+              >
+                {loading ? 'Sıfırlanıyor...' : 'Evet, sıfırla'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {step === 3 ? (
+          <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-zinc-800">
+            Sıfırlama tamamlandı. Sayfa varsayılan ayarlarına döndü.
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export default function AdminWorkersSec() {
+  const [selectedPageId, setSelectedPageId] = useState<PageId | null>(null);
+
+  const [pages, setPages] = useState<PageConfigMap>(clone(DEFAULT_PAGE_CONFIGS));
+  const [originalPages, setOriginalPages] = useState<PageConfigMap>(clone(DEFAULT_PAGE_CONFIGS));
+
+  const [workerRegistry, setWorkerRegistry] = useState<WorkerRegistry>(clone(DEFAULT_WORKER_REGISTRY));
+  const [originalRegistry, setOriginalRegistry] = useState<WorkerRegistry>(clone(DEFAULT_WORKER_REGISTRY));
+
+  const [tests, setTests] = useState<TestMap>({});
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsMap>({});
+
+  const [loading, setLoading] = useState<{
+    load: boolean;
+    save: boolean;
+    forceSave: boolean;
+    test: boolean;
+    diagnostics: boolean;
+    resetStart: boolean;
+    resetConfirm: boolean;
+  }>({
+    load: false,
+    save: false,
+    forceSave: false,
+    test: false,
+    diagnostics: false,
+    resetStart: false,
+    resetConfirm: false,
+  });
+
+  const [errorCard, setErrorCard] = useState<{ title: string; detail: string; action: string } | null>(null);
+
+  const [addWorkerOpen, setAddWorkerOpen] = useState(false);
+  const [addWorkerDraft, setAddWorkerDraft] = useState<AddWorkerDraft>({
+    classKey: 'api',
+    name: '',
+    description: '',
+    url: '',
+    supportedPages: [],
+    markAsDefaultForCurrentPage: false,
+    autoSelectForCurrentPage: true,
+  });
+
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetStep, setResetStep] = useState<1 | 2 | 3>(1);
+  const [resetSummary, setResetSummary] = useState<string[]>([]);
+  const [approvalToken, setApprovalToken] = useState('');
+
+  const currentPage = selectedPageId ? pages[selectedPageId] : null;
+  const originalCurrentPage = selectedPageId ? originalPages[selectedPageId] : null;
+
+  const compatibility = useMemo(() => {
+    if (!selectedPageId || !currentPage) {
+      return {
+        incompatible: [],
+        missingClasses: [],
+        hasHardWarning: false,
+        hasSoftWarning: false,
+      };
+    }
+    return evaluateCompatibility(selectedPageId, currentPage, workerRegistry);
+  }, [selectedPageId, currentPage, workerRegistry]);
+
+  const defaultSelections = useMemo(() => {
+    if (!selectedPageId) {
+      return {
+        api: [],
+        model: [],
+        orchestrator: [],
+        job: [],
+        test: [],
+      } as Record<WorkerClassKey, WorkerItem[]>;
+    }
+    return getDefaultSelectionsForPage(selectedPageId, workerRegistry);
+  }, [selectedPageId, workerRegistry]);
+
+  const selectedWorkerCount = useMemo(() => {
+    if (!currentPage) return 0;
+    return WORKER_CLASS_KEYS.reduce((sum, classKey) => sum + (currentPage.workerSelections[classKey]?.length || 0), 0);
+  }, [currentPage]);
+
+  const boot = async () => {
+    try {
+      setLoading((prev) => ({ ...prev, load: true }));
+      const data = await safeJson<any>('/api/admin/workers-config');
+      const normalized = normalizePayload(data);
+
+      setPages(normalized.pages);
+      setOriginalPages(clone(normalized.pages));
+      setWorkerRegistry(normalized.registry);
+      setOriginalRegistry(clone(normalized.registry));
+    } catch (e: any) {
+      setErrorCard({
+        title: 'Ayarlar yüklenemedi.',
+        detail: e.message || 'Beklenmeyen bir hata oluştu.',
+        action: 'Bağlantıyı kontrol edip tekrar deneyin.',
+      });
+      toast.error(e.message || 'Yükleme başarısız.');
+    } finally {
+      setLoading((prev) => ({ ...prev, load: false }));
+    }
+  };
+
+  useEffect(() => {
+    boot();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPageId) return;
+
+    const loadDiagnostics = async () => {
+      try {
+        setLoading((prev) => ({ ...prev, diagnostics: true }));
+        const data = await safeJson<PageDiagnostics>(`/api/admin/workers/diagnostics?pageId=${encodeURIComponent(selectedPageId)}`);
+        setDiagnostics((prev) => ({ ...prev, [selectedPageId]: data }));
+      } catch (e: any) {
+        setDiagnostics((prev) => ({
+          ...prev,
+          [selectedPageId]: {
+            sessionStatus: 'Bilinmiyor',
+            lastTestStatus: 'Bilinmiyor',
+            reservationCount: '-',
+            adminCostCount: '-',
+            updatedAt: '',
+            updatedBy: '',
+            advanced: {},
+          },
+        }));
+      } finally {
+        setLoading((prev) => ({ ...prev, diagnostics: false }));
+      }
+    };
+
+    loadDiagnostics();
+  }, [selectedPageId]);
+
+  const patchCurrentPage = (patch: Partial<PageConfig>) => {
+    if (!selectedPageId) return;
+    setPages((prev) => ({
+      ...prev,
+      [selectedPageId]: {
+        ...prev[selectedPageId],
+        ...patch,
+      },
+    }));
+  };
+
+  const toggleWorkerSelection = (classKey: WorkerClassKey, workerId: string) => {
+    if (!selectedPageId || !currentPage) return;
+
+    const currentSelected = currentPage.workerSelections[classKey] || [];
+    const exists = currentSelected.includes(workerId);
+    const nextSelected = exists ? currentSelected.filter((id) => id !== workerId) : [...currentSelected, workerId];
+
+    patchCurrentPage({
+      workerSelections: {
+        ...currentPage.workerSelections,
+        [classKey]: nextSelected,
+      },
+    });
+  };
+
+  const resetLocalToDefaults = () => {
+    if (!selectedPageId) return;
+    setPages((prev) => ({
+      ...prev,
+      [selectedPageId]: clone(DEFAULT_PAGE_CONFIGS[selectedPageId]),
+    }));
+    toast.success(`${selectedPageId} için varsayılan ayar yüklendi.`);
+  };
+
+  const openAddWorker = (classKey: WorkerClassKey) => {
+    if (!selectedPageId) return;
+
+    setAddWorkerDraft({
+      classKey,
+      name: '',
+      description: '',
+      url: '',
+      supportedPages: [selectedPageId],
+      markAsDefaultForCurrentPage: false,
+      autoSelectForCurrentPage: true,
+    });
+    setAddWorkerOpen(true);
+  };
+
+  const submitAddWorker = () => {
+    if (!selectedPageId) return;
+
+    if (!addWorkerDraft.name.trim()) {
+      toast.error('Worker adı gerekli.');
+      return;
+    }
+
+    if (!addWorkerDraft.description.trim()) {
+      toast.error('Kısa görev açıklaması gerekli.');
+      return;
+    }
+
+    if (!isHttpsUrl(addWorkerDraft.url)) {
+      toast.error('Geçerli bir https worker adresi girmeniz gerekiyor.');
+      return;
+    }
+
+    if (addWorkerDraft.supportedPages.length === 0) {
+      toast.error('En az bir desteklenen sayfa seçmeniz gerekiyor.');
+      return;
+    }
+
+    const baseId = slugify(addWorkerDraft.name);
+    const workerId = ensureUniqueWorkerId(workerRegistry, addWorkerDraft.classKey, baseId);
+
+    const newWorker: WorkerItem = {
+      id: workerId,
+      name: addWorkerDraft.name.trim(),
+      description: addWorkerDraft.description.trim(),
+      url: addWorkerDraft.url.trim(),
+      classKey: addWorkerDraft.classKey,
+      supportedPages: addWorkerDraft.supportedPages,
+      defaultFor: addWorkerDraft.markAsDefaultForCurrentPage ? [selectedPageId] : [],
+      health: 'Bilinmiyor',
+      lastTestResult: 'Henüz test edilmedi',
+    };
+
+    setWorkerRegistry((prev) => ({
+      ...prev,
+      [addWorkerDraft.classKey]: [...prev[addWorkerDraft.classKey], newWorker],
+    }));
+
+    if (addWorkerDraft.autoSelectForCurrentPage && currentPage) {
+      const selected = currentPage.workerSelections[addWorkerDraft.classKey] || [];
+      patchCurrentPage({
+        workerSelections: {
+          ...currentPage.workerSelections,
+          [addWorkerDraft.classKey]: [...selected, workerId],
+        },
+      });
+    }
+
+    setAddWorkerOpen(false);
+    toast.success('Yeni worker eklendi.');
+  };
+
+  const validateBeforeSave = (forceOverride: boolean) => {
+    if (!selectedPageId || !currentPage) return 'Önce bir sayfa seçmeniz gerekiyor.';
+
+    if (currentPage.customModelUrl && !isHttpsUrl(currentPage.customModelUrl)) {
+      return 'Özel model adresi için geçerli https adresi girmeniz gerekiyor.';
+    }
+
+    if (currentPage.rawCodeUrl && !isHttpsUrl(currentPage.rawCodeUrl)) {
+      return 'Raw bağlantısı için geçerli https adresi girmeniz gerekiyor.';
+    }
+
+    if (currentPage.editCodeUrl && !isHttpsUrl(currentPage.editCodeUrl)) {
+      return 'Düzenleme bağlantısı için geçerli https adresi girmeniz gerekiyor.';
+    }
+
+    if (compatibility.hasHardWarning && !forceOverride && !currentPage.compatibilityForceSave) {
+      return 'Seçtiğiniz workerlardan en az biri bu sayfa için alışılmadık görünüyor. Force kaydetmeden önce uyarıyı okuyun.';
+    }
+
+    return '';
+  };
+
+  const savePage = async (forceOverride = false) => {
+    if (!selectedPageId || !currentPage || !originalCurrentPage) return;
+
+    const validationError = validateBeforeSave(forceOverride);
+    if (validationError) {
+      setErrorCard({
+        title: 'Kaydetmeden önce düzeltmeniz gereken bir durum var.',
+        detail: validationError,
+        action: 'Uyarıyı düzeltin ya da bilinçli olarak force kaydet kullanın.',
+      });
+      toast.error(validationError);
+      return;
+    }
+
+    const actionKey = forceOverride ? 'forceSave' : 'save';
+
+    try {
+      setLoading((prev) => ({ ...prev, [actionKey]: true }));
+      setErrorCard(null);
+
+      const payload = {
+        version: 'page-worker-center-v2',
+        pageId: selectedPageId,
+        forceSave: forceOverride || currentPage.compatibilityForceSave,
+        pageConfig: {
+          ...currentPage,
+          compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave,
+        },
+        workerRegistry,
+      };
+
+      await safeJson('/api/admin/workers-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const diff = computePageDiff(originalCurrentPage, {
+        ...currentPage,
+        compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave,
+      });
+
+      setPages((prev) => ({
+        ...prev,
+        [selectedPageId]: {
+          ...prev[selectedPageId],
+          compatibilityForceSave: forceOverride || prev[selectedPageId].compatibilityForceSave,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'salih celebi',
+          lastSavedDiff: diff,
+        },
+      }));
+
+      setOriginalPages((prev) => ({
+        ...prev,
+        [selectedPageId]: {
+          ...pages[selectedPageId],
+          compatibilityForceSave: forceOverride || currentPage.compatibilityForceSave,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'salih celebi',
+          lastSavedDiff: diff,
+        },
+      }));
+
+      setOriginalRegistry(clone(workerRegistry));
+      toast.success(forceOverride ? 'Force kayıt tamamlandı.' : 'Ayarlar kaydedildi.');
+    } catch (e: any) {
+      setErrorCard({
+        title: forceOverride ? 'Force kayıt başarısız oldu.' : 'Kaydetme başarısız oldu.',
+        detail: e.message || 'Beklenmeyen bir hata oluştu.',
+        action: 'Sayfa ayarlarını ve backend endpointini kontrol edip tekrar deneyin.',
+      });
+      toast.error(e.message || 'Kaydetme başarısız.');
+    } finally {
+      setLoading((prev) => ({ ...prev, [actionKey]: false }));
+    }
+  };
+
+  const runTest = async () => {
+    if (!selectedPageId || !currentPage) return;
+
+    try {
+      setLoading((prev) => ({ ...prev, test: true }));
+      setErrorCard(null);
+
+      const result = await safeJson<PageTestResult>('/api/admin/workers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageId: selectedPageId,
+          pageConfig: currentPage,
+          workerRegistry,
+        }),
+      });
+
+      setTests((prev) => ({
+        ...prev,
+        [selectedPageId]: result,
+      }));
+
+      const ok = result.healthy;
+      let nextRegistry = clone(workerRegistry);
+
+      WORKER_CLASS_KEYS.forEach((classKey) => {
+        const selectedIds = currentPage.workerSelections[classKey] || [];
+        nextRegistry = mergeLocalTestIntoRegistry(nextRegistry, classKey, selectedIds, ok);
+      });
+
+      setWorkerRegistry(nextRegistry);
+
+      toast.success(ok ? 'Test başarılı.' : 'Test tamamlandı, düzeltmeniz gereken noktalar var.');
+    } catch (e: any) {
+      const fallback: PageTestResult = {
+        pageId: selectedPageId,
+        checkedAt: new Date().toISOString(),
+        healthy: false,
+        summary: 'Test tamamlanamadı.',
+        suggestion: 'Worker URL, model URL ve backend test endpointini kontrol edin.',
+        checks: [
+          { label: 'Worker URL erişilebilir mi', ok: false, detail: 'Kontrol yapılamadı.' },
+          { label: 'Model URL erişilebilir mi', ok: false, detail: 'Kontrol yapılamadı.' },
+          { label: 'JSON dönüyor mu', ok: false, detail: 'Kontrol yapılamadı.' },
+          { label: 'HTML fallback var mı', ok: false, detail: 'Kontrol yapılamadı.' },
+        ],
+      };
+
+      setTests((prev) => ({
+        ...prev,
+        [selectedPageId]: fallback,
+      }));
+
+      setErrorCard({
+        title: 'Test sırasında sorun oluştu.',
+        detail: e.message || 'Worker testi tamamlanamadı.',
+        action: 'Worker bağlantılarını ve test endpointini kontrol edip tekrar deneyin.',
+      });
+
+      toast.error(e.message || 'Test başarısız.');
+    } finally {
+      setLoading((prev) => ({ ...prev, test: false }));
+    }
+  };
+
+  const refreshDiagnostics = async () => {
+    if (!selectedPageId) return;
+
+    try {
+      setLoading((prev) => ({ ...prev, diagnostics: true }));
+      const data = await safeJson<PageDiagnostics>(`/api/admin/workers/diagnostics?pageId=${encodeURIComponent(selectedPageId)}`);
+      setDiagnostics((prev) => ({
+        ...prev,
+        [selectedPageId]: data,
+      }));
+      toast.success('Tanı bilgileri güncellendi.');
+    } catch (e: any) {
+      setErrorCard({
+        title: 'Tanı bilgileri alınamadı.',
+        detail: e.message || 'Beklenmeyen bir hata oluştu.',
+        action: 'Diagnostics endpointini ve bağlantıları kontrol edin.',
+      });
+      toast.error(e.message || 'Tanı başarısız.');
+    } finally {
+      setLoading((prev) => ({ ...prev, diagnostics: false }));
+    }
+  };
+
+  const openReset = () => {
+    if (!selectedPageId) return;
+    setResetOpen(true);
+    setResetStep(1);
+    setResetSummary([]);
+    setApprovalToken('');
+  };
+
+  const startResetFlow = async () => {
+    if (!selectedPageId) return;
+
+    try {
+      setLoading((prev) => ({ ...prev, resetStart: true }));
+      const response = await safeJson<ResetStartResponse>('/api/admin/workers/reset/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pageId: selectedPageId }),
+      });
+
+      setApprovalToken(response.approvalToken);
+      setResetSummary(
+        response.summary || [
+          'API worker seçimleri varsayılan hale dönecek.',
+          'Model worker seçimleri varsayılan hale dönecek.',
+          'Orkestra yönlendirmesi varsayılan hale dönecek.',
+          'İş takibi ve test worker seçimleri varsayılan hale dönecek.',
+          'Özel bağlantılar ve force kaydet tercihi temizlenecek.',
+        ]
+      );
+      setResetStep(2);
+      toast.success('Sıfırlama özeti hazır.');
+    } catch (e: any) {
+      setErrorCard({
+        title: 'Sıfırlama başlatılamadı.',
+        detail: e.message || 'Onay tokenı alınamadı.',
+        action: 'Backend reset akışını kontrol edin.',
+      });
+      toast.error(e.message || 'Sıfırlama başlatılamadı.');
+    } finally {
+      setLoading((prev) => ({ ...prev, resetStart: false }));
+    }
+  };
+
+  const confirmResetFlow = async () => {
+    if (!selectedPageId || !approvalToken) return;
+
+    try {
+      setLoading((prev) => ({ ...prev, resetConfirm: true }));
+
+      await safeJson('/api/admin/workers/reset/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pageId: selectedPageId,
+          approvalToken,
+        }),
+      });
+
+      const resetConfig = clone(DEFAULT_PAGE_CONFIGS[selectedPageId]);
+      const diff = computePageDiff(pages[selectedPageId], resetConfig);
+
+      setPages((prev) => ({
+        ...prev,
+        [selectedPageId]: {
+          ...resetConfig,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'salih celebi',
+          lastSavedDiff: diff,
+        },
+      }));
+
+      setOriginalPages((prev) => ({
+        ...prev,
+        [selectedPageId]: {
+          ...resetConfig,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'salih celebi',
+          lastSavedDiff: diff,
+        },
+      }));
+
+      setTests((prev) => ({
+        ...prev,
+        [selectedPageId]: undefined,
+      }));
+
+      setResetStep(3);
+      toast.success('Sayfa varsayılan ayarlarına döndü.');
+
+      setTimeout(() => {
+        setResetOpen(false);
+        setResetStep(1);
+        setResetSummary([]);
+        setApprovalToken('');
+      }, 700);
+    } catch (e: any) {
+      setErrorCard({
+        title: 'Sıfırlama tamamlanamadı.',
+        detail: e.message || 'Beklenmeyen bir hata oluştu.',
+        action: 'Backend reset onay akışını kontrol edip tekrar deneyin.',
+      });
+      toast.error(e.message || 'Sıfırlama başarısız.');
+    } finally {
+      setLoading((prev) => ({ ...prev, resetConfirm: false }));
+    }
+  };
+
+  const currentTest = selectedPageId ? tests[selectedPageId] : undefined;
+  const currentDiagnostics = selectedPageId ? diagnostics[selectedPageId] : undefined;
+
+  return (
+    <div className="min-h-screen bg-zinc-100 text-zinc-900">
+      <header className="border-b border-zinc-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto max-w-[1600px] px-4 py-5 md:px-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Workers Yönetimi</h1>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">
+                Bu ekran, sayfa bazlı worker seçimini yönetir. Önce soldan bir sayfa seçilir, sonra yalnızca o sayfanın ayarları açılır.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:w-[440px]">
+              <StatCard label="Bu ekran ne yapar?" value="Sayfa seç → worker sınıflarını yönet" />
+              <StatCard label="Ne test edilir?" value="Bağlantı, JSON, fallback, tanı" />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto flex max-w-[1600px] gap-6 px-4 py-6 md:px-6">
+        <aside className="sticky top-6 h-[calc(100vh-8rem)] w-full max-w-[320px] self-start rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <div className="border-b border-zinc-100 pb-4">
+            <div className="text-sm font-semibold text-zinc-950">Sayfalar</div>
+            <div className="mt-1 text-sm text-zinc-500">Önce buradan bir sayfa seçin. Ayarlar başta görünmez.</div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {PAGE_IDS.map((pageId) => {
+              const page = pages[pageId];
+              const totalSelected = WORKER_CLASS_KEYS.reduce(
+                (sum, classKey) => sum + (page.workerSelections[classKey]?.length || 0),
+                0
+              );
+              const isActive = selectedPageId === pageId;
+
+              return (
+                <button
+                  key={pageId}
+                  type="button"
+                  onClick={() => {
+                    setSelectedPageId(pageId);
+                    setErrorCard(null);
+                  }}
+                  className={cx(
+                    'w-full rounded-2xl border p-4 text-left transition',
+                    isActive ? 'border-black bg-zinc-950 text-white shadow-sm' : 'border-zinc-200 bg-white hover:border-zinc-300'
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className={cx('text-sm font-semibold', isActive ? 'text-white' : 'text-zinc-950')}>{page.title}</div>
+                      <div className={cx('mt-1 text-xs', isActive ? 'text-zinc-300' : 'text-zinc-500')}>{PAGE_META[pageId].shortDescription}</div>
+                    </div>
+                    <SmallBadge tone={isActive ? 'success' : 'neutral'}>{page.featureLabel}</SmallBadge>
+                  </div>
+
+                  <div className={cx('mt-3 text-xs', isActive ? 'text-zinc-300' : 'text-zinc-500')}>
+                    5 sınıf • {totalSelected} seçim
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <main className="min-w-0 flex-1">
+          {!selectedPageId || !currentPage ? (
+            <div className="rounded-3xl border border-dashed border-zinc-300 bg-white p-10 text-center shadow-sm">
+              <div className="mx-auto max-w-2xl">
+                <h2 className="text-2xl font-semibold text-zinc-950">Önce soldan bir sayfa seçin</h2>
+                <p className="mt-3 text-sm leading-6 text-zinc-600">
+                  Bu panel form gibi değil, sayfa bazlı çalışan bir yönetim merkezi gibi davranır. Bir sayfa seçildiğinde o sayfanın
+                  API işçileri, model çeken işçileri, orkestra şefi, iş takip uzmanı ve test dedektifi görünür.
+                </p>
+
+                <div className="mt-8 grid gap-4 md:grid-cols-3">
+                  <StatCard label="Adım 1" value="Sayfa seç" hint="Sol panelden image.tsx, chat.tsx gibi bir sayfa seçilir." />
+                  <StatCard label="Adım 2" value="Worker sınıflarını işaretle" hint="Her sınıfta birden fazla worker seçilebilir." />
+                  <StatCard label="Adım 3" value="Test et ve kaydet" hint="Uyum uzmanı uyarı verirse force kayıt seçeneği bulunur." />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <SectionCard
+                title={`${currentPage.title} — ${currentPage.featureLabel}`}
+                subtitle={currentPage.description}
+                right={
+                  <div className="flex flex-wrap gap-2">
+                    <SmallBadge tone="neutral">{selectedWorkerCount} worker seçili</SmallBadge>
+                    <SmallBadge tone={compatibility.hasHardWarning ? 'warning' : 'success'}>
+                      {compatibility.hasHardWarning ? 'Uyum uyarısı var' : 'Uyum iyi görünüyor'}
+                    </SmallBadge>
+                  </div>
+                }
+              >
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <StatCard label="Seçili sayfa" value={currentPage.title} hint="Ayarlar yalnızca bu sayfa için gösteriliyor." />
+                  <StatCard
+                    label="Force kayıt"
+                    value={currentPage.compatibilityForceSave ? 'Açık' : 'Kapalı'}
+                    hint="Uyumsuz seçim varsa bilinçli kayıt için kullanılır."
+                  />
+                  <StatCard
+                    label="Son değiştiren"
+                    value={currentPage.updatedBy || '-'}
+                    hint={`Son değişiklik: ${formatDate(currentPage.updatedAt)}`}
+                  />
+                  <StatCard
+                    label="Son test"
+                    value={currentTest?.healthy ? 'Başarılı' : currentTest ? 'Başarısız' : 'Henüz çalıştırılmadı'}
+                    hint={currentTest ? formatDate(currentTest.checkedAt) : 'Önce Test Et düğmesini kullanın.'}
+                  />
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={runTest}
+                    disabled={loading.test}
+                    className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white"
+                  >
+                    {loading.test ? 'Test ediliyor...' : 'Test Et'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={refreshDiagnostics}
+                    disabled={loading.diagnostics}
+                    className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900"
+                  >
+                    {loading.diagnostics ? 'Tanı yenileniyor...' : 'Tanı'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => savePage(false)}
+                    disabled={loading.save}
+                    className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white"
+                  >
+                    {loading.save ? 'Kaydediliyor...' : 'Kaydet'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => savePage(true)}
+                    disabled={loading.forceSave}
+                    className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white"
+                  >
+                    {loading.forceSave ? 'Force kaydediliyor...' : 'Force ile Kaydet'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={resetLocalToDefaults}
+                    className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900"
+                  >
+                    Varsayılanı Yükle
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openReset}
+                    className="rounded-xl bg-red-50 px-4 py-2 text-sm font-medium text-red-700"
+                  >
+                    Güvenli Sıfırla
+                  </button>
+                </div>
+              </SectionCard>
+
+              {errorCard ? (
+                <SectionCard title={errorCard.title} subtitle={errorCard.action} className="border-red-200 bg-red-50">
+                  <div className="text-sm text-zinc-700">{errorCard.detail}</div>
+                </SectionCard>
+              ) : null}
+
+              <SectionCard
+                title="Canlı Önizleme"
+                subtitle="Bu kart, seçili sayfanın şu anda hangi worker sınıflarıyla çalışacak şekilde ayarlandığını özetler."
+              >
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  {WORKER_CLASS_KEYS.map((classKey) => (
+                    <StatCard
+                      key={classKey}
+                      label={WORKER_CLASS_META[classKey].title}
+                      value={(currentPage.workerSelections[classKey] || []).join(', ') || '-'}
+                      hint={WORKER_CLASS_META[classKey].subtitle}
+                    />
+                  ))}
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Varsayılan Ayarlar"
+                subtitle="Sistemde her zaman varsayılan seçimler vardır. İsterseniz bu kutuya bakıp önerilen yapıya dönebilirsiniz."
+              >
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  {WORKER_CLASS_KEYS.map((classKey) => (
+                    <StatCard
+                      key={classKey}
+                      label={WORKER_CLASS_META[classKey].title}
+                      value={defaultSelections[classKey].map((item) => item.name).join(', ') || '-'}
+                    />
+                  ))}
+                </div>
+              </SectionCard>
+
+              {WORKER_CLASS_KEYS.map((classKey) => (
+                <WorkerChecklistCard
+                  key={classKey}
+                  classKey={classKey}
+                  pageId={selectedPageId}
+                  registry={workerRegistry}
+                  selectedIds={currentPage.workerSelections[classKey] || []}
+                  onToggle={toggleWorkerSelection}
+                  onAddWorker={openAddWorker}
+                />
+              ))}
+
+              <SectionCard
+                title="Sayfa Uyum Uzmanı"
+                subtitle="Yanlış veya alışılmadık worker seçilirse burada uyarı görünür. İsterseniz yine de force kayıt yapabilirsiniz."
+                right={
+                  <label className="flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={currentPage.compatibilityForceSave}
+                      onChange={(e) => patchCurrentPage({ compatibilityForceSave: e.target.checked })}
+                    />
+                    Force kaydetmeye izin ver
+                  </label>
+                }
+              >
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                    <div className="text-sm font-semibold text-zinc-950">Uyumluluk özeti</div>
+                    <div className="mt-3 space-y-3 text-sm text-zinc-700">
+                      <div>
+                        <strong>Doğrudan uyarı:</strong>{' '}
+                        {compatibility.hasHardWarning ? `${compatibility.incompatible.length} worker alışılmadık görünüyor.` : 'Yok.'}
+                      </div>
+                      <div>
+                        <strong>Eksik sınıf:</strong>{' '}
+                        {compatibility.hasSoftWarning
+                          ? compatibility.missingClasses.map((item) => WORKER_CLASS_META[item].title).join(', ')
+                          : 'Yok.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                    <div className="text-sm font-semibold text-zinc-950">Ne yapmanız gerekiyor?</div>
+                    <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700">
+                      {compatibility.incompatible.length > 0 ? (
+                        compatibility.incompatible.map((item) => (
+                          <li key={`${item.classKey}-${item.workerId}`}>
+                            <strong>{item.worker?.name || item.workerId}</strong> worker’ı <strong>{selectedPageId}</strong> için doğal uyumlu değil.
+                          </li>
+                        ))
+                      ) : (
+                        <li>Şu anda kritik uyum uyarısı görünmüyor.</li>
+                      )}
+                      {compatibility.missingClasses.map((classKey) => (
+                        <li key={classKey}>{WORKER_CLASS_META[classKey].emptyHint}</li>
+                      ))}
+                    </ul>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => savePage(true)}
+                        disabled={loading.forceSave}
+                        className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-medium text-white"
+                      >
+                        {loading.forceSave ? 'Force kaydediliyor...' : 'Force ile Kaydet'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetLocalToDefaults}
+                        className="rounded-xl bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900"
+                      >
+                        Önerilen varsayılanı geri yükle
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Test Sonuç Paneli"
+                subtitle="Test yalnızca toast atmaz. Sonuç burada kalıcı görünür."
+              >
+                {!currentTest ? (
+                  <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-sm text-zinc-600">
+                    Bu sayfa için test henüz çalıştırılmadı. Test Et düğmesine basınca worker URL, model URL, JSON ve HTML fallback kontrol edilir.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SmallBadge tone={currentTest.healthy ? 'success' : 'danger'}>
+                        {currentTest.healthy ? 'Başarılı' : 'Başarısız'}
+                      </SmallBadge>
+                      <span className="text-sm text-zinc-500">Son kontrol: {formatDate(currentTest.checkedAt)}</span>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                      {currentTest.checks.map((check) => (
+                        <StatCard key={check.label} label={check.label} value={check.ok ? 'Evet' : 'Hayır'} hint={check.detail} />
+                      ))}
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                      <div className="text-sm font-semibold text-zinc-950">Türkçe açıklama</div>
+                      <div className="mt-2 text-sm text-zinc-700">{currentTest.summary}</div>
+
+                      <div className="mt-4 text-sm font-semibold text-zinc-950">Ne yapmalıyım?</div>
+                      <div className="mt-2 text-sm text-zinc-700">{currentTest.suggestion}</div>
+                    </div>
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                title="Tanı Özeti"
+                subtitle="Ham log yerine kullanıcı dostu özet gösterilir."
+              >
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                  <StatCard label="Servis oturumu" value={currentDiagnostics?.sessionStatus || 'Bilinmiyor'} />
+                  <StatCard label="Son test" value={currentDiagnostics?.lastTestStatus || 'Bilinmiyor'} />
+                  <StatCard label="Rezervasyon sayısı" value={currentDiagnostics?.reservationCount ?? '-'} />
+                  <StatCard label="Admin maliyet kaydı" value={currentDiagnostics?.adminCostCount ?? '-'} />
+                  <StatCard label="Son güncelleme" value={formatDate(currentDiagnostics?.updatedAt)} />
+                  <StatCard label="Son kaydeden kullanıcı" value={currentDiagnostics?.updatedBy || '-'} />
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Gelişmiş Bağlantılar"
+                subtitle="Worker değil ama yönetim için önemli URL alanları burada tutulur."
+              >
+                <div className="grid gap-4 xl:grid-cols-3">
+                  <LinkFieldCard
+                    title="Özel Model Adresi"
+                    value={currentPage.customModelUrl}
+                    onChange={(value) => patchCurrentPage({ customModelUrl: value })}
+                    placeholder="https://..."
+                  />
+                  <LinkFieldCard
+                    title="Raw (kodun düz metin hali)"
+                    value={currentPage.rawCodeUrl}
+                    onChange={(value) => patchCurrentPage({ rawCodeUrl: value })}
+                    placeholder="https://..."
+                  />
+                  <LinkFieldCard
+                    title="Düzenleme bağlantısı"
+                    value={currentPage.editCodeUrl}
+                    onChange={(value) => patchCurrentPage({ editCodeUrl: value })}
+                    placeholder="https://..."
+                  />
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Son kayıt özeti"
+                subtitle="En son işlemde hangi alanların değiştiğini burada görürsünüz."
+              >
+                {currentPage.lastSavedDiff && currentPage.lastSavedDiff.length > 0 ? (
+                  <div className="space-y-3">
+                    {currentPage.lastSavedDiff.map((item, index) => (
+                      <div key={`${item.field}-${index}`} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                        <div className="text-sm font-semibold text-zinc-950">{item.field}</div>
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          <div className="text-sm text-zinc-700">
+                            <span className="font-medium text-zinc-900">Önceki değer:</span> {item.oldValue || '-'}
+                          </div>
+                          <div className="text-sm text-zinc-700">
+                            <span className="font-medium text-zinc-900">Yeni değer:</span> {item.newValue || '-'}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 p-4 text-sm text-zinc-600">
+                    Henüz kayıt yapılmadı ya da değişiklik özeti yok.
+                  </div>
+                )}
+              </SectionCard>
+
+              <SectionCard
+                title="Nasıl çalışır?"
+                subtitle="Kullanım kılavuzu doğrudan sayfanın içindedir."
+              >
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
+                  {[
+                    'Özellik yerine sayfa seç',
+                    'Sınıfları incele',
+                    'İstediğin workerları işaretle',
+                    'Gerekirse yeni worker ekle',
+                    'Uyum uzmanı uyarılarını oku',
+                    'Test et',
+                    'Kaydet ya da force kaydet',
+                  ].map((item, index) => (
+                    <div key={item} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+                      <div className="text-xs font-semibold uppercase text-indigo-600">Adım {index + 1}</div>
+                      <div className="mt-1 text-sm font-semibold text-zinc-950">{item}</div>
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+            </div>
+          )}
+        </main>
+      </div>
+
+      <footer className="border-t border-zinc-200 bg-white">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-2 px-4 py-4 text-sm text-zinc-600 md:flex-row md:items-center md:justify-between md:px-6">
+          <div>
+            {selectedPageId ? (
+              <>
+                Son sayfa: <strong className="text-zinc-900">{selectedPageId}</strong>
+              </>
+            ) : (
+              'Henüz sayfa seçilmedi.'
+            )}
+          </div>
+          <div>
+            Son değiştiren: <strong className="text-zinc-900">{selectedPageId ? pages[selectedPageId].updatedBy || '-' : '-'}</strong>
+          </div>
+          <div>
+            Son test: <strong className="text-zinc-900">{selectedPageId && tests[selectedPageId] ? (tests[selectedPageId]?.healthy ? 'Başarılı' : 'Başarısız') : '-'}</strong>
+          </div>
+        </div>
+      </footer>
+
+      <AddWorkerDialog
+        open={addWorkerOpen}
+        currentPageId={selectedPageId}
+        draft={addWorkerDraft}
+        onChange={(patch) => setAddWorkerDraft((prev) => ({ ...prev, ...patch }))}
+        onClose={() => setAddWorkerOpen(false)}
+        onSubmit={submitAddWorker}
+      />
+
+      <ResetDialog
+        open={resetOpen}
+        pageId={selectedPageId}
+        step={resetStep}
+        summary={resetSummary}
+        loading={loading.resetStart || loading.resetConfirm}
+        onClose={() => setResetOpen(false)}
+        onStart={startResetFlow}
+        onConfirm={confirmResetFlow}
+      />
+    </div>
+  );
+}
