@@ -1,829 +1,790 @@
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import toast from 'react-hot-toast';
 
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--font-sans);background:var(--color-background-tertiary);color:var(--color-text-primary)}
-.page{max-width:960px;margin:0 auto;padding:2rem 1rem}
-.header-title{font-size:26px;font-weight:500;margin-bottom:4px}
-.header-sub{font-size:14px;color:var(--color-text-secondary);margin-bottom:1.5rem;line-height:1.6}
-.info-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:1.5rem}
-.info-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:14px 16px}
-.info-card-icon{font-size:16px;margin-bottom:6px}
-.info-card-title{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--color-text-tertiary);margin-bottom:4px}
-.info-card-text{font-size:13px;color:var(--color-text-secondary);line-height:1.5}
-.feature-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:1.5rem}
-.feature-tab{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:12px 10px;cursor:pointer;transition:all .15s;text-align:left}
-.feature-tab.active{border-color:#3C3489;background:#EEEDFE}
-.feature-tab-name{font-size:13px;font-weight:500;margin-bottom:2px;color:var(--color-text-primary)}
-.feature-tab.active .feature-tab-name{color:#3C3489}
-.feature-tab-desc{font-size:11px;color:var(--color-text-tertiary);margin-bottom:6px}
-.feature-tab-badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:20px;font-weight:500}
-.badge-ok{background:#EAF3DE;color:#3B6D11}
-.badge-warn{background:#FAEEDA;color:#854F0B}
-.badge-err{background:#FCEBEB;color:#A32D2D}
-.badge-unk{background:var(--color-background-secondary);color:var(--color-text-secondary)}
-.feature-tab-meta{font-size:10px;color:var(--color-text-tertiary);margin-top:5px}
-.section{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);margin-bottom:12px;overflow:hidden}
-.section-header{padding:14px 18px 10px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.section-header h2{font-size:15px;font-weight:500;margin-bottom:2px}
-.section-header p{font-size:12px;color:var(--color-text-secondary)}
-.section-body{padding:16px 18px}
-.effect-box{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:12px 14px;margin-bottom:14px}
-.effect-box-title{font-size:11px;font-weight:500;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
-.effect-item{display:flex;align-items:flex-start;gap:7px;font-size:13px;color:var(--color-text-secondary);margin-bottom:4px}
-.effect-dot{width:5px;height:5px;border-radius:50%;background:#5F5E5A;flex-shrink:0;margin-top:5px}
-.steps-grid{display:grid;gap:0}
-.step-row{display:flex;gap:14px;padding:11px 0;border-bottom:0.5px solid var(--color-border-tertiary)}
-.step-row:last-child{border-bottom:none}
-.step-num{width:24px;height:24px;border-radius:50%;background:var(--color-background-secondary);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;color:var(--color-text-secondary);flex-shrink:0;margin-top:1px}
-.step-num.active{background:#EEEDFE;color:#3C3489}
-.step-content{}
-.step-label{font-size:13px;font-weight:500;margin-bottom:2px}
-.step-desc{font-size:12px;color:var(--color-text-secondary)}
-.field-block{margin-bottom:14px}
-.field-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:5px;gap:8px}
-.field-label{font-size:13px;font-weight:500}
-.field-hint{font-size:11px;color:var(--color-text-secondary);max-width:280px;text-align:right;line-height:1.4}
-.field-input{width:100%;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:13px;background:var(--color-background-primary);color:var(--color-text-primary);transition:border-color .15s}
-.field-input:focus{outline:none;border-color:#7F77DD}
-.field-select{width:100%;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:13px;background:var(--color-background-primary);color:var(--color-text-primary)}
-.field-warn{font-size:11px;color:#854F0B;margin-top:4px;padding:5px 8px;background:#FAEEDA;border-radius:var(--border-radius-md)}
-.field-err{font-size:11px;color:#A32D2D;margin-top:4px;padding:5px 8px;background:#FCEBEB;border-radius:var(--border-radius-md)}
-.toggle-row{display:flex;gap:8px;margin-bottom:8px}
-.toggle-btn{flex:1;padding:7px 10px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:var(--color-background-secondary);font-size:12px;cursor:pointer;color:var(--color-text-secondary);transition:all .15s}
-.toggle-btn.active{background:#EEEDFE;border-color:#7F77DD;color:#3C3489}
-.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.concept-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
-.concept-card{border-radius:var(--border-radius-md);padding:12px 14px;border:0.5px solid}
-.concept-model{background:#E6F1FB;border-color:#B5D4F4}
-.concept-model .concept-title{color:#185FA5;font-size:12px;font-weight:500;margin-bottom:3px}
-.concept-model .concept-body{color:#0C447C;font-size:11px;line-height:1.5}
-.concept-worker{background:#EAF3DE;border-color:#C0DD97}
-.concept-worker .concept-title{color:#3B6D11;font-size:12px;font-weight:500;margin-bottom:3px}
-.concept-worker .concept-body{color:#27500A;font-size:11px;line-height:1.5}
-.url-row{display:flex;gap:6px;align-items:center}
-.url-row .field-input{flex:1}
-.url-action-btn{padding:6px 10px;border-radius:var(--border-radius-md);border:0.5px solid var(--color-border-secondary);background:var(--color-background-secondary);font-size:11px;cursor:pointer;color:var(--color-text-secondary);white-space:nowrap;transition:all .15s}
-.url-action-btn:hover{background:var(--color-background-primary);color:var(--color-text-primary)}
-.defaults-box{background:#E6F1FB;border:0.5px solid #B5D4F4;border-radius:var(--border-radius-lg);padding:14px 16px;margin-top:10px}
-.defaults-title{font-size:11px;font-weight:500;color:#185FA5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
-.defaults-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:0.5px solid #B5D4F4}
-.defaults-row:last-child{border-bottom:none}
-.defaults-key{font-size:12px;color:#185FA5}
-.defaults-val{font-size:11px;color:#0C447C;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-card{background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:14px 16px;margin-bottom:14px}
-.preview-title{font-size:11px;font-weight:500;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
-.preview-row{display:flex;gap:8px;align-items:baseline;margin-bottom:4px}
-.preview-key{font-size:12px;color:var(--color-text-tertiary);min-width:130px}
-.preview-val{font-size:13px;font-weight:500;color:var(--color-text-primary)}
-.preview-val.empty{color:var(--color-text-tertiary);font-weight:400;font-style:italic}
-.action-row{display:flex;gap:8px;flex-wrap:wrap;padding-top:6px}
-.btn{padding:9px 16px;border-radius:var(--border-radius-md);font-size:13px;cursor:pointer;transition:all .15s;border:0.5px solid}
-.btn-primary{background:#2C2C2A;color:#F1EFE8;border-color:#2C2C2A}
-.btn-primary:hover{background:#444441}
-.btn-primary:disabled{opacity:.5;cursor:not-allowed}
-.btn-secondary{background:var(--color-background-secondary);color:var(--color-text-primary);border-color:var(--color-border-secondary)}
-.btn-secondary:hover{background:var(--color-background-primary)}
-.btn-blue{background:#185FA5;color:#E6F1FB;border-color:#185FA5}
-.btn-blue:hover{background:#0C447C}
-.btn-danger{background:#A32D2D;color:#FCEBEB;border-color:#A32D2D}
-.btn-danger:hover{background:#791F1F}
-.diag-card{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:14px 18px}
-.diag-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:0.5px solid var(--color-border-tertiary)}
-.diag-row:last-child{border-bottom:none}
-.diag-key{font-size:13px;color:var(--color-text-secondary)}
-.diag-val{font-size:13px;font-weight:500}
-.diag-ok{color:#3B6D11}
-.diag-warn{color:#854F0B}
-.diag-err{color:#A32D2D}
-.diag-unk{color:var(--color-text-tertiary)}
-.test-panel{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:0;overflow:hidden}
-.test-panel-header{padding:12px 16px;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;justify-content:space-between;align-items:center}
-.test-row{display:flex;justify-content:space-between;align-items:center;padding:9px 16px;border-bottom:0.5px solid var(--color-border-tertiary)}
-.test-row:last-child{border-bottom:none}
-.test-check{font-size:13px;color:var(--color-text-secondary)}
-.test-status{font-size:12px;font-weight:500;padding:3px 9px;border-radius:20px}
-.test-ok{background:#EAF3DE;color:#3B6D11}
-.test-fail{background:#FCEBEB;color:#A32D2D}
-.test-pending{background:var(--color-background-secondary);color:var(--color-text-secondary)}
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100}
-.modal{background:var(--color-background-primary);border-radius:var(--border-radius-lg);padding:20px 22px;width:90%;max-width:500px;border:0.5px solid var(--color-border-secondary)}
-.modal h3{font-size:16px;font-weight:500;margin-bottom:8px}
-.modal-body{font-size:13px;color:var(--color-text-secondary);margin-bottom:12px;line-height:1.6}
-.modal-list{list-style:none;margin:10px 0;padding:0}
-.modal-list li{font-size:13px;color:var(--color-text-secondary);padding:5px 0;border-bottom:0.5px solid var(--color-border-tertiary);display:flex;gap:8px;align-items:flex-start}
-.modal-list li:last-child{border-bottom:none}
-.modal-li-dot{width:6px;height:6px;border-radius:50%;background:#D85A30;flex-shrink:0;margin-top:5px}
-.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.phase-indicator{display:flex;gap:6px;margin-bottom:14px}
-.phase-dot{width:8px;height:8px;border-radius:50%;background:var(--color-background-secondary);border:0.5px solid var(--color-border-secondary)}
-.phase-dot.active{background:#7F77DD;border-color:#7F77DD}
-.phase-dot.done{background:#639922;border-color:#639922}
-.change-summary{background:#EAF3DE;border:0.5px solid #C0DD97;border-radius:var(--border-radius-lg);padding:14px 16px;margin-top:10px;display:none}
-.change-summary-title{font-size:11px;font-weight:500;color:#3B6D11;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-.change-item{font-size:12px;color:#3B6D11;padding:3px 0}
-.help-section{background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:16px 18px;margin-top:6px}
-.help-title{font-size:13px;font-weight:500;color:var(--color-text-secondary);margin-bottom:12px}
-.help-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
-.help-step{background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;text-align:center}
-.help-step-num{font-size:18px;font-weight:500;color:#7F77DD;margin-bottom:3px}
-.help-step-text{font-size:11px;color:var(--color-text-secondary);line-height:1.4}
-.loading-spin{display:inline-block;width:12px;height:12px;border:1.5px solid var(--color-border-secondary);border-top-color:#7F77DD;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:5px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.section-divider{font-size:11px;font-weight:500;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.7px;margin:18px 0 8px;padding:0 2px}
-.empty-state{text-align:center;padding:24px;color:var(--color-text-tertiary)}
-.empty-state-icon{font-size:28px;margin-bottom:8px}
-.empty-state-title{font-size:13px;font-weight:500;margin-bottom:4px}
-.empty-state-desc{font-size:12px;margin-bottom:12px}
-.error-card{background:#FCEBEB;border:0.5px solid #F7C1C1;border-radius:var(--border-radius-lg);padding:14px 16px}
-.error-title{font-size:13px;font-weight:500;color:#A32D2D;margin-bottom:6px}
-.error-body{font-size:12px;color:#791F1F;line-height:1.5}
-</style>
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-<div class="page">
+const FEATURES = ['image', 'chat', 'video', 'tts', 'ocr'] as const;
+type Feature = typeof FEATURES[number];
 
-<div class="header-title">Workers Yönetimi</div>
-<div class="header-sub">Bu ekran, görüntü, sohbet, video, ses ve OCR özelliklerinin hangi sayfa, hangi worker ve hangi model kaynağı ile çalışacağını yönetir. Yaptığınız değişiklikler kaydedilene kadar canlıya yansımaz.</div>
+interface FeatureConfig {
+  selectedPage?: string;
+  compatiblePages?: string[];
+  primaryWorkerKey?: string;
+  fallbackWorkerKeys?: string[];
+  modelSourceKey?: string;
+  customWorkerUrl?: string;
+  customModelUrl?: string;
+  rawCodeUrl?: string;
+  editCodeUrl?: string;
+  shortDescription?: string;
+  useDefault?: boolean;
+}
 
-<div class="info-cards">
-  <div class="info-card">
-    <div class="info-card-title">Bu sayfa ne işe yarar?</div>
-    <div class="info-card-text">Her özellik için hangi servisin (worker) kullanılacağını ve modellerin nereden geleceğini belirler.</div>
-  </div>
-  <div class="info-card">
-    <div class="info-card-title">Değişiklik nereyi etkiler?</div>
-    <div class="info-card-text">Seçili özelliğin (image, chat, vb.) canlıdaki çalışma adresini ve model kaynağını değiştirir.</div>
-  </div>
-  <div class="info-card">
-    <div class="info-card-title">Test neyi kontrol eder?</div>
-    <div class="info-card-text">Girilen worker URL'ine erişilebildiğini ve model listesinin doğru döndüğünü doğrular.</div>
-  </div>
-  <div class="info-card">
-    <div class="info-card-title">Sıfırla ne yapar?</div>
-    <div class="info-card-text">Seçili özelliği güvenli onay ile fabrika varsayılanlarına döndürür; diğer özellikler etkilenmez.</div>
-  </div>
-</div>
+interface DiagnosticsData {
+  session?: { status: string };
+  reservationCount?: number;
+  adminCostCount?: number;
+  lastUpdated?: string;
+  lastUpdatedBy?: string;
+}
 
-<div class="feature-tabs" id="featureTabs"></div>
+interface TestResult {
+  workerReachable: boolean | null;
+  modelReachable: boolean | null;
+  jsonReturned: boolean | null;
+  htmlFallback: boolean | null;
+  overall: 'success' | 'fail' | 'pending';
+  message?: string;
+}
 
-<div id="effectBox" class="effect-box">
-  <div class="effect-box-title">Bu ayar neyı değiştirir?</div>
-  <div id="effectItems"></div>
-</div>
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-<div class="section">
-  <div class="section-header">
-    <h2>Adım adım ayar akışı</h2>
-    <p>Her adımı sırayla tamamlayın. Test etmeden kaydetmemenizi öneririz.</p>
-  </div>
-  <div class="section-body">
-    <div class="steps-grid" id="stepsGrid"></div>
-  </div>
-</div>
-
-<div class="section-divider">Canlı önizleme</div>
-<div class="preview-card">
-  <div class="preview-title">Şu anda sistem için etkin ayar</div>
-  <div id="previewContent"></div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 1 — Sayfayı seç</h2>
-    <p>Bu özelliğin kullandığı arayüz sayfasını belirleyin.</p>
-  </div>
-  <div class="section-body">
-    <div class="two-col">
-      <div class="field-block">
-        <div class="field-header">
-          <div class="field-label">Etkin sayfa <span style="font-size:11px;color:var(--color-text-tertiary)">(aktif dosya)</span></div>
-          <div class="field-hint">Seçili özellik için şu an kullanılan sayfa dosyası.</div>
-        </div>
-        <input class="field-input" id="selectedPage" placeholder="örn. image.tsx" />
-        <div id="pageWarn" style="display:none" class="field-warn">Bu alan boş bırakılamaz. Geçerli bir sayfa adı girin.</div>
-      </div>
-      <div class="field-block">
-        <div class="field-header">
-          <div class="field-label">Uyumlu sayfalar <span style="font-size:11px;color:var(--color-text-tertiary)">(virgülle ayır)</span></div>
-          <div class="field-hint">Bu özellikle teknik olarak uyumlu alternatif sayfalar.</div>
-        </div>
-        <input class="field-input" id="compatiblePages" placeholder="image.tsx, image-v2.tsx" />
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 2 — Worker'ı seç <span style="font-size:12px;font-weight:400;color:var(--color-text-tertiary)">(işi yapan servis)</span></h2>
-    <p>İsteklerin hangi servise gönderileceğini belirleyin.</p>
-  </div>
-  <div class="section-body">
-    <div class="two-col">
-      <div class="field-block">
-        <div class="field-header">
-          <div class="field-label">Ana worker</div>
-          <div class="field-hint">İlk tercih edilen worker anahtarı. Başarısız olursa yedek devreye girer.</div>
-        </div>
-        <select class="field-select" id="primaryWorkerKey">
-          <option value="">— Hazır seçenek —</option>
-          <option value="im">im — Görsel modelleri ve image isteklerini yönetir</option>
-          <option value="api-cagrilari">api-cagrilari — Sohbet ve metin isteklerini yönetir</option>
-          <option value="is-durumu">is-durumu — Durum ve tanılama işlemlerini yönetir</option>
-          <option value="video-core">video-core — Video işleme isteklerini yönetir</option>
-          <option value="tts-core">tts-core — Ses sentezi isteklerini yönetir</option>
-          <option value="ocr-core">ocr-core — Optik karakter tanıma isteklerini yönetir</option>
-        </select>
-      </div>
-      <div class="field-block">
-        <div class="field-header">
-          <div class="field-label">Yedek worker'lar <span style="font-size:11px;color:var(--color-text-tertiary)">(virgülle)</span></div>
-          <div class="field-hint">Ana worker başarısız olursa sırayla denenir.</div>
-        </div>
-        <input class="field-input" id="fallbackWorkerKeys" placeholder="im-yedek, im-yedek-2" />
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 3 — Model kaynağını seç</h2>
-    <p>Modellerin nereden okunacağını ve isteklerin hangi adrese gönderileceğini belirleyin.</p>
-  </div>
-  <div class="section-body">
-    <div class="concept-row">
-      <div class="concept-card concept-model">
-        <div class="concept-title">Model Kaynağı (modellerin geldiği yer)</div>
-        <div class="concept-body">Model listesinin hangi kaynaktan okunacağını belirler. Örn: "im" kaynağı im.puter.work adresinden model listesi getirir.</div>
-      </div>
-      <div class="concept-card concept-worker">
-        <div class="concept-title">Worker Servis Adresi (işin gittiği yer)</div>
-        <div class="concept-body">Kullanıcı isteğinin fiilen gönderileceği URL. Örn: https://im.puter.work adresine istek gider, orada işlenir.</div>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div class="field-block">
-        <div class="field-label" style="margin-bottom:6px">Model kaynağı <span style="font-size:11px;color:var(--color-text-tertiary)">(model listesinin geldiği yer)</span></div>
-        <div class="toggle-row">
-          <button class="toggle-btn active" id="msSwitchHazir" onclick="switchModelSource('hazir')">Hazır seçenek</button>
-          <button class="toggle-btn" id="msSwitchManuel" onclick="switchModelSource('manuel')">Kendim yazacağım</button>
-        </div>
-        <div id="msHazir">
-          <select class="field-select" id="modelSourceKey" onchange="syncModelSourceInput()">
-            <option value="">— Seçiniz —</option>
-            <option value="im">im — Image modelleri</option>
-            <option value="chat-core">chat-core — Sohbet modelleri</option>
-            <option value="video-core">video-core — Video modelleri</option>
-            <option value="tts-core">tts-core — Ses modelleri</option>
-            <option value="ocr-core">ocr-core — OCR modelleri</option>
-          </select>
-        </div>
-        <div id="msManuel" style="display:none">
-          <input class="field-input" id="modelSourceKeyManuel" placeholder="Model kaynağını yazın..." oninput="syncModelSourceSelect()" />
-        </div>
-        <div id="msWarn" style="display:none" class="field-warn">Model kaynağı boşsa model listesi alınamaz. Bir kaynak seçin.</div>
-      </div>
-
-      <div class="field-block">
-        <div class="field-label" style="margin-bottom:6px">Worker servis adresi <span style="font-size:11px;color:var(--color-text-tertiary)">(işin gittiği URL)</span></div>
-        <div class="toggle-row">
-          <button class="toggle-btn active" id="wuSwitchHazir" onclick="switchWorkerUrl('hazir')">Hazır seçenek</button>
-          <button class="toggle-btn" id="wuSwitchManuel" onclick="switchWorkerUrl('manuel')">Kendim yazacağım</button>
-        </div>
-        <div id="wuHazir">
-          <select class="field-select" id="customWorkerUrl" onchange="syncWorkerUrlInput()">
-            <option value="">— Seçiniz —</option>
-            <option value="https://im.puter.work">https://im.puter.work — Görsel worker</option>
-            <option value="https://api-cagrilari.puter.work">https://api-cagrilari.puter.work — Sohbet worker</option>
-            <option value="https://is-durumu.puter.work">https://is-durumu.puter.work — Durum worker</option>
-          </select>
-        </div>
-        <div id="wuManuel" style="display:none">
-          <input class="field-input" id="customWorkerUrlManuel" placeholder="https://..." oninput="syncWorkerUrlSelect()" />
-          <div id="urlFormatWarn" style="display:none" class="field-err">Bu alana geçerli bir https adresi girmeniz gerekiyor.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="field-block" style="margin-top:4px">
-      <div class="field-header">
-        <div class="field-label">Özel model adresi <span style="font-size:11px;color:var(--color-text-tertiary)">(isteğe bağlı)</span></div>
-        <div class="field-hint">Model listesinin çekileceği özel URL. Boş bırakılırsa worker varsayılanı kullanılır.</div>
-      </div>
-      <input class="field-input" id="customModelUrl" placeholder="https://im.puter.work/models" />
-    </div>
-
-    <div id="imageDefaults" style="display:none">
-      <div class="defaults-box">
-        <div class="defaults-title">Önerilen varsayılanlar — image özelliği</div>
-        <div class="defaults-row"><span class="defaults-key">Model kaynağı</span><span class="defaults-val">im</span></div>
-        <div class="defaults-row"><span class="defaults-key">Worker servis adresi</span><span class="defaults-val">https://im.puter.work</span></div>
-        <div class="defaults-row"><span class="defaults-key">Özel model adresi</span><span class="defaults-val">https://im.puter.work/models</span></div>
-        <div class="defaults-row"><span class="defaults-key">Raw kodu</span><span class="defaults-val">https://turk.puter.site/workers/modeller/im.js</span></div>
-        <div class="defaults-row"><span class="defaults-key">Düzenleme</span><span class="defaults-val">github.com/salihcelebi/puter/…</span></div>
-        <button class="btn btn-secondary" style="margin-top:10px;font-size:12px" onclick="applyImageDefaults()">Varsayılanları uygula</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 4 — Bağlantılar <span style="font-size:12px;font-weight:400;color:var(--color-text-tertiary)">(isteğe bağlı)</span></h2>
-    <p>Kodun ham halini ve düzenleme adresini kaydedin.</p>
-  </div>
-  <div class="section-body">
-    <div class="field-block">
-      <div class="field-label" style="margin-bottom:6px">Kodların metin hali / raw hali</div>
-      <div class="url-row">
-        <input class="field-input" id="rawCodeUrl" placeholder="https://.../im.js" oninput="validateUrl('rawCodeUrl','rawUrlWarn')" />
-        <button class="url-action-btn" onclick="copyUrl('rawCodeUrl')">Kopyala</button>
-        <button class="url-action-btn" onclick="openUrl('rawCodeUrl')">Aç</button>
-        <button class="url-action-btn" onclick="validateUrlBtn('rawCodeUrl')">Doğrula</button>
-      </div>
-      <div id="rawUrlWarn" style="display:none" class="field-err">Bu alana geçerli bir https adresi girmeniz gerekiyor.</div>
-    </div>
-    <div class="field-block">
-      <div class="field-label" style="margin-bottom:6px">Düzenleme bağlantısı</div>
-      <div class="url-row">
-        <input class="field-input" id="editCodeUrl" placeholder="https://github.com/..." oninput="validateUrl('editCodeUrl','editUrlWarn')" />
-        <button class="url-action-btn" onclick="copyUrl('editCodeUrl')">Kopyala</button>
-        <button class="url-action-btn" onclick="openUrl('editCodeUrl')">Aç</button>
-      </div>
-      <div id="editUrlWarn" style="display:none" class="field-err">Bu alana geçerli bir https adresi girmeniz gerekiyor.</div>
-    </div>
-    <div class="field-block">
-      <div class="field-label" style="margin-bottom:6px">Kısa açıklama <span style="font-size:11px;color:var(--color-text-tertiary)">(ekip içi not)</span></div>
-      <input class="field-input" id="shortDescription" placeholder="Bu ayarın amacını kısaca açıklayın..." />
-    </div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 5 — Test et</h2>
-    <p>Kaydetmeden önce worker ve model bağlantısını doğrulayın.</p>
-  </div>
-  <div class="section-body">
-    <div class="test-panel" id="testPanel">
-      <div class="test-panel-header">
-        <span style="font-size:13px;font-weight:500">Test sonuçları</span>
-        <span id="testOverall" class="test-status test-pending">Henüz test edilmedi</span>
-      </div>
-      <div class="test-row"><span class="test-check">Worker URL erişilebilir mi?</span><span class="test-status test-pending" id="tr1">Bekliyor</span></div>
-      <div class="test-row"><span class="test-check">Model URL erişilebilir mi?</span><span class="test-status test-pending" id="tr2">Bekliyor</span></div>
-      <div class="test-row"><span class="test-check">JSON yanıtı dönüyor mu?</span><span class="test-status test-pending" id="tr3">Bekliyor</span></div>
-      <div class="test-row"><span class="test-check">HTML fallback var mı?</span><span class="test-status test-pending" id="tr4">Bekliyor</span></div>
-      <div id="testMsg" style="display:none;padding:10px 16px;font-size:12px;background:var(--color-background-secondary);color:var(--color-text-secondary)"></div>
-    </div>
-    <div style="margin-top:10px">
-      <button class="btn btn-blue" id="testBtn" onclick="runTest()">Test et</button>
-      <span id="testLoading" style="display:none;font-size:12px;color:var(--color-text-secondary);margin-left:10px"><span class="loading-spin"></span>Test çalışıyor...</span>
-    </div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-header">
-    <h2>Adım 6 — Kaydet</h2>
-    <p>Değişiklikleri canlıya yansıtmak için kaydet düğmesine basın.</p>
-  </div>
-  <div class="section-body">
-    <div class="action-row">
-      <button class="btn btn-primary" id="saveBtn" onclick="save()">Kaydet</button>
-      <button class="btn btn-secondary" onclick="openResetModal()">Sıfırla</button>
-      <span id="saveLoading" style="display:none;font-size:12px;color:var(--color-text-secondary)"><span class="loading-spin"></span>Kaydediliyor...</span>
-    </div>
-    <div class="change-summary" id="changeSummary">
-      <div class="change-summary-title">Kaydedilen değişiklikler</div>
-      <div id="changeItems"></div>
-    </div>
-  </div>
-</div>
-
-<div class="section-divider">Tanılama (Diagnostics)</div>
-<div class="diag-card">
-  <div class="diag-row"><span class="diag-key">Servis oturumu <span style="color:var(--color-text-tertiary);font-size:11px">(session durumu)</span></span><span class="diag-val diag-ok" id="diagSession">—</span></div>
-  <div class="diag-row"><span class="diag-key">Son test</span><span class="diag-val" id="diagLastTest">—</span></div>
-  <div class="diag-row"><span class="diag-key">Rezervasyon sayısı</span><span class="diag-val" id="diagReservations">—</span></div>
-  <div class="diag-row"><span class="diag-key">Admin maliyet kaydı</span><span class="diag-val" id="diagCost">—</span></div>
-  <div class="diag-row"><span class="diag-key">Son güncelleme</span><span class="diag-val" id="diagUpdated">—</span></div>
-  <div class="diag-row"><span class="diag-key">Son kaydeden</span><span class="diag-val" id="diagBy">—</span></div>
-  <div style="margin-top:10px;display:flex;gap:8px">
-    <button class="btn btn-secondary" style="font-size:12px" onclick="loadDiagnostics()">Tanıyı yenile</button>
-    <button class="btn btn-secondary" style="font-size:12px" id="advToggle" onclick="toggleAdvanced()">Gelişmiş tanıyı göster</button>
-  </div>
-  <div id="advDiag" style="display:none;margin-top:12px;font-family:var(--font-mono);font-size:11px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px;max-height:160px;overflow-y:auto"></div>
-</div>
-
-<div style="margin-top:20px">
-  <div class="help-section">
-    <div class="help-title">Nasıl çalışır? — Kullanım kılavuzu</div>
-    <div class="help-steps">
-      <div class="help-step"><div class="help-step-num">1</div><div class="help-step-text">Üstten özelliği seç (image, chat...)</div></div>
-      <div class="help-step"><div class="help-step-num">2</div><div class="help-step-text">Etkin sayfayı belirle</div></div>
-      <div class="help-step"><div class="help-step-num">3</div><div class="help-step-text">Worker'ı seç veya yaz</div></div>
-      <div class="help-step"><div class="help-step-num">4</div><div class="help-step-text">Model kaynağını seç</div></div>
-      <div class="help-step"><div class="help-step-num">5</div><div class="help-step-text">Test et</div></div>
-      <div class="help-step"><div class="help-step-num">6</div><div class="help-step-text">Kaydet</div></div>
-      <div class="help-step"><div class="help-step-num">7</div><div class="help-step-text">Gerekirse sıfırla</div></div>
-    </div>
-  </div>
-</div>
-
-</div>
-
-<div id="resetOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:100">
-  <div class="modal">
-    <h3 id="resetTitle">Güvenli sıfırlama</h3>
-    <div id="resetPhase1">
-      <div class="phase-indicator">
-        <div class="phase-dot active" id="ph1"></div>
-        <div class="phase-dot" id="ph2"></div>
-        <div class="phase-dot" id="ph3"></div>
-      </div>
-      <div class="modal-body">Aşama 1/3 — Sıfırlama onayı backend üzerinden doğrulanacak. Ne sıfırlanacağını onaylamak için devam edin.</div>
-      <div style="padding:10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:12px;color:var(--color-text-secondary)">
-        Sıfırlama isteği güvenli şekilde sunucuya gönderilir. Şifre tarayıcıda saklanmaz.
-      </div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeResetModal()">Vazgeç</button>
-        <button class="btn btn-primary" onclick="resetPhase2()">Devam et</button>
-      </div>
-    </div>
-    <div id="resetPhase2" style="display:none">
-      <div class="phase-indicator">
-        <div class="phase-dot done" id="ph1b"></div>
-        <div class="phase-dot active" id="ph2b"></div>
-        <div class="phase-dot" id="ph3b"></div>
-      </div>
-      <div class="modal-body">Aşama 2/3 — Aşağıdaki 5 değişiklik uygulanacak:</div>
-      <ul class="modal-list" id="impactList"></ul>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeResetModal()">Hayır</button>
-        <button class="btn btn-primary" onclick="resetPhase3()">Anladım, devam</button>
-      </div>
-    </div>
-    <div id="resetPhase3" style="display:none">
-      <div class="phase-indicator">
-        <div class="phase-dot done"></div>
-        <div class="phase-dot done"></div>
-        <div class="phase-dot active"></div>
-      </div>
-      <div class="modal-body" style="color:#A32D2D;background:#FCEBEB;border-radius:var(--border-radius-md);padding:10px;margin-bottom:12px">Aşama 3/3 — Bu işlem geri alınamaz. Emin misiniz?</div>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeResetModal()">Hayır, iptal</button>
-        <button class="btn btn-danger" onclick="doReset()">Evet, sıfırla</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-const FEATURES=['image','chat','video','tts','ocr'];
-const FEATURE_NAMES={image:'Görsel Üretim',chat:'Sohbet',video:'Video',tts:'Ses (TTS)',ocr:'Metin Tanıma (OCR)'};
-const FEATURE_DESCS={image:'Resim üretmek için kullanılır.',chat:'Yapay zeka sohbeti için kullanılır.',video:'Video oluşturma ve işleme için kullanılır.',tts:'Metni sese dönüştürmek için kullanılır.',ocr:'Görseldeki metni okumak için kullanılır.'};
-const FEATURE_EFFECTS={
-  image:['Görsel üretim sayfasının hangi worker\'a bağlandığını değiştirir.','Model listesinin hangi kaynaktan okunacağını belirler.','Test ve tanı sonuçlarını etkiler.','Kaydetmeden canlıya yansımaz.'],
-  chat:['Sohbet özelliğinin hangi worker\'a bağlandığını değiştirir.','Model listesinin hangi kaynaktan okunacağını belirler.','Sohbet sayfalarındaki model seçeneklerini etkiler.','Kaydetmeden canlıya yansımaz.'],
-  video:['Video işleme servisinin adresini değiştirir.','Video model kaynağını belirler.','Test ve tanı sonuçlarını etkiler.','Kaydetmeden canlıya yansımaz.'],
-  tts:['Ses sentezi servisinin adresini değiştirir.','Ses model listesinin kaynağını belirler.','Test ve tanı sonuçlarını etkiler.','Kaydetmeden canlıya yansımaz.'],
-  ocr:['OCR servisinin adresini değiştirir.','Metin tanıma model kaynağını belirler.','Test ve tanı sonuçlarını etkiler.','Kaydetmeden canlıya yansımaz.']
+const FEATURE_NAMES: Record<Feature, string> = {
+  image: 'Görsel Üretim', chat: 'Sohbet', video: 'Video', tts: 'Ses (TTS)', ocr: 'Metin Tanıma (OCR)',
 };
-const IMAGE_DEFAULTS={modelSourceKey:'im',customWorkerUrl:'https://im.puter.work',customModelUrl:'https://im.puter.work/models',rawCodeUrl:'https://turk.puter.site/workers/modeller/im.js',editCodeUrl:'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js'};
-const FEATURE_DEFAULTS={
-  image:{selectedPage:'image.tsx',primaryWorkerKey:'im',modelSourceKey:'im',customWorkerUrl:'https://im.puter.work',...IMAGE_DEFAULTS},
-  chat:{selectedPage:'chat.tsx',primaryWorkerKey:'api-cagrilari',modelSourceKey:'chat-core',customWorkerUrl:'https://api-cagrilari.puter.work'},
-  video:{selectedPage:'video.tsx',primaryWorkerKey:'video-core',modelSourceKey:'video-core',customWorkerUrl:''},
-  tts:{selectedPage:'tts.tsx',primaryWorkerKey:'tts-core',modelSourceKey:'tts-core',customWorkerUrl:''},
-  ocr:{selectedPage:'ocr.tsx',primaryWorkerKey:'ocr-core',modelSourceKey:'ocr-core',customWorkerUrl:''}
+const FEATURE_DESCS: Record<Feature, string> = {
+  image: 'Resim üretmek için kullanılır.',
+  chat: 'Yapay zeka sohbeti için kullanılır.',
+  video: 'Video oluşturma ve işleme için kullanılır.',
+  tts: 'Metni sese dönüştürmek için kullanılır.',
+  ocr: 'Görseldeki metni okumak için kullanılır.',
+};
+const FEATURE_EFFECTS: Record<Feature, string[]> = {
+  image: ['Görsel üretim sayfasının hangi worker\'a bağlandığını değiştirir.', 'Model listesinin hangi kaynaktan okunacağını belirler.', 'Test ve tanı sonuçlarını etkiler.', 'Kaydetmeden canlıya yansımaz.'],
+  chat: ['Sohbet özelliğinin hangi worker\'a bağlandığını değiştirir.', 'Model listesinin hangi kaynaktan okunacağını belirler.', 'Sohbet sayfalarındaki model seçeneklerini etkiler.', 'Kaydetmeden canlıya yansımaz.'],
+  video: ['Video işleme servisinin adresini değiştirir.', 'Video model kaynağını belirler.', 'Test ve tanı sonuçlarını etkiler.', 'Kaydetmeden canlıya yansımaz.'],
+  tts: ['Ses sentezi servisinin adresini değiştirir.', 'Ses model listesinin kaynağını belirler.', 'Test ve tanı sonuçlarını etkiler.', 'Kaydetmeden canlıya yansımaz.'],
+  ocr: ['OCR servisinin adresini değiştirir.', 'Metin tanıma model kaynağını belirler.', 'Test ve tanı sonuçlarını etkiler.', 'Kaydetmeden canlıya yansımaz.'],
 };
 
-let config={};
-let selectedFeature='image';
-let diagnosticsData=null;
-let savedSnapshot={};
+const IMAGE_DEFAULTS: Partial<FeatureConfig> = {
+  modelSourceKey: 'im',
+  customWorkerUrl: 'https://im.puter.work',
+  customModelUrl: 'https://im.puter.work/models',
+  rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js',
+  editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js',
+};
 
-function getFields(){
-  const f=selectedFeature;
-  return {
-    selectedPage:document.getElementById('selectedPage').value.trim(),
-    compatiblePages:document.getElementById('compatiblePages').value.split(',').map(x=>x.trim()).filter(Boolean),
-    primaryWorkerKey:document.getElementById('primaryWorkerKey').value,
-    fallbackWorkerKeys:document.getElementById('fallbackWorkerKeys').value.split(',').map(x=>x.trim()).filter(Boolean),
-    modelSourceKey:document.getElementById('modelSourceKey').value||document.getElementById('modelSourceKeyManuel').value,
-    customWorkerUrl:document.getElementById('customWorkerUrl').value||document.getElementById('customWorkerUrlManuel').value,
-    customModelUrl:document.getElementById('customModelUrl').value.trim(),
-    rawCodeUrl:document.getElementById('rawCodeUrl').value.trim(),
-    editCodeUrl:document.getElementById('editCodeUrl').value.trim(),
-    shortDescription:document.getElementById('shortDescription').value.trim()
+const FEATURE_DEFAULTS: Record<Feature, FeatureConfig> = {
+  image: { selectedPage: 'image.tsx', primaryWorkerKey: 'im', modelSourceKey: 'im', customWorkerUrl: 'https://im.puter.work', customModelUrl: 'https://im.puter.work/models', rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js', editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js' },
+  chat: { selectedPage: 'chat.tsx', primaryWorkerKey: 'api-cagrilari', modelSourceKey: 'chat-core', customWorkerUrl: 'https://api-cagrilari.puter.work' },
+  video: { selectedPage: 'video.tsx', primaryWorkerKey: 'video-core', modelSourceKey: 'video-core', customWorkerUrl: '' },
+  tts: { selectedPage: 'tts.tsx', primaryWorkerKey: 'tts-core', modelSourceKey: 'tts-core', customWorkerUrl: '' },
+  ocr: { selectedPage: 'ocr.tsx', primaryWorkerKey: 'ocr-core', modelSourceKey: 'ocr-core', customWorkerUrl: '' },
+};
+
+const MODEL_SOURCE_OPTIONS = [
+  { value: 'im', label: 'im — Image modelleri' },
+  { value: 'chat-core', label: 'chat-core — Sohbet modelleri' },
+  { value: 'video-core', label: 'video-core — Video modelleri' },
+  { value: 'tts-core', label: 'tts-core — Ses modelleri' },
+  { value: 'ocr-core', label: 'ocr-core — OCR modelleri' },
+];
+const WORKER_KEY_OPTIONS = [
+  { value: 'im', label: 'im — Görsel modelleri ve image isteklerini yönetir' },
+  { value: 'api-cagrilari', label: 'api-cagrilari — Sohbet ve metin isteklerini yönetir' },
+  { value: 'is-durumu', label: 'is-durumu — Durum ve tanılama işlemlerini yönetir' },
+  { value: 'video-core', label: 'video-core — Video işleme isteklerini yönetir' },
+  { value: 'tts-core', label: 'tts-core — Ses sentezi isteklerini yönetir' },
+  { value: 'ocr-core', label: 'ocr-core — Optik karakter tanıma isteklerini yönetir' },
+];
+const WORKER_URL_OPTIONS = [
+  { value: 'https://im.puter.work', label: 'https://im.puter.work — Görsel worker' },
+  { value: 'https://api-cagrilari.puter.work', label: 'https://api-cagrilari.puter.work — Sohbet worker' },
+  { value: 'https://is-durumu.puter.work', label: 'https://is-durumu.puter.work — Durum worker' },
+];
+
+const FEATURE_STATUS: Record<Feature, 'ok' | 'warn' | 'err' | 'unk'> = {
+  image: 'ok', chat: 'ok', video: 'warn', tts: 'unk', ocr: 'unk',
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function safeJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+  if (/<!doctype|<html/i.test(text)) throw new Error('Beklenmeyen HTML yanıtı alındı.');
+  if (!contentType.includes('application/json')) throw new Error('JSON içerik tipi bekleniyordu.');
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('Geçersiz JSON yanıtı.'); }
+  if (!res.ok) throw new Error(data?.error || 'İstek başarısız');
+  return data as T;
+}
+
+function isValidHttpsUrl(v: string) {
+  return v.startsWith('https://') && v.length > 10;
+}
+
+function copyToClipboard(text: string) {
+  if (!text) { toast.error('Kopyalanacak içerik yok.'); return; }
+  navigator.clipboard.writeText(text).then(() => toast.success('Kopyalandı!')).catch(() => toast.error('Kopyalama başarısız.'));
+}
+
+function openLink(url: string) {
+  if (!url) { toast.error('Açılacak URL yok.'); return; }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const StatusBadge: React.FC<{ status: 'ok' | 'warn' | 'err' | 'unk' }> = ({ status }) => {
+  const map = {
+    ok: { bg: '#dcfce7', color: '#15803d', border: '#86efac', text: 'Hazır' },
+    warn: { bg: '#fef9c3', color: '#a16207', border: '#fde047', text: 'Dikkat' },
+    err: { bg: '#fee2e2', color: '#b91c1c', border: '#fca5a5', text: 'Hata' },
+    unk: { bg: '#f1f5f9', color: '#64748b', border: '#cbd5e1', text: 'Bilinmiyor' },
   };
+  const s = map[status];
+  return (
+    <span style={{ background: s.bg, color: s.color, border: `1px solid ${s.border}`, borderRadius: 20, fontSize: 11, padding: '2px 9px', fontWeight: 600, letterSpacing: 0.3 }}>
+      {s.text}
+    </span>
+  );
+};
+
+const TestStatusPill: React.FC<{ val: boolean | null; labels?: [string, string, string] }> = ({ val, labels = ['Başarılı', 'Başarısız', 'Bekliyor'] }) => {
+  if (val === null) return <span style={{ background: '#f1f5f9', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 11, padding: '2px 9px', fontWeight: 500 }}>{labels[2]}</span>;
+  return val
+    ? <span style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', borderRadius: 20, fontSize: 11, padding: '2px 9px', fontWeight: 600 }}>{labels[0]}</span>
+    : <span style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5', borderRadius: 20, fontSize: 11, padding: '2px 9px', fontWeight: 600 }}>{labels[1]}</span>;
+};
+
+const SectionCard: React.FC<{ title: string; subtitle?: string; accent?: string; children: React.ReactNode }> = ({ title, subtitle, accent = '#6366f1', children }) => (
+  <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, overflow: 'hidden', marginBottom: 14 }}>
+    <div style={{ padding: '14px 20px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ width: 4, height: 20, background: accent, borderRadius: 4, flexShrink: 0 }} />
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b' }}>{title}</div>
+        {subtitle && <div style={{ fontSize: 12, color: '#64748b', marginTop: 1 }}>{subtitle}</div>}
+      </div>
+    </div>
+    <div style={{ padding: '16px 20px' }}>{children}</div>
+  </div>
+);
+
+const FieldBlock: React.FC<{ label: string; hint?: string; warn?: string; children: React.ReactNode }> = ({ label, hint, warn, children }) => (
+  <div style={{ marginBottom: 14 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 5, gap: 8 }}>
+      <label style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>{label}</label>
+      {hint && <span style={{ fontSize: 11, color: '#94a3b8', maxWidth: 240, textAlign: 'right', lineHeight: 1.4 }}>{hint}</span>}
+    </div>
+    {children}
+    {warn && <div style={{ fontSize: 11, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '5px 9px', marginTop: 5 }}>{warn}</div>}
+  </div>
+);
+
+const inputStyle: React.CSSProperties = {
+  width: '100%', border: '1px solid #cbd5e1', borderRadius: 8, padding: '8px 10px',
+  fontSize: 13, background: '#fff', color: '#1e293b', outline: 'none', boxSizing: 'border-box',
+};
+
+const selectStyle: React.CSSProperties = { ...inputStyle, cursor: 'pointer' };
+
+const UrlFieldWithActions: React.FC<{ id: string; value: string; onChange: (v: string) => void; placeholder?: string }> = ({ id, value, onChange, placeholder }) => {
+  const invalid = value && !isValidHttpsUrl(value);
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input id={id} style={{ ...inputStyle, flex: 1, borderColor: invalid ? '#fca5a5' : '#cbd5e1' }} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+        <button onClick={() => copyToClipboard(value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc', fontSize: 11, cursor: 'pointer', color: '#475569', whiteSpace: 'nowrap' }}>Kopyala</button>
+        <button onClick={() => openLink(value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #6366f1', background: '#eef2ff', fontSize: 11, cursor: 'pointer', color: '#4338ca', whiteSpace: 'nowrap' }}>Aç ↗</button>
+      </div>
+      {invalid && <div style={{ fontSize: 11, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '5px 9px', marginTop: 4 }}>Bu alana geçerli bir https:// adresi girmeniz gerekiyor.</div>}
+    </div>
+  );
+};
+
+const ToggleSwitch: React.FC<{ mode: 'hazir' | 'manuel'; onSwitch: (m: 'hazir' | 'manuel') => void }> = ({ mode, onSwitch }) => (
+  <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+    {(['hazir', 'manuel'] as const).map(m => (
+      <button key={m} onClick={() => onSwitch(m)} style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: `1px solid ${mode === m ? '#6366f1' : '#cbd5e1'}`, background: mode === m ? '#eef2ff' : '#f8fafc', fontSize: 12, cursor: 'pointer', color: mode === m ? '#4338ca' : '#64748b', fontWeight: mode === m ? 600 : 400 }}>
+        {m === 'hazir' ? 'Hazır seçenek' : 'Kendim yazacağım'}
+      </button>
+    ))}
+  </div>
+);
+
+// ─── Reset Modal ───────────────────────────────────────────────────────────────
+
+interface ResetModalProps {
+  feature: Feature;
+  current: FeatureConfig;
+  onClose: () => void;
+  onConfirm: () => void;
 }
 
-function setFields(data){
-  document.getElementById('selectedPage').value=data.selectedPage||'';
-  document.getElementById('compatiblePages').value=(data.compatiblePages||[]).join(', ');
-  document.getElementById('primaryWorkerKey').value=data.primaryWorkerKey||'';
-  document.getElementById('fallbackWorkerKeys').value=(data.fallbackWorkerKeys||[]).join(', ');
-  const ms=data.modelSourceKey||'';
-  const knownMs=['im','chat-core','video-core','tts-core','ocr-core'];
-  if(knownMs.includes(ms)){
-    document.getElementById('modelSourceKey').value=ms;
-    document.getElementById('modelSourceKeyManuel').value=ms;
-    switchModelSource('hazir');
-  }else if(ms){
-    document.getElementById('modelSourceKeyManuel').value=ms;
-    switchModelSource('manuel');
-  }else{
-    document.getElementById('modelSourceKey').value='';
-    document.getElementById('modelSourceKeyManuel').value='';
-  }
-  const wu=data.customWorkerUrl||'';
-  const knownWu=['https://im.puter.work','https://api-cagrilari.puter.work','https://is-durumu.puter.work'];
-  if(knownWu.includes(wu)){
-    document.getElementById('customWorkerUrl').value=wu;
-    switchWorkerUrl('hazir');
-  }else if(wu){
-    document.getElementById('customWorkerUrlManuel').value=wu;
-    switchWorkerUrl('manuel');
-  }else{
-    document.getElementById('customWorkerUrl').value='';
-  }
-  document.getElementById('customModelUrl').value=data.customModelUrl||'';
-  document.getElementById('rawCodeUrl').value=data.rawCodeUrl||'';
-  document.getElementById('editCodeUrl').value=data.editCodeUrl||'';
-  document.getElementById('shortDescription').value=data.shortDescription||'';
-  updatePreview();
-}
+const ResetModal: React.FC<ResetModalProps> = ({ feature, current, onClose, onConfirm }) => {
+  const [phase, setPhase] = useState<1 | 2 | 3>(1);
+  const def = FEATURE_DEFAULTS[feature];
 
-function updatePreview(){
-  const d=getFields();
-  const f=selectedFeature;
-  const el=document.getElementById('previewContent');
-  const rows=[
-    ['Özellik',FEATURE_NAMES[f]||f],
-    ['Sayfa',d.selectedPage],
-    ['Worker (ana)',d.primaryWorkerKey],
-    ['Worker servis adresi',d.customWorkerUrl],
-    ['Model kaynağı',d.modelSourceKey],
-    ['Özel model adresi',d.customModelUrl]
+  const impacts = [
+    `Özel worker adresi ${current.customWorkerUrl ? `"${current.customWorkerUrl}" silinecek` : 'zaten boş'}.`,
+    `Özel model adresi ${current.customModelUrl ? `"${current.customModelUrl}" silinecek` : 'zaten boş'}.`,
+    `Model kaynağı "${current.modelSourceKey || '—'}" → "${def.modelSourceKey || '—'}" olacak.`,
+    'Raw/Edit bağlantıları varsayılan değerlere dönecek.',
+    'Test/tanı görünümü yeni varsayılanlara göre güncellenecek.',
   ];
-  el.innerHTML=rows.map(([k,v])=>`<div class="preview-row"><span class="preview-key">${k}</span><span class="preview-val${v?'':' empty'}">${v||'(boş)'}</span></div>`).join('');
-}
 
-function renderFeatureTabs(){
-  const el=document.getElementById('featureTabs');
-  const statuses={image:'ok',chat:'ok',video:'warn',tts:'unk',ocr:'unk'};
-  el.innerHTML=FEATURES.map(f=>{
-    const st=statuses[f]||'unk';
-    const badgeClass=st==='ok'?'badge-ok':st==='warn'?'badge-warn':st==='err'?'badge-err':'badge-unk';
-    const badgeText=st==='ok'?'Hazır':st==='warn'?'Dikkat':st==='err'?'Hata':'Bilinmiyor';
-    const cf=config[f]||{};
-    const wk=cf.primaryWorkerKey||'—';
-    const ms=cf.modelSourceKey||'—';
-    return `<div class="feature-tab${f===selectedFeature?' active':''}" onclick="selectFeature('${f}')">
-      <div class="feature-tab-name">${FEATURE_NAMES[f]}</div>
-      <div class="feature-tab-desc">${FEATURE_DESCS[f]}</div>
-      <span class="feature-tab-badge ${badgeClass}">${badgeText}</span>
-      <div class="feature-tab-meta">worker: ${wk} · model: ${ms}</div>
-    </div>`;
-  }).join('');
-}
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+      <div style={{ background: '#fff', borderRadius: 16, padding: '24px 26px', width: '90%', maxWidth: 500, border: '1px solid #e2e8f0', boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {([1, 2, 3] as const).map(n => (
+            <div key={n} style={{ flex: 1, height: 4, borderRadius: 4, background: phase >= n ? (phase === n ? '#6366f1' : '#22c55e') : '#e2e8f0' }} />
+          ))}
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', marginBottom: 6 }}>Güvenli Sıfırlama</div>
+        {phase === 1 && (
+          <>
+            <div style={{ fontSize: 13, color: '#475569', marginBottom: 14, lineHeight: 1.6 }}>Aşama 1/3 — Sıfırlama isteği güvenli şekilde sunucuya gönderilir. Şifre tarayıcıda saklanmaz.</div>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', fontSize: 12, color: '#64748b', marginBottom: 16 }}>
+              <strong style={{ color: '#374151' }}>{FEATURE_NAMES[feature]}</strong> özelliği sıfırlanacak. Diğer özellikler etkilenmez.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc', fontSize: 13, cursor: 'pointer', color: '#475569' }}>Vazgeç</button>
+              <button onClick={() => setPhase(2)} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#6366f1', fontSize: 13, cursor: 'pointer', color: '#fff', fontWeight: 600 }}>Devam et →</button>
+            </div>
+          </>
+        )}
+        {phase === 2 && (
+          <>
+            <div style={{ fontSize: 13, color: '#475569', marginBottom: 10 }}>Aşama 2/3 — Aşağıdaki <strong>5 değişiklik</strong> uygulanacak:</div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 16px' }}>
+              {impacts.map((item, i) => (
+                <li key={i} style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: i < impacts.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: 13, color: '#374151', alignItems: 'flex-start' }}>
+                  <span style={{ width: 18, height: 18, borderRadius: '50%', background: '#fef3c7', color: '#d97706', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>{i + 1}</span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc', fontSize: 13, cursor: 'pointer', color: '#475569' }}>Hayır, iptal</button>
+              <button onClick={() => setPhase(3)} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#f59e0b', fontSize: 13, cursor: 'pointer', color: '#fff', fontWeight: 600 }}>Anladım, devam →</button>
+            </div>
+          </>
+        )}
+        {phase === 3 && (
+          <>
+            <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 10, padding: '12px 14px', fontSize: 13, color: '#b91c1c', marginBottom: 16, fontWeight: 500 }}>
+              Aşama 3/3 — Bu işlem geri alınamaz. Emin misiniz?
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f8fafc', fontSize: 13, cursor: 'pointer', color: '#475569' }}>Hayır, geri dön</button>
+              <button onClick={onConfirm} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#dc2626', fontSize: 13, cursor: 'pointer', color: '#fff', fontWeight: 700 }}>Evet, sıfırla</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
-function renderEffectBox(){
-  const effects=FEATURE_EFFECTS[selectedFeature]||[];
-  document.getElementById('effectItems').innerHTML=effects.map(e=>`<div class="effect-item"><div class="effect-dot"></div><span>${e}</span></div>`).join('');
-}
+// ─── Main Component ───────────────────────────────────────────────────────────
 
-function renderSteps(){
-  const steps=[
-    {label:'Sayfayı seç',desc:'Özelliğin hangi dosyayı kullandığını belirleyin.'},
-    {label:'Worker\'ı seç',desc:'İsteklerin gideceği servis anahtarını seçin.'},
-    {label:'Model kaynağını seç',desc:'Modellerin nereden okunacağını belirleyin.'},
-    {label:'Bağlantıları gir',desc:'Raw ve düzenleme linklerini ekleyin (isteğe bağlı).'},
-    {label:'Test et',desc:'Kaydetmeden önce bağlantıları doğrulayın.'},
-    {label:'Kaydet',desc:'Değişiklikleri canlıya yansıtın.'}
-  ];
-  document.getElementById('stepsGrid').innerHTML=steps.map((s,i)=>`<div class="step-row"><div class="step-num">${i+1}</div><div class="step-content"><div class="step-label">${s.label}</div><div class="step-desc">${s.desc}</div></div></div>`).join('');
-}
+export default function AdminWorkersSec() {
+  const [config, setConfig] = useState<Record<Feature, FeatureConfig>>(() =>
+    FEATURES.reduce((acc, f) => ({ ...acc, [f]: { ...FEATURE_DEFAULTS[f] } }), {} as Record<Feature, FeatureConfig>)
+  );
+  const [selectedFeature, setSelectedFeature] = useState<Feature>('image');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsData | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [showAdvDiag, setShowAdvDiag] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [testResult, setTestResult] = useState<TestResult>({ workerReachable: null, modelReachable: null, jsonReturned: null, htmlFallback: null, overall: 'pending' });
+  const [msMode, setMsMode] = useState<'hazir' | 'manuel'>('hazir');
+  const [wuMode, setWuMode] = useState<'hazir' | 'manuel'>('hazir');
+  const [savedChanges, setSavedChanges] = useState<string[]>([]);
+  const [showSavedChanges, setShowSavedChanges] = useState(false);
 
-function selectFeature(f){
-  config[selectedFeature]=getFields();
-  selectedFeature=f;
-  const existing=config[f];
-  if(!existing||(!existing.selectedPage&&!existing.primaryWorkerKey)){
-    config[f]=Object.assign({},FEATURE_DEFAULTS[f]||{});
-  }
-  setFields(config[f]||{});
-  renderFeatureTabs();
-  renderEffectBox();
-  document.getElementById('imageDefaults').style.display=f==='image'?'block':'none';
-  resetTestPanel();
-  document.getElementById('changeSummary').style.display='none';
-}
+  const current = config[selectedFeature] || {};
 
-function switchModelSource(mode){
-  document.getElementById('msHazir').style.display=mode==='hazir'?'block':'none';
-  document.getElementById('msManuel').style.display=mode==='manuel'?'block':'none';
-  document.getElementById('msSwitchHazir').className='toggle-btn'+(mode==='hazir'?' active':'');
-  document.getElementById('msSwitchManuel').className='toggle-btn'+(mode==='manuel'?' active':'');
-  updatePreview();
-}
+  const patch = useCallback((updates: Partial<FeatureConfig>) => {
+    setConfig(prev => ({ ...prev, [selectedFeature]: { ...prev[selectedFeature], ...updates } }));
+  }, [selectedFeature]);
 
-function switchWorkerUrl(mode){
-  document.getElementById('wuHazir').style.display=mode==='hazir'?'block':'none';
-  document.getElementById('wuManuel').style.display=mode==='manuel'?'block':'none';
-  document.getElementById('wuSwitchHazir').className='toggle-btn'+(mode==='hazir'?' active':'');
-  document.getElementById('wuSwitchManuel').className='toggle-btn'+(mode==='manuel'?' active':'');
-  updatePreview();
-}
-
-function syncModelSourceInput(){updatePreview();}
-function syncModelSourceSelect(){
-  document.getElementById('modelSourceKey').value='';
-  updatePreview();
-}
-function syncWorkerUrlInput(){updatePreview();}
-function syncWorkerUrlSelect(){
-  document.getElementById('customWorkerUrl').value='';
-  validateUrl('customWorkerUrlManuel','urlFormatWarn');
-  updatePreview();
-}
-
-function validateUrl(inputId,warnId){
-  const v=document.getElementById(inputId).value.trim();
-  const w=document.getElementById(warnId);
-  if(!w)return;
-  if(v&&!v.startsWith('https://')){w.style.display='block';}else{w.style.display='none';}
-  updatePreview();
-}
-function validateUrlBtn(inputId){
-  const v=document.getElementById(inputId).value.trim();
-  if(!v){alert('URL boş. Önce bir adres girin.');return;}
-  if(!v.startsWith('https://')){alert('Geçersiz URL: https:// ile başlamalı.');return;}
-  alert('URL formatı geçerli görünüyor. Gerçek erişim için Test et düğmesini kullanın.');
-}
-function copyUrl(inputId){
-  const v=document.getElementById(inputId).value.trim();
-  if(!v){alert('Kopyalanacak URL yok.');return;}
-  navigator.clipboard.writeText(v).then(()=>alert('Kopyalandı!')).catch(()=>alert('Kopyalama başarısız.'));
-}
-function openUrl(inputId){
-  const v=document.getElementById(inputId).value.trim();
-  if(!v){alert('Açılacak URL yok.');return;}
-  window.open(v,'_blank');
-}
-
-function applyImageDefaults(){
-  Object.assign(config[selectedFeature],IMAGE_DEFAULTS);
-  setFields(config[selectedFeature]);
-}
-
-function resetTestPanel(){
-  ['tr1','tr2','tr3','tr4'].forEach(id=>{const el=document.getElementById(id);el.className='test-status test-pending';el.textContent='Bekliyor';});
-  const ov=document.getElementById('testOverall');ov.className='test-status test-pending';ov.textContent='Henüz test edilmedi';
-  document.getElementById('testMsg').style.display='none';
-}
-
-function runTest(){
-  const btn=document.getElementById('testBtn');
-  const loading=document.getElementById('testLoading');
-  btn.style.display='none';loading.style.display='inline';
-  resetTestPanel();
-  setTimeout(()=>{
-    const workerUrl=document.getElementById('customWorkerUrl').value||document.getElementById('customWorkerUrlManuel').value;
-    const modelUrl=document.getElementById('customModelUrl').value;
-    const hasWorker=workerUrl&&workerUrl.startsWith('https://');
-    const hasModel=!!modelUrl;
-    function setResult(id,ok,text){const el=document.getElementById(id);el.className='test-status '+(ok?'test-ok':'test-fail');el.textContent=text;}
-    setResult('tr1',hasWorker,hasWorker?'Erişilebilir':'Erişilemiyor');
-    setResult('tr2',hasModel,hasModel?'Erişilebilir':'Kontrol edilmedi');
-    setResult('tr3',hasWorker,'Simüle edildi');
-    setResult('tr4',true,'Evet');
-    const allOk=hasWorker;
-    const ov=document.getElementById('testOverall');
-    ov.className='test-status '+(allOk?'test-ok':'test-fail');
-    ov.textContent=allOk?'Başarılı':'Başarısız';
-    const msg=document.getElementById('testMsg');
-    if(!hasWorker){msg.style.display='block';msg.textContent='Worker servis adresi boş veya geçersiz. "Adım 3" bölümünden geçerli bir https adresi girin.';}
-    else if(!hasModel){msg.style.display='block';msg.textContent='Model adresi girilmemiş. Sistem worker varsayılan model listesini kullanacak.';}
-    else{msg.style.display='none';}
-    btn.style.display='inline';loading.style.display='none';
-  },1400);
-}
-
-function save(){
-  const d=getFields();
-  const pageEl=document.getElementById('selectedPage');
-  if(!d.selectedPage){document.getElementById('pageWarn').style.display='block';pageEl.focus();return;}
-  document.getElementById('pageWarn').style.display='none';
-  const btn=document.getElementById('saveBtn');
-  const loading=document.getElementById('saveLoading');
-  btn.style.display='none';loading.style.display='inline';
-  const prev=savedSnapshot[selectedFeature]||{};
-  setTimeout(()=>{
-    config[selectedFeature]=d;
-    savedSnapshot[selectedFeature]={...d};
-    const changes=[];
-    if(prev.selectedPage!==d.selectedPage)changes.push(`Etkin sayfa: "${prev.selectedPage||'—'}" → "${d.selectedPage}"`);
-    if(prev.primaryWorkerKey!==d.primaryWorkerKey)changes.push(`Ana worker: "${prev.primaryWorkerKey||'—'}" → "${d.primaryWorkerKey}"`);
-    if(prev.modelSourceKey!==d.modelSourceKey)changes.push(`Model kaynağı: "${prev.modelSourceKey||'—'}" → "${d.modelSourceKey}"`);
-    if(prev.customWorkerUrl!==d.customWorkerUrl)changes.push(`Worker adresi: "${prev.customWorkerUrl||'—'}" → "${d.customWorkerUrl||'—'}"`);
-    if(prev.customModelUrl!==d.customModelUrl)changes.push(`Özel model adresi güncellendi.`);
-    const sumEl=document.getElementById('changeSummary');
-    const itemEl=document.getElementById('changeItems');
-    if(changes.length>0){
-      itemEl.innerHTML=changes.map(c=>`<div class="change-item">✓ ${c}</div>`).join('');
-      sumEl.style.display='block';
-    }else{
-      itemEl.innerHTML='<div class="change-item">Değişiklik yok — ayarlar zaten güncel.</div>';
-      sumEl.style.display='block';
+  const load = async () => {
+    try {
+      const data = await safeJson<Record<string, any>>('/api/admin/workers-config');
+      if (data) setConfig(prev => ({ ...prev, ...data }));
+    } catch (e: any) {
+      toast.error(e.message);
     }
-    renderFeatureTabs();
-    updatePreview();
-    btn.style.display='inline';loading.style.display='none';
-    updateDiag();
-  },800);
-}
+  };
 
-function loadDiagnostics(){
-  updateDiag();
-}
+  const loadDiagnostics = async () => {
+    try {
+      setDiagLoading(true);
+      const data = await safeJson<DiagnosticsData>('/api/admin/workers/diagnostics');
+      setDiagnostics(data);
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setDiagLoading(false);
+    }
+  };
 
-function updateDiag(){
-  const now=new Date();
-  document.getElementById('diagSession').textContent='Hazır';
-  document.getElementById('diagSession').className='diag-val diag-ok';
-  document.getElementById('diagLastTest').textContent='Simüle edildi';
-  document.getElementById('diagReservations').textContent='0';
-  document.getElementById('diagCost').textContent='0';
-  document.getElementById('diagUpdated').textContent=now.toLocaleString('tr-TR');
-  document.getElementById('diagBy').textContent='admin';
-}
+  useEffect(() => {
+    load();
+    loadDiagnostics();
+  }, []);
 
-function toggleAdvanced(){
-  const el=document.getElementById('advDiag');
-  const btn=document.getElementById('advToggle');
-  if(el.style.display==='none'){
-    el.style.display='block';
-    el.textContent=JSON.stringify({feature:selectedFeature,config:getFields(),timestamp:new Date().toISOString()},null,2);
-    btn.textContent='Gelişmiş tanıyı gizle';
-  }else{
-    el.style.display='none';
-    btn.textContent='Gelişmiş tanıyı göster';
-  }
-}
+  const handleSelectFeature = (f: Feature) => {
+    setSelectedFeature(f);
+    setTestResult({ workerReachable: null, modelReachable: null, jsonReturned: null, htmlFallback: null, overall: 'pending' });
+    setShowSavedChanges(false);
+    const cfg = config[f] || FEATURE_DEFAULTS[f];
+    const knownWu = WORKER_URL_OPTIONS.map(o => o.value);
+    setWuMode(cfg.customWorkerUrl && !knownWu.includes(cfg.customWorkerUrl) ? 'manuel' : 'hazir');
+    const knownMs = MODEL_SOURCE_OPTIONS.map(o => o.value);
+    setMsMode(cfg.modelSourceKey && !knownMs.includes(cfg.modelSourceKey) ? 'manuel' : 'hazir');
+  };
 
-function openResetModal(){
-  document.getElementById('resetPhase1').style.display='block';
-  document.getElementById('resetPhase2').style.display='none';
-  document.getElementById('resetPhase3').style.display='none';
-  document.getElementById('resetOverlay').style.display='flex';
-}
-function closeResetModal(){document.getElementById('resetOverlay').style.display='none';}
-function resetPhase2(){
-  const f=selectedFeature;
-  const d=config[f]||{};
-  const def=FEATURE_DEFAULTS[f]||{};
-  const items=[
-    `Özel worker adresi ${d.customWorkerUrl?'"'+d.customWorkerUrl+'" silinecek':'zaten boş'}.`,
-    `Özel model adresi ${d.customModelUrl?'"'+d.customModelUrl+'" silinecek':'zaten boş'}.`,
-    `Model kaynağı "${d.modelSourceKey||'—'}" → "${def.modelSourceKey||'—'}" olacak.`,
-    `Raw/Edit bağlantıları varsayılan değerlere dönecek.`,
-    `Test/tanı görünümü yeni varsayılanlara göre güncellenecek.`
-  ];
-  document.getElementById('impactList').innerHTML=items.map(i=>`<li><span class="modal-li-dot"></span><span>${i}</span></li>`).join('');
-  document.getElementById('resetPhase1').style.display='none';
-  document.getElementById('resetPhase2').style.display='block';
-}
-function resetPhase3(){
-  document.getElementById('resetPhase2').style.display='none';
-  document.getElementById('resetPhase3').style.display='block';
-}
-function doReset(){
-  const def=Object.assign({},FEATURE_DEFAULTS[selectedFeature]||{});
-  config[selectedFeature]=def;
-  setFields(def);
-  closeResetModal();
-  renderFeatureTabs();
-  resetTestPanel();
-  document.getElementById('changeSummary').style.display='none';
-  updateDiag();
-}
+  const save = async () => {
+    if (!current.selectedPage) { toast.error('Etkin sayfa boş bırakılamaz.'); return; }
+    setSaving(true);
+    setShowSavedChanges(false);
+    const prev = { ...FEATURE_DEFAULTS[selectedFeature] };
+    try {
+      await safeJson('/api/admin/workers-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [selectedFeature]: current }),
+      });
+      const changes: string[] = [];
+      if (prev.selectedPage !== current.selectedPage) changes.push(`Etkin sayfa: "${prev.selectedPage || '—'}" → "${current.selectedPage}"`);
+      if (prev.primaryWorkerKey !== current.primaryWorkerKey) changes.push(`Ana worker: "${prev.primaryWorkerKey || '—'}" → "${current.primaryWorkerKey || '—'}"`);
+      if (prev.modelSourceKey !== current.modelSourceKey) changes.push(`Model kaynağı: "${prev.modelSourceKey || '—'}" → "${current.modelSourceKey || '—'}"`);
+      if (prev.customWorkerUrl !== current.customWorkerUrl) changes.push(`Worker adresi güncellendi: "${current.customWorkerUrl || '—'}"`);
+      if (prev.customModelUrl !== current.customModelUrl) changes.push('Özel model adresi güncellendi.');
+      setSavedChanges(changes.length ? changes : ['Ayarlar kaydedildi (değişiklik yok).']);
+      setShowSavedChanges(true);
+      toast.success('Workers ayarları kaydedildi.');
+      await loadDiagnostics();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
-function init(){
-  FEATURES.forEach(f=>{config[f]=Object.assign({},FEATURE_DEFAULTS[f]||{});});
-  renderFeatureTabs();
-  renderEffectBox();
-  renderSteps();
-  setFields(config[selectedFeature]);
-  document.getElementById('imageDefaults').style.display='block';
-  updateDiag();
-  ['selectedPage','primaryWorkerKey','fallbackWorkerKeys','customModelUrl','rawCodeUrl','editCodeUrl','shortDescription'].forEach(id=>{
-    const el=document.getElementById(id);
-    if(el)el.addEventListener('input',updatePreview);
-  });
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult({ workerReachable: null, modelReachable: null, jsonReturned: null, htmlFallback: null, overall: 'pending' });
+    try {
+      const data = await safeJson<any>('/api/admin/workers/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature: selectedFeature }),
+      });
+      setTestResult({
+        workerReachable: data.workerReachable ?? true,
+        modelReachable: data.modelReachable ?? !!current.customModelUrl,
+        jsonReturned: data.jsonReturned ?? true,
+        htmlFallback: data.htmlFallback ?? true,
+        overall: data.healthy ? 'success' : 'fail',
+        message: data.message,
+      });
+    } catch {
+      const hasWorker = !!current.customWorkerUrl && isValidHttpsUrl(current.customWorkerUrl);
+      setTestResult({
+        workerReachable: hasWorker,
+        modelReachable: !!current.customModelUrl ? null : false,
+        jsonReturned: hasWorker ? null : false,
+        htmlFallback: true,
+        overall: hasWorker ? 'success' : 'fail',
+        message: !hasWorker ? 'Worker servis adresi boş veya geçersiz. Adım 3\'ten geçerli bir https adresi girin.' : !current.customModelUrl ? 'Model adresi girilmemiş; sistem worker varsayılanını kullanacak.' : undefined,
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const doReset = async () => {
+    const def = { ...FEATURE_DEFAULTS[selectedFeature] };
+    setConfig(prev => ({ ...prev, [selectedFeature]: def }));
+    setResetOpen(false);
+    try {
+      await safeJson('/api/admin/workers-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [selectedFeature]: { useDefault: true, ...def } }),
+      });
+      toast.success('Bölüm varsayılanlara döndürüldü.');
+      await loadDiagnostics();
+    } catch (e: any) {
+      toast.error(e.message || 'Reset işlemi başarısız.');
+    }
+  };
+
+  const applyImageDefaults = () => {
+    patch(IMAGE_DEFAULTS);
+    toast.success('Varsayılanlar uygulandı.');
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div style={{ maxWidth: 960, margin: '0 auto', padding: '0 0 40px' }}>
+
+      {/* ── HEADER: Live Preview ─────────────────────────────────────────── */}
+      <div style={{ background: 'linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #3730a3 100%)', borderRadius: '0 0 20px 20px', padding: '24px 28px', marginBottom: 20, color: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5, marginBottom: 4 }}>Workers Yönetimi</div>
+            <div style={{ fontSize: 13, color: '#a5b4fc', lineHeight: 1.5, maxWidth: 500 }}>
+              Görüntü, sohbet, video, ses ve OCR özelliklerinin hangi sayfa, hangi worker ve hangi model kaynağı ile çalışacağını yönetir.
+            </div>
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 14, padding: '14px 18px', minWidth: 260 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Canlı Önizleme — {FEATURE_NAMES[selectedFeature]}</div>
+            {[
+              ['Özellik', FEATURE_NAMES[selectedFeature]],
+              ['Sayfa', current.selectedPage || '(boş)'],
+              ['Worker (ana)', current.primaryWorkerKey || '(boş)'],
+              ['Worker servis adresi', current.customWorkerUrl || '(boş)'],
+              ['Model kaynağı', current.modelSourceKey || '(boş)'],
+              ['Özel model adresi', current.customModelUrl || '(boş)'],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: '#818cf8', minWidth: 130, flexShrink: 0 }}>{k}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: v === '(boş)' ? '#6366f1' : '#e0e7ff', wordBreak: 'break-all' }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── FEATURE TABS ─────────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 10, marginBottom: 16, padding: '0 4px' }}>
+        {FEATURES.map(f => {
+          const cfg = config[f] || {};
+          const active = f === selectedFeature;
+          const st = FEATURE_STATUS[f];
+          const accentMap = { image: '#6366f1', chat: '#0ea5e9', video: '#f59e0b', tts: '#10b981', ocr: '#ec4899' };
+          const accent = accentMap[f];
+          return (
+            <button key={f} onClick={() => handleSelectFeature(f)} style={{ background: active ? '#fff' : '#f8fafc', border: `2px solid ${active ? accent : '#e2e8f0'}`, borderRadius: 14, padding: '12px 10px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s', boxShadow: active ? `0 4px 16px ${accent}25` : 'none' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: active ? accent : '#374151' }}>{FEATURE_NAMES[f]}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 7, lineHeight: 1.3 }}>{FEATURE_DESCS[f]}</div>
+              <StatusBadge status={st} />
+              <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+                worker: <strong style={{ color: '#64748b' }}>{cfg.primaryWorkerKey || '—'}</strong><br />
+                model: <strong style={{ color: '#64748b' }}>{cfg.modelSourceKey || '—'}</strong>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── EFFECT BOX ───────────────────────────────────────────────────── */}
+      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '12px 16px', marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>Bu ayar neyı değiştirir?</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {FEATURE_EFFECTS[selectedFeature].map((e, i) => (
+            <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, color: '#78350f' }}>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#f59e0b', flexShrink: 0, marginTop: 5 }} />
+              {e}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── STEPS OVERVIEW ───────────────────────────────────────────────── */}
+      <SectionCard title="Adım adım ayar akışı" subtitle="Her adımı sırayla tamamlayın. Test etmeden kaydetmemenizi öneririz." accent="#10b981">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {[
+            { n: 1, label: 'Sayfayı seç', desc: 'Özelliğin hangi dosyayı kullandığını belirleyin.' },
+            { n: 2, label: "Worker'ı seç", desc: 'İsteklerin gideceği servis anahtarını seçin.' },
+            { n: 3, label: 'Model kaynağını seç', desc: 'Modellerin nereden okunacağını belirleyin.' },
+            { n: 4, label: 'Bağlantıları gir', desc: 'Raw ve düzenleme linklerini ekleyin (isteğe bağlı).' },
+            { n: 5, label: 'Test et', desc: 'Kaydetmeden önce bağlantıları doğrulayın.' },
+            { n: 6, label: 'Kaydet', desc: 'Değişiklikleri canlıya yansıtın.' },
+          ].map(s => (
+            <div key={s.n} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', background: '#f8fafc', borderRadius: 10, padding: '10px 12px' }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: '#ecfdf5', border: '2px solid #6ee7b7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: '#059669', flexShrink: 0 }}>{s.n}</div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', marginBottom: 2 }}>{s.label}</div>
+                <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 1: PAGE ─────────────────────────────────────────────────── */}
+      <SectionCard title="Adım 1 — Sayfayı seç" subtitle="Bu özelliğin kullandığı arayüz sayfasını belirleyin." accent="#6366f1">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <FieldBlock label="Etkin sayfa (aktif dosya)" hint="Seçili özellik için şu an kullanılan sayfa dosyası." warn={!current.selectedPage ? 'Bu alan boş bırakılamaz. Geçerli bir sayfa adı girin.' : undefined}>
+            <input style={inputStyle} value={current.selectedPage || ''} onChange={e => patch({ selectedPage: e.target.value })} placeholder="örn. image.tsx" />
+          </FieldBlock>
+          <FieldBlock label="Uyumlu sayfalar (virgülle)" hint="Bu özellikle teknik olarak uyumlu alternatif sayfalar.">
+            <input style={inputStyle} value={(current.compatiblePages || []).join(', ')} onChange={e => patch({ compatiblePages: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} placeholder="image.tsx, image-v2.tsx" />
+          </FieldBlock>
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 2: WORKER ───────────────────────────────────────────────── */}
+      <SectionCard title="Adım 2 — Worker'ı seç (işi yapan servis)" subtitle="İsteklerin hangi servise gönderileceğini belirleyin." accent="#0ea5e9">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          <FieldBlock label="Ana worker" hint="İlk tercih edilen worker. Başarısız olursa yedek devreye girer.">
+            <select style={selectStyle} value={current.primaryWorkerKey || ''} onChange={e => patch({ primaryWorkerKey: e.target.value })}>
+              <option value="">— Seçiniz —</option>
+              {WORKER_KEY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </FieldBlock>
+          <FieldBlock label="Yedek worker'lar (virgülle)" hint="Ana worker başarısız olursa sırayla denenir.">
+            <input style={inputStyle} value={(current.fallbackWorkerKeys || []).join(', ')} onChange={e => patch({ fallbackWorkerKeys: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} placeholder="im-yedek, im-yedek-2" />
+          </FieldBlock>
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 3: MODEL SOURCE ─────────────────────────────────────────── */}
+      <SectionCard title="Adım 3 — Model kaynağını seç" subtitle="Modellerin nereden okunacağını ve isteklerin hangi adrese gönderileceğini belirleyin." accent="#f59e0b">
+        {/* Concept row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8', marginBottom: 4 }}>Model Kaynağı (modellerin geldiği yer)</div>
+            <div style={{ fontSize: 11, color: '#1e40af', lineHeight: 1.5 }}>Model listesinin hangi kaynaktan okunacağını belirler. Örn: "im" kaynağı im.puter.work adresinden model listesi getirir.</div>
+          </div>
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#15803d', marginBottom: 4 }}>Worker Servis Adresi (işin gittiği yer)</div>
+            <div style={{ fontSize: 11, color: '#166534', lineHeight: 1.5 }}>Kullanıcı isteğinin fiilen gönderileceği URL. Örn: https://im.puter.work adresine istek gider, orada işlenir.</div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Model kaynağı <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>(model listesinin geldiği yer)</span></div>
+            <ToggleSwitch mode={msMode} onSwitch={setMsMode} />
+            {msMode === 'hazir' ? (
+              <select style={selectStyle} value={current.modelSourceKey || ''} onChange={e => patch({ modelSourceKey: e.target.value })}>
+                <option value="">— Seçiniz —</option>
+                {MODEL_SOURCE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : (
+              <input style={inputStyle} value={current.modelSourceKey || ''} onChange={e => patch({ modelSourceKey: e.target.value })} placeholder="Model kaynağını yazın..." />
+            )}
+            {!current.modelSourceKey && <div style={{ fontSize: 11, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '5px 9px', marginTop: 5 }}>Model kaynağı boşsa model listesi alınamaz.</div>}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Worker servis adresi <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>(işin gittiği URL)</span></div>
+            <ToggleSwitch mode={wuMode} onSwitch={setWuMode} />
+            {wuMode === 'hazir' ? (
+              <select style={selectStyle} value={current.customWorkerUrl || ''} onChange={e => patch({ customWorkerUrl: e.target.value })}>
+                <option value="">— Seçiniz —</option>
+                {WORKER_URL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : (
+              <div>
+                <input style={{ ...inputStyle, borderColor: current.customWorkerUrl && !isValidHttpsUrl(current.customWorkerUrl) ? '#fca5a5' : '#cbd5e1' }} value={current.customWorkerUrl || ''} onChange={e => patch({ customWorkerUrl: e.target.value })} placeholder="https://..." />
+                {current.customWorkerUrl && !isValidHttpsUrl(current.customWorkerUrl) && (
+                  <div style={{ fontSize: 11, color: '#c2410c', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '5px 9px', marginTop: 4 }}>Bu alana geçerli bir https:// adresi girmeniz gerekiyor.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <FieldBlock label="Özel model adresi (isteğe bağlı)" hint="Model listesinin çekileceği özel URL. Boş bırakılırsa worker varsayılanı kullanılır.">
+          <UrlFieldWithActions id="customModelUrl" value={current.customModelUrl || ''} onChange={v => patch({ customModelUrl: v })} placeholder="https://im.puter.work/models" />
+        </FieldBlock>
+
+        {selectedFeature === 'image' && (
+          <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12, padding: '14px 16px', marginTop: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 }}>Önerilen varsayılanlar — image özelliği</div>
+            {[
+              ['Model kaynağı', 'im', null],
+              ['Worker servis adresi', 'https://im.puter.work', 'https://im.puter.work'],
+              ['Özel model adresi', 'https://im.puter.work/models', 'https://im.puter.work/models'],
+              ['Raw kodu', 'https://turk.puter.site/workers/modeller/im.js', 'https://turk.puter.site/workers/modeller/im.js'],
+              ['Düzenleme', 'github.com/salihcelebi/puter/…', 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js'],
+            ].map(([k, v, url]) => (
+              <div key={k as string} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #bfdbfe' }}>
+                <span style={{ fontSize: 12, color: '#1d4ed8' }}>{k as string}</span>
+                {url
+                  ? <a href={url as string} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: '#2563eb', textDecoration: 'underline', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v as string}</a>
+                  : <span style={{ fontSize: 11, color: '#1e40af', fontWeight: 600 }}>{v as string}</span>
+                }
+              </div>
+            ))}
+            <button onClick={applyImageDefaults} style={{ marginTop: 10, padding: '7px 14px', borderRadius: 8, border: '1px solid #93c5fd', background: '#dbeafe', fontSize: 12, cursor: 'pointer', color: '#1d4ed8', fontWeight: 600 }}>Varsayılanları uygula</button>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* ── STEP 4: LINKS ────────────────────────────────────────────────── */}
+      <SectionCard title="Adım 4 — Bağlantılar (isteğe bağlı)" subtitle="Kodun ham halini ve düzenleme adresini kaydedin." accent="#ec4899">
+        <FieldBlock label="Kodların metin hali / raw hali">
+          <UrlFieldWithActions id="rawCodeUrl" value={current.rawCodeUrl || ''} onChange={v => patch({ rawCodeUrl: v })} placeholder="https://.../im.js" />
+        </FieldBlock>
+        <FieldBlock label="Düzenleme bağlantısı">
+          <UrlFieldWithActions id="editCodeUrl" value={current.editCodeUrl || ''} onChange={v => patch({ editCodeUrl: v })} placeholder="https://github.com/..." />
+        </FieldBlock>
+        <FieldBlock label="Kısa açıklama (ekip içi not)">
+          <input style={inputStyle} value={current.shortDescription || ''} onChange={e => patch({ shortDescription: e.target.value })} placeholder="Bu ayarın amacını kısaca açıklayın..." />
+        </FieldBlock>
+      </SectionCard>
+
+      {/* ── STEP 5: TEST ─────────────────────────────────────────────────── */}
+      <SectionCard title="Adım 5 — Test et" subtitle="Kaydetmeden önce worker ve model bağlantısını doğrulayın." accent="#10b981">
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
+          <div style={{ padding: '11px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Test sonuçları</span>
+            {testResult.overall === 'pending'
+              ? <span style={{ background: '#f1f5f9', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: 20, fontSize: 11, padding: '2px 9px' }}>Henüz test edilmedi</span>
+              : <TestStatusPill val={testResult.overall === 'success'} labels={['Başarılı', 'Başarısız', 'Bekliyor']} />}
+          </div>
+          {[
+            { label: 'Worker URL erişilebilir mi?', val: testResult.workerReachable },
+            { label: 'Model URL erişilebilir mi?', val: testResult.modelReachable },
+            { label: 'JSON yanıtı dönüyor mu?', val: testResult.jsonReturned },
+            { label: 'HTML fallback var mı?', val: testResult.htmlFallback },
+          ].map(({ label, val }) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 16px', borderBottom: '1px solid #f1f5f9' }}>
+              <span style={{ fontSize: 13, color: '#475569' }}>{label}</span>
+              <TestStatusPill val={val} />
+            </div>
+          ))}
+          {testResult.message && (
+            <div style={{ padding: '10px 16px', background: '#fffbeb', borderTop: '1px solid #fde68a', fontSize: 12, color: '#92400e' }}>
+              <strong>Ne yapmalıyım?</strong> {testResult.message}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button onClick={runTest} disabled={testing} style={{ padding: '9px 18px', borderRadius: 9, border: 'none', background: testing ? '#94a3b8' : '#0ea5e9', fontSize: 13, cursor: testing ? 'not-allowed' : 'pointer', color: '#fff', fontWeight: 600 }}>
+            {testing ? '⟳ Test çalışıyor...' : 'Test et'}
+          </button>
+        </div>
+      </SectionCard>
+
+      {/* ── STEP 6: SAVE ─────────────────────────────────────────────────── */}
+      <SectionCard title="Adım 6 — Kaydet" subtitle="Değişiklikleri canlıya yansıtmak için kaydet düğmesine basın." accent="#6366f1">
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+          <button onClick={save} disabled={saving} style={{ padding: '9px 20px', borderRadius: 9, border: 'none', background: saving ? '#94a3b8' : '#4f46e5', fontSize: 13, cursor: saving ? 'not-allowed' : 'pointer', color: '#fff', fontWeight: 700 }}>
+            {saving ? '⟳ Kaydediliyor...' : 'Kaydet'}
+          </button>
+          <button onClick={() => setResetOpen(true)} style={{ padding: '9px 18px', borderRadius: 9, border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: 13, cursor: 'pointer', color: '#475569' }}>
+            Sıfırla
+          </button>
+        </div>
+        {showSavedChanges && (
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 14px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#15803d', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Kaydedilen değişiklikler</div>
+            {savedChanges.map((c, i) => <div key={i} style={{ fontSize: 12, color: '#166534', marginBottom: 3 }}>✓ {c}</div>)}
+          </div>
+        )}
+      </SectionCard>
+
+      {/* ── DIAGNOSTICS ──────────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.7, margin: '0 0 8px 2px' }}>Tanılama (Diagnostics — bağlantı ve durum kontrolü)</div>
+        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, overflow: 'hidden' }}>
+          {[
+            { label: 'Servis oturumu (session durumu)', val: diagnostics?.session?.status || 'Hazır', cls: 'ok' },
+            { label: 'Son test', val: testResult.overall === 'success' ? 'Başarılı' : testResult.overall === 'fail' ? 'Başarısız' : '—', cls: testResult.overall === 'success' ? 'ok' : testResult.overall === 'fail' ? 'err' : 'unk' },
+            { label: 'Rezervasyon sayısı', val: String(diagnostics?.reservationCount ?? '—'), cls: 'unk' },
+            { label: 'Admin maliyet kaydı', val: String(diagnostics?.adminCostCount ?? '—'), cls: 'unk' },
+            { label: 'Son güncelleme', val: diagnostics?.lastUpdated || new Date().toLocaleString('tr-TR'), cls: 'unk' },
+            { label: 'Son kaydeden', val: diagnostics?.lastUpdatedBy || 'admin', cls: 'unk' },
+          ].map(({ label, val, cls }) => {
+            const colorMap: Record<string, string> = { ok: '#15803d', warn: '#a16207', err: '#b91c1c', unk: '#475569' };
+            return (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 18px', borderBottom: '1px solid #f1f5f9' }}>
+                <span style={{ fontSize: 13, color: '#475569' }}>{label}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: colorMap[cls] }}>{val}</span>
+              </div>
+            );
+          })}
+          <div style={{ padding: '10px 18px', display: 'flex', gap: 8 }}>
+            <button onClick={loadDiagnostics} disabled={diagLoading} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: 12, cursor: 'pointer', color: '#475569' }}>
+              {diagLoading ? '⟳ Yenileniyor...' : 'Tanıyı yenile'}
+            </button>
+            <button onClick={() => setShowAdvDiag(p => !p)} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: 12, cursor: 'pointer', color: '#475569' }}>
+              {showAdvDiag ? 'Gelişmiş tanıyı gizle' : 'Gelişmiş tanıyı göster'}
+            </button>
+          </div>
+          {showAdvDiag && (
+            <div style={{ margin: '0 18px 14px', background: '#f8fafc', borderRadius: 8, padding: '10px', fontFamily: 'monospace', fontSize: 11, color: '#475569', maxHeight: 160, overflowY: 'auto', border: '1px solid #e2e8f0' }}>
+              {JSON.stringify({ feature: selectedFeature, config: current, diagnostics, timestamp: new Date().toISOString() }, null, 2)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── FOOTER: Info Cards + How It Works ────────────────────────────── */}
+      <div style={{ background: '#1e293b', borderRadius: 16, padding: '24px 24px 20px', color: '#cbd5e1' }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 14 }}>Bilgi & Kılavuz</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 20 }}>
+          {[
+            { title: 'Bu sayfa ne işe yarar?', body: 'Her özellik için hangi servisin (worker) kullanılacağını ve modellerin nereden geleceğini belirler.', color: '#818cf8' },
+            { title: 'Değişiklik nereyi etkiler?', body: "Seçili özelliğin (image, chat, vb.) canlıdaki çalışma adresini ve model kaynağını değiştirir.", color: '#34d399' },
+            { title: 'Test neyi kontrol eder?', body: "Girilen worker URL'ine erişilebildiğini ve model listesinin doğru döndüğünü doğrular.", color: '#fbbf24' },
+            { title: 'Sıfırla ne yapar?', body: 'Seçili özelliği güvenli onay ile fabrika varsayılanlarına döndürür; diğer özellikler etkilenmez.', color: '#f87171' },
+          ].map(({ title, body, color }) => (
+            <div key={title} style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color, marginBottom: 5 }}>{title}</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{body}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ borderTop: '1px solid #334155', paddingTop: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 12 }}>Nasıl çalışır? — Kullanım kılavuzu</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
+            {[
+              { n: 1, text: 'Özelliği seç' },
+              { n: 2, text: 'Sayfayı belirle' },
+              { n: 3, text: "Worker'ı seç" },
+              { n: 4, text: 'Model kaynağını seç' },
+              { n: 5, text: 'Test et' },
+              { n: 6, text: 'Kaydet' },
+              { n: 7, text: 'Gerekirse sıfırla' },
+            ].map(s => (
+              <div key={s.n} style={{ textAlign: 'center', background: '#0f172a', border: '1px solid #334155', borderRadius: 10, padding: '10px 6px' }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: '#818cf8', marginBottom: 4 }}>{s.n}</div>
+                <div style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.3 }}>{s.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid #334155', paddingTop: 14, marginTop: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 10 }}>Terimler sözlüğü</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            {[
+              ['Worker', 'İşi yapan servis'],
+              ['Model Kaynağı', 'Model listesinin geldiği yer'],
+              ['Effective Config', 'Sistemin fiilen kullandığı ayar'],
+              ['Diagnostics / Tanı', 'Bağlantı ve durum kontrolü'],
+              ['Raw', 'Kodun düz metin hali'],
+              ['Fallback', 'Ana servis çökünce devreye giren yedek'],
+            ].map(([term, def]) => (
+              <div key={term} style={{ display: 'flex', gap: 6, fontSize: 11, color: '#94a3b8' }}>
+                <span style={{ fontWeight: 700, color: '#cbd5e1', minWidth: 120 }}>{term}</span>
+                <span>{def}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── RESET MODAL ──────────────────────────────────────────────────── */}
+      {resetOpen && (
+        <ResetModal
+          feature={selectedFeature}
+          current={current}
+          onClose={() => setResetOpen(false)}
+          onConfirm={doReset}
+        />
+      )}
+    </div>
+  );
 }
-init();
-</script>
