@@ -18,7 +18,6 @@
 8) /varliklar, /odeme-paketleri, /odeme-yap/:packageId, /hesap, /kullanim-gecmisi VE /kredi-gecmisi GİBİ HESAP ODAKLI EKRANLAR BURADA BAĞLANMIŞTIR.
 9) /sohbet VE /sohbet/konus ROTALARI, CHAT İLE İLGİLİ İKİ AYRI SAYFAYI BARINDIRIR.
 10) /gorsel, /video VE /tts ROTALARI, AI ÜRETİM SAYFALARINI DOĞRUDAN SUNAR.
-11) /muzik ROUTE'U ProtectedRoute İLE KORUNDUĞU İÇİN SADECE OTURUMLU KULLANICIYA AÇIKTIR.
 12) ADMIN ALANI İÇİN AYRI BİR ROUTE GRUBU TANIMLANMIŞTIR.
 13) /admin, /admin/ozet, /admin/kullanicilar, /admin/modeller, /admin/fiyatlandirma, /admin/loglar VE /admin/odeme-yonetimi ROTALARI requireAdmin KORUMASIYLA ÇALIŞIR.
 14) ProtectedRoute BİLEŞENİ, BU DOSYADA HEM NORMAL KULLANICI KORUMASI HEM DE ADMIN KORUMASI İÇİN YENİDEN KULLANILIR.
@@ -58,7 +57,6 @@ import Chat1 from './pages/AI/Chat1';
 import Image from './pages/AI/image';
 import VideoGen from './pages/AI/video';
 import TTS from './pages/AI/TTS';
-import Music from './pages/AI/Music';
 import AdminDashboard from './pages/Admin/AdminDashboard';
 import AdminUsers from './pages/Admin/AdminUsers';
 import AdminModels from './pages/Admin/AdminModels';
@@ -92,7 +90,6 @@ export default function App() {
             <Route path="gorsel" element={<Image />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="tts" element={<TTS />} />
-            <Route path="muzik" element={<ProtectedRoute><Music /></ProtectedRoute>} />
 
             <Route
               path="admin"
