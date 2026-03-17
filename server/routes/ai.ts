@@ -99,6 +99,23 @@ aiRouter.get('/models', async (req, res) => {
   }
 });
 
+
+aiRouter.get('/effective-config/:feature', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const requestedFeature = String(req.params.feature || '').trim().toLowerCase();
+    const allowed = new Set(['image', 'chat', 'video', 'tts', 'ocr', 'phototovideo']);
+    if (!allowed.has(requestedFeature)) {
+      return res.status(400).json({ error: 'Geçersiz feature parametresi', code: 'INVALID_FEATURE' });
+    }
+
+    const normalized = requestedFeature === 'phototovideo' ? 'video' : requestedFeature;
+    const config = await aiService.getEffectiveFeatureConfig(normalized);
+    return res.json({ ok: true, feature: normalized, config });
+  } catch (error: any) {
+    return sendError(res, error);
+  }
+});
+
 aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId, conversationId } = req.body || {};
@@ -109,7 +126,7 @@ aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: A
       userId: req.user.id,
       modelId,
       clientRequestId,
-      payload: { prompt, conversationId },
+      payload: { prompt, conversationId, sourcePage: req.headers['x-source-page'] || null },
     });
 
     res.json(result);
@@ -128,7 +145,7 @@ aiRouter.post('/image', requireAuth, requirePermission('use_image'), async (req:
       userId: req.user.id,
       modelId,
       clientRequestId,
-      payload: { prompt },
+      payload: { prompt, sourcePage: req.headers['x-source-page'] || null },
     });
 
     res.json(result);
@@ -150,6 +167,7 @@ aiRouter.post('/tts', requireAuth, requirePermission('use_tts'), async (req: Aut
       payload: {
         text,
         voiceName: voiceName || voice || 'default',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 
@@ -173,6 +191,7 @@ aiRouter.post('/video', requireAuth, requirePermission('use_video'), async (req:
         prompt,
         duration: Number(duration || 5),
         aspectRatio: aspectRatio || '16:9',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 
@@ -202,6 +221,7 @@ aiRouter.post('/photo-to-video', requireAuth, requirePermission('use_photo_to_vi
         imageUrl: resolvedImageUrl,
         duration: Number(duration || 5),
         aspectRatio: aspectRatio || '16:9',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 

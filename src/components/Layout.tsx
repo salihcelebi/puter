@@ -116,6 +116,10 @@ export default function Layout() {
                 <Shield size={18} />
                 <span>Modeller</span>
               </Link>
+              <Link to="/admin/workers" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
+                <Shield size={18} />
+                <span>Workers</span>
+              </Link>
               <Link to="/admin/fiyatlandirma" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
                 <DollarSign size={18} />
                 <span>Fiyatlandırma</span>

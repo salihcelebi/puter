@@ -65,6 +65,7 @@ import AdminModels from './pages/Admin/AdminModels';
 import AdminLogs from './pages/Admin/AdminLogs';
 import AdminPayments from './pages/Admin/AdminPayments';
 import AdminPricing from './pages/Admin/AdminPricing';
+import AdminWorkersSec from './pages/Admin/admin_workers_sec';
 
 export default function App() {
   return (
@@ -122,6 +123,15 @@ export default function App() {
               element={
                 <ProtectedRoute requireAdmin>
                   <AdminModels />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="admin/workers"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminWorkersSec />
                 </ProtectedRoute>
               }
             />

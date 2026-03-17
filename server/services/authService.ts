@@ -122,7 +122,7 @@ export const authService = {
       google_id: data.google_id,
       auth_provider: data.auth_provider || 'local',
       aktif_mi: true,
-      rol: data.rol || 'user',
+      rol: 'user',
       toplam_kredi: data.toplam_kredi !== undefined ? data.toplam_kredi : 100,
       kullanilan_kredi: 0,
       olusturma_tarihi: now,

@@ -2,6 +2,33 @@ import { useState, useEffect } from 'react';
 import { Save, RefreshCw, Search, CheckCircle, XCircle, Edit2, TrendingUp, Filter } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+
+async function safeApiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+
+  // DELILX: Bu koruma HTML fallback'ı JSON gibi parse edip ekranı patlatmamak içindir.
+  if (/<!doctype|<html/i.test(text)) {
+    throw new Error('Beklenmeyen HTML yanıtı alındı. Endpoint yönlendirmesi kontrol edilmeli.');
+  }
+  if (!contentType.includes('application/json')) {
+    throw new Error('JSON beklenirken farklı içerik tipi döndü.');
+  }
+
+  let data: any;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error('Sunucudan geçerli JSON alınamadı.');
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.error || `İstek başarısız (${res.status})`);
+  }
+  return data as T;
+}
+
 interface ModelRecord {
   id: string;
   provider_name: string;
@@ -119,11 +146,9 @@ export default function AdminModels() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/admin/models/stats');
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data);
-      }
+      const workersCfg = await safeApiJson<Record<string, any>>('/api/admin/workers-config');
+      const rows = ['image', 'chat', 'video', 'tts', 'ocr'].map((feature) => workersCfg?.[feature]).filter(Boolean);
+      setStats(rows);
     } catch (error) {
       console.error('İstatistikler alınamadı', error);
     }
@@ -132,36 +157,50 @@ export default function AdminModels() {
   const fetchModels = async () => {
     setLoading(true);
     try {
-      const tabMap: Record<string, string> = {
-        active: 'active',
-        prices: 'raw',
-        inactive: 'inactive',
-        popular: 'favorites',
-        credits: 'sales',
-      };
-      const params = new URLSearchParams();
-      params.set('tab', tabMap[activeTab]);
-      if (filters.provider) params.set('provider', filters.provider);
-      if (filters.model) params.set('modelName', filters.model);
-      if (filters.service_type) params.set('serviceType', filters.service_type);
-      if (filters.input_price) {
-        params.set('minInputCost', filters.input_price);
-      }
-      if (filters.output_price) {
-        params.set('minOutputCost', filters.output_price);
-      }
+      const workersCfg = await safeApiJson<Record<string, any>>('/api/admin/workers-config');
+      const rows = ['image', 'chat', 'video', 'tts', 'ocr']
+        .map((feature) => {
+          const cfg = workersCfg?.[feature];
+          if (!cfg) return null;
+          return {
+            id: String(cfg.feature || feature),
+            provider_name: String(cfg.primaryWorkerKey || ''),
+            model_name: String(cfg.modelSourceKey || ''),
+            service_type: String(cfg.feature || feature),
+            billing_unit: 'config',
+            is_active: Boolean(cfg.enabled ?? true),
+            raw_cost_input_usd: null,
+            raw_cost_output_usd: null,
+            raw_cost_single_usd: null,
+            usd_try_rate: 0,
+            raw_cost_input_try: null,
+            raw_cost_output_try: null,
+            raw_cost_single_try: null,
+            profit_multiplier: 1,
+            sale_cost_input_usd: null,
+            sale_cost_output_usd: null,
+            sale_cost_single_usd: null,
+            sale_cost_input_try: null,
+            sale_cost_output_try: null,
+            sale_cost_single_try: null,
+            sale_credit_input: null,
+            sale_credit_output: null,
+            sale_credit_single: null,
+            metadata_json: cfg,
+            last_rate_sync_at: String(cfg.updatedAt || new Date().toISOString()),
+            last_price_sync_at: String(cfg.updatedAt || new Date().toISOString()),
+            created_at: String(cfg.updatedAt || new Date().toISOString()),
+            updated_at: String(cfg.updatedAt || new Date().toISOString()),
+          } as ModelRecord;
+        })
+        .filter(Boolean) as ModelRecord[];
 
-      const res = await fetch(`/api/admin/models?${params.toString()}`);
-      if (!res.ok) {
-        let msg = 'Modeller alınamadı';
-        try {
-          const data = await res.json();
-          if (data.error) msg = data.error;
-        } catch (e) {}
-        throw new Error(msg);
-      }
-      const data = await res.json();
-      setModels(data);
+      setModels(rows.filter((m: any) => {
+        if (filters.provider && !flexibleMatch(filters.provider, m.provider_name)) return false;
+        if (filters.model && !flexibleMatch(filters.model, m.model_name)) return false;
+        if (filters.service_type && !flexibleMatch(filters.service_type, m.service_type)) return false;
+        return true;
+      }));
     } catch (error: any) {
       toast.error(error.message);
     } finally {
@@ -172,17 +211,8 @@ export default function AdminModels() {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await fetch('/api/admin/models/sync', { method: 'POST' });
-      if (!res.ok) {
-        let errMsg = 'Senkronizasyon başarısız';
-        try {
-          const data = await res.json();
-          if (data.error) errMsg = data.error;
-        } catch (e) {}
-        throw new Error(errMsg);
-      }
-      toast.success('Fiyatlar ve kur başarıyla güncellendi');
       await fetchModels();
+      toast.success('Workers tabanlı model konfigürasyonu yenilendi');
     } catch (error: any) {
       toast.error(error.message);
     } finally {
@@ -192,16 +222,26 @@ export default function AdminModels() {
 
   const handleUpdateModel = async (id: string, updates: Partial<ModelRecord>) => {
     try {
-      const res = await fetch(`/api/admin/models/${id}`, {
+      const current = models.find((m) => m.id === id);
+      if (!current) return;
+      const cfgPatch: Record<string, any> = { [id]: {} };
+      if (updates.provider_name !== undefined) cfgPatch[id].primaryWorkerKey = updates.provider_name;
+      if (updates.model_name !== undefined) cfgPatch[id].modelSourceKey = updates.model_name;
+      if (updates.is_active !== undefined) cfgPatch[id].enabled = updates.is_active;
+
+      if (!Object.keys(cfgPatch[id]).length) {
+        toast('Bu ekranda yalnız Worker Servis Adresi / Model Kaynağı / Aktif-Pasif alanları güncellenir.');
+        return;
+      }
+
+      await safeApiJson('/api/admin/workers-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
+        body: JSON.stringify(cfgPatch),
       });
-      if (!res.ok) throw new Error('Güncelleme başarısız');
-      
-      const { model } = await res.json();
-      setModels(prev => prev.map(m => m.id === id ? model : m));
-      toast.success('Model güncellendi');
+
+      setModels(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
+      toast.success('Model kaynağı güncellendi');
     } catch (error: any) {
       toast.error(error.message);
     }
@@ -212,15 +252,26 @@ export default function AdminModels() {
       toast.error('Lütfen en az bir model seçin');
       return;
     }
-    
+
     try {
-      const res = await fetch('/api/admin/models/bulk/update', {
+      const patch: Record<string, any> = {};
+      for (const id of selectedIds) {
+        patch[id] = {};
+        if (updates.provider_name !== undefined) patch[id].primaryWorkerKey = updates.provider_name;
+        if (updates.model_name !== undefined) patch[id].modelSourceKey = updates.model_name;
+        if (updates.is_active !== undefined) patch[id].enabled = updates.is_active;
+      }
+      const hasAny = Object.values(patch).some((v: any) => Object.keys(v || {}).length > 0);
+      if (!hasAny) {
+        toast('Toplu işlemde yalnız Worker Servis Adresi / Model Kaynağı / Aktif-Pasif alanları desteklenir.');
+        return;
+      }
+
+      await safeApiJson('/api/admin/workers-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedIds), updates })
+        body: JSON.stringify(patch),
       });
-      
-      if (!res.ok) throw new Error('Toplu güncelleme başarısız');
       toast.success('Seçili modeller güncellendi');
       setSelectedIds(new Set());
       await fetchModels();
@@ -741,7 +792,7 @@ export default function AdminModels() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">Üretim Modelleri ve Fiyatlandırma</h1>
-          <p className="text-sm text-zinc-500 mt-1">Sistemdeki tüm yapay zeka modellerini, maliyetlerini ve satış kredilerini yönetin.</p>
+          <p className="text-sm text-zinc-500 mt-1">Modeller, sadece /admin/workers içindeki feature kayıtlarından (Model Kaynağı + Worker Servis Adresi) türetilir.</p>
         </div>
         <button
           onClick={handleSync}
