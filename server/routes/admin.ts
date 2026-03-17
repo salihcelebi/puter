@@ -97,14 +97,24 @@ adminRouter.post('/users/:id/credits', requirePermission('manage_credits'), asyn
     await kv.set(`users:${user.id}`, user);
 
     const ledgerId = `creditLedger:${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const nowIso = new Date().toISOString();
+    const previousBalance = Number(user.toplam_kredi || 0) - delta;
     await kv.set(ledgerId, {
       id: ledgerId,
+      kullanici_id: user.id,
       userId: user.id,
+      islem_tipi: action === 'add' ? 'adjustment' : 'usage',
+      action: action === 'add' ? 'topup' : 'usage',
+      miktar: delta,
       amount: parsedAmount,
-      action,
+      onceki_bakiye: Math.max(0, previousBalance),
+      sonraki_bakiye: nextBalance,
+      aciklama: reason || 'Admin kredi işlemi',
       reason: reason || 'Admin kredi işlemi',
-      createdAt: new Date().toISOString(),
+      created_at: nowIso,
+      createdAt: nowIso,
       actorId: req.user?.id || null,
+      muhasebe_notu: 'Owner Kaynağı: me.puter | Kullanıcı Kredisi: uygulama içi bakiye',
     });
 
     return res.json({ success: true, newBalance: nextBalance });

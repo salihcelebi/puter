@@ -119,10 +119,10 @@ export default function AdminModels() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/admin/models/stats');
+      const res = await fetch('/models');
       if (res.ok) {
         const data = await res.json();
-        setStats(data);
+        setStats(Array.isArray(data?.models) ? data.models : []);
       }
     } catch (error) {
       console.error('İstatistikler alınamadı', error);
@@ -132,36 +132,45 @@ export default function AdminModels() {
   const fetchModels = async () => {
     setLoading(true);
     try {
-      const tabMap: Record<string, string> = {
-        active: 'active',
-        prices: 'raw',
-        inactive: 'inactive',
-        popular: 'favorites',
-        credits: 'sales',
-      };
-      const params = new URLSearchParams();
-      params.set('tab', tabMap[activeTab]);
-      if (filters.provider) params.set('provider', filters.provider);
-      if (filters.model) params.set('modelName', filters.model);
-      if (filters.service_type) params.set('serviceType', filters.service_type);
-      if (filters.input_price) {
-        params.set('minInputCost', filters.input_price);
-      }
-      if (filters.output_price) {
-        params.set('minOutputCost', filters.output_price);
-      }
-
-      const res = await fetch(`/api/admin/models?${params.toString()}`);
-      if (!res.ok) {
-        let msg = 'Modeller alınamadı';
-        try {
-          const data = await res.json();
-          if (data.error) msg = data.error;
-        } catch (e) {}
-        throw new Error(msg);
-      }
-      const data = await res.json();
-      setModels(data);
+      const res = await fetch('/models');
+      if (!res.ok) throw new Error('models-worker.js kaynağına erişilemedi');
+      const payload = await res.json();
+      const rows = Array.isArray(payload?.models) ? payload.models : [];
+      const mapped = rows.map((m: any) => ({
+        id: String(m.id || m.modelId || `${m.provider}_${m.modelName}`),
+        provider_name: String(m.provider || m.provider_name || ''),
+        model_name: String(m.modelName || m.model_name || ''),
+        service_type: String(m.serviceType || m.service_type || 'image'),
+        billing_unit: String(m.billingUnit || m.billing_unit || 'image'),
+        is_active: true,
+        raw_cost_input_usd: m.inputPrice ?? null,
+        raw_cost_output_usd: m.outputPrice ?? null,
+        raw_cost_single_usd: m.imagePrice ?? null,
+        usd_try_rate: 0,
+        raw_cost_input_try: null,
+        raw_cost_output_try: null,
+        raw_cost_single_try: null,
+        profit_multiplier: 1,
+        sale_cost_input_usd: null,
+        sale_cost_output_usd: null,
+        sale_cost_single_usd: null,
+        sale_cost_input_try: null,
+        sale_cost_output_try: null,
+        sale_cost_single_try: null,
+        sale_credit_input: null,
+        sale_credit_output: null,
+        sale_credit_single: null,
+        metadata_json: m,
+        last_rate_sync_at: new Date().toISOString(),
+        last_price_sync_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }));
+      setModels(mapped.filter((m: any) => {
+        if (filters.provider && !flexibleMatch(filters.provider, m.provider_name)) return false;
+        if (filters.model && !flexibleMatch(filters.model, m.model_name)) return false;
+        return true;
+      }));
     } catch (error: any) {
       toast.error(error.message);
     } finally {
@@ -741,7 +750,7 @@ export default function AdminModels() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">Üretim Modelleri ve Fiyatlandırma</h1>
-          <p className="text-sm text-zinc-500 mt-1">Sistemdeki tüm yapay zeka modellerini, maliyetlerini ve satış kredilerini yönetin.</p>
+          <p className="text-sm text-zinc-500 mt-1">Sistemdeki tüm yapay zeka modellerini, maliyetlerini ve satış kredilerini yönetin. Kaynak: models-worker.js (/models)</p>
         </div>
         <button
           onClick={handleSync}
