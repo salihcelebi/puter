@@ -284,7 +284,7 @@ export default function AdminUsers() {
 
   const handleBulkApply = async () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz?`)) return;
+    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz??`)) return;
 
     try {
       const res = await fetch('/api/admin/users/bulk-access', {
