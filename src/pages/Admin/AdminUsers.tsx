@@ -105,7 +105,7 @@ export default function AdminUsers() {
         value: roleAdmin ? 'Admin' : user.rol || 'user',
         durum: roleAdmin ? 'basarili' : 'bilgi',
         aciklama: roleAdmin
-          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırır.'
+          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırırr.'
           : 'Normal kullanıcıda permission anahtarları daha kritik hale gelir.',
       },
       {
@@ -284,7 +284,7 @@ export default function AdminUsers() {
 
   const handleBulkApply = async () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz?`)) return;
+    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz??`)) return;
 
     try {
       const res = await fetch('/api/admin/users/bulk-access', {
