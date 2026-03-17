@@ -33,8 +33,10 @@ const defaultPermissionMap = (): PermissionMap => {
 export default function AdminUsers() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+
   const [creditAmount, setCreditAmount] = useState('');
   const [creditReason, setCreditReason] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -63,23 +65,137 @@ export default function AdminUsers() {
 
   const fetchUsers = async () => {
     try {
+      setLoading(true);
       const res = await fetch('/api/admin/users');
       if (!res.ok) throw new Error('Kullanıcılar alınamadı');
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
     } catch (error: any) {
-      toast.error(error.message);
+      toast.error(error.message || 'Kullanıcılar alınamadı');
     } finally {
       setLoading(false);
     }
   };
 
+  const filteredUsers = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return users;
+
+    return users.filter((u) => {
+      return [
+        u.email,
+        u.kullanici_adi,
+        u.gorunen_ad,
+        u.id,
+        u.rol,
+        u.permission_summary || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [users, searchTerm]);
+
+  const selectedPermissionSummary = useMemo(() => {
+    if (!selectedUser) return { acik: 0, kapali: PERMISSION_KEYS.length };
+    const safe = permissionsDraft;
+    const acik = PERMISSION_KEYS.filter((key) => Boolean(safe[key])).length;
+    return { acik, kapali: PERMISSION_KEYS.length - acik };
+  }, [selectedUser, permissionsDraft]);
+
+  function buildDiagnosis(user: User, test: TestResult | null): DiagnosisRow[] {
+    const safe = getSafePermissions({ ...user, permissions: permissionsDraft });
+    const hasMePuterPermission = ME_PUTER_KEYS.some((key) => safe[key]);
+    const allMePuterPermissions = ME_PUTER_KEYS.every((key) => safe[key]);
+    const roleAdmin = String(user.rol).toLowerCase() === 'admin';
+    const active = Boolean(user.aktif_mi);
+
+    const rows: DiagnosisRow[] = [
+      {
+        label: 'Kullanıcı Durumu',
+        value: active ? 'Aktif' : 'Pasif',
+        durum: active ? 'basarili' : 'hatali',
+        aciklama: active
+          ? 'Kullanıcı aktif durumda.'
+          : 'Pasif kullanıcı route aşamasında reddedilebilir.',
+      },
+      {
+        label: 'Rol',
+        value: roleAdmin ? 'Admin' : user.rol || 'user',
+        durum: roleAdmin ? 'basarili' : 'bilgi',
+        aciklama: roleAdmin
+          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırır.'
+          : 'Normal kullanıcıda permission anahtarları daha kritik hale gelir.',
+      },
+      {
+        label: 'me.puter İzinleri',
+        value: allMePuterPermissions
+          ? 'Tam Açık'
+          : hasMePuterPermission
+          ? 'Kısmen Açık'
+          : 'Kapalı',
+        durum: allMePuterPermissions ? 'basarili' : hasMePuterPermission ? 'uyari' : 'hatali',
+        aciklama: allMePuterPermissions
+          ? 'Sohbet, görsel, video, fotoğraftan video, ses ve müzik izinleri açık.'
+          : 'Permission denied hatasında ilk bakılacak yer burasıdır.',
+      },
+    ];
+
+    if (test) {
+      rows.push(
+        {
+          label: 'Son Test Durumu',
+          value: `${test.type} / ${test.status}`,
+          durum: test.ok ? 'basarili' : test.status === 403 || test.status === 401 ? 'hatali' : 'uyari',
+          aciklama: test.message,
+        },
+        {
+          label: 'Son Test Kodu',
+          value: test.code || 'Kod yok',
+          durum: test.ok ? 'basarili' : 'uyari',
+          aciklama: test.meaning,
+        },
+        {
+          label: 'İçerik Türü',
+          value: test.contentType || 'Bilinmiyor',
+          durum: 'bilgi',
+          aciklama: 'JSON yerine HTML dönüyorsa yanlış route veya fallback ihtimali vardır.',
+        }
+      );
+    } else {
+      rows.push({
+        label: 'Son Test Durumu',
+        value: 'Henüz çalıştırılmadı',
+        durum: 'bilgi',
+        aciklama: 'Hızlı test butonlarından biriyle anlık teşhis yapılabilir.',
+      });
+    }
+
+    return rows;
+  }
+
+  const refreshSelectedUser = async (userId: string) => {
+    const res = await fetch('/api/admin/users');
+    if (!res.ok) throw new Error('Kullanıcı yenilenemedi');
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : [];
+    setUsers(list);
+    const fresh = list.find((u: User) => u.id === userId);
+    if (fresh) {
+      setSelectedUser(fresh);
+      setPermissionsDraft(getSafePermissions(fresh));
+      setJsonDraft(prettifyJson(getSafePermissions(fresh)));
+      setDiagnosisRows(buildDiagnosis(fresh, lastTest));
+    }
+  };
+
   const toggleUserStatus = async (userId: string, currentStatus: boolean) => {
     try {
+      setBusy(true);
       const res = await fetch(`/api/admin/users/${userId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aktif_mi: !currentStatus })
+        body: JSON.stringify({ aktif_mi: !currentStatus }),
       });
 
       if (!res.ok) throw new Error('Durum güncellenemedi');
@@ -87,7 +203,9 @@ export default function AdminUsers() {
       setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, aktif_mi: !currentStatus } : u));
       toast.success('Kullanıcı durumu güncellendi');
     } catch (error: any) {
-      toast.error(error.message);
+      toast.error(error.message || 'Durum güncellenemedi');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -95,6 +213,7 @@ export default function AdminUsers() {
     if (!selectedUser || !creditAmount) return;
 
     try {
+      setBusy(true);
       const res = await fetch(`/api/admin/users/${selectedUser.id}/credits`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -111,6 +230,8 @@ export default function AdminUsers() {
       await fetchUsers();
     } catch (error: any) {
       toast.error(error.message);
+    } finally {
+      setSavingAccess(false);
     }
   };
 
@@ -233,6 +354,22 @@ export default function AdminUsers() {
             className="w-full pl-9 pr-4 py-2 bg-white border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-black"
           />
         </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {[['all', 'Tümü'], ['admins', 'Sadece adminler'], ['users', 'Sadece userlar'], ['active', 'Sadece aktif'], ['passive', 'Sadece pasif'], ['permissionDenied', 'Sadece permission denied yaşayanlar']].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setActiveFilter(key as any)}
+            className={`px-3 py-2 rounded-lg border text-sm ${activeFilter === key ? 'bg-black text-white border-black' : 'bg-white border-zinc-200 text-zinc-700'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex gap-2 items-center">
+        <button onClick={handleBulkApply} disabled={selectedIds.size === 0} className="px-3 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50">Seçililere Toplu Uygula</button>
+        <span className="text-sm text-zinc-500">Seçili kullanıcı: {selectedIds.size}</span>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -295,14 +432,8 @@ export default function AdminUsers() {
                       <button onClick={() => toggleUserStatus(user.id, user.aktif_mi)} className={`p-2 rounded-lg ${user.aktif_mi ? 'text-red-400 hover:text-red-600 hover:bg-red-50' : 'text-emerald-400 hover:text-emerald-600 hover:bg-emerald-50'}`} title={user.aktif_mi ? 'Pasife Al' : 'Aktifleştir'}>
                         {user.aktif_mi ? <ShieldOff className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
                       </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                    </div>
+                  )}
 
       {selectedUser && (
         <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedUser(null)}>
