@@ -27,6 +27,7 @@ import { aiRouter } from "./routes/ai.js";
 import { adminRouter } from "./routes/admin.js";
 import { assetsRouter } from "./routes/assets.js";
 import { userRouter } from "./routes/user.js";
+import adminPermissionsRouter from './routes/adminPermissions.js';
 import { fileSystem } from "./db/fs.js";
 import { authService } from "./services/authService.js";
 import { ensureModelsSeeded } from "./db/modeller.js";
@@ -78,6 +79,7 @@ export async function createApiApp() {
   app.use("/api/admin", adminRouter);
   app.use("/api/assets", assetsRouter);
   app.use("/api/user", userRouter);
+  app.use('/api', adminPermissionsRouter);
 
   app.use('/api', (req, res) => {
     res.status(404).json({
