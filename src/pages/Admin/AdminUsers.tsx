@@ -45,12 +45,22 @@ async function safeJsonResponse<T>(url: string, init?: RequestInit): Promise<T> 
   return data as T;
 }
 
+const AI_PERMISSIONS = ['use_chat', 'use_image', 'use_video', 'use_photo_to_video', 'use_tts', 'use_music'];
+const ADMIN_PERMISSIONS = ['access_admin', 'manage_users', 'manage_credits', 'manage_billing'];
+
+const defaultPermissionMap = (): PermissionMap => {
+  const map: PermissionMap = {};
+  [...AI_PERMISSIONS, ...ADMIN_PERMISSIONS].forEach((key) => { map[key] = false; });
+  return map;
+};
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+
   const [creditAmount, setCreditAmount] = useState('');
   const [creditReason, setCreditReason] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -91,12 +101,106 @@ export default function AdminUsers() {
     }
   };
 
+  const selectedPermissionSummary = useMemo(() => {
+    if (!selectedUser) return { acik: 0, kapali: PERMISSION_KEYS.length };
+    const safe = permissionsDraft;
+    const acik = PERMISSION_KEYS.filter((key) => Boolean(safe[key])).length;
+    return { acik, kapali: PERMISSION_KEYS.length - acik };
+  }, [selectedUser, permissionsDraft]);
+
+  function buildDiagnosis(user: User, test: TestResult | null): DiagnosisRow[] {
+    const safe = getSafePermissions({ ...user, permissions: permissionsDraft });
+    const hasMePuterPermission = ME_PUTER_KEYS.some((key) => safe[key]);
+    const allMePuterPermissions = ME_PUTER_KEYS.every((key) => safe[key]);
+    const roleAdmin = String(user.rol).toLowerCase() === 'admin';
+    const active = Boolean(user.aktif_mi);
+
+    const rows: DiagnosisRow[] = [
+      {
+        label: 'Kullanıcı Durumu',
+        value: active ? 'Aktif' : 'Pasif',
+        durum: active ? 'basarili' : 'hatali',
+        aciklama: active
+          ? 'Kullanıcı aktif durumda.'
+          : 'Pasif kullanıcı route aşamasında reddedilebilir.',
+      },
+      {
+        label: 'Rol',
+        value: roleAdmin ? 'Admin' : user.rol || 'user',
+        durum: roleAdmin ? 'basarili' : 'bilgi',
+        aciklama: roleAdmin
+          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırırr.'
+          : 'Normal kullanıcıda permission anahtarları daha kritik hale gelir.',
+      },
+      {
+        label: 'me.puter İzinleri',
+        value: allMePuterPermissions
+          ? 'Tam Açık'
+          : hasMePuterPermission
+          ? 'Kısmen Açık'
+          : 'Kapalı',
+        durum: allMePuterPermissions ? 'basarili' : hasMePuterPermission ? 'uyari' : 'hatali',
+        aciklama: allMePuterPermissions
+          ? 'Sohbet, görsel, video, fotoğraftan video, ses ve müzik izinleri açık.'
+          : 'Permission denied hatasında ilk bakılacak yer burasıdır.',
+      },
+    ];
+
+    if (test) {
+      rows.push(
+        {
+          label: 'Son Test Durumu',
+          value: `${test.type} / ${test.status}`,
+          durum: test.ok ? 'basarili' : test.status === 403 || test.status === 401 ? 'hatali' : 'uyari',
+          aciklama: test.message,
+        },
+        {
+          label: 'Son Test Kodu',
+          value: test.code || 'Kod yok',
+          durum: test.ok ? 'basarili' : 'uyari',
+          aciklama: test.meaning,
+        },
+        {
+          label: 'İçerik Türü',
+          value: test.contentType || 'Bilinmiyor',
+          durum: 'bilgi',
+          aciklama: 'JSON yerine HTML dönüyorsa yanlış route veya fallback ihtimali vardır.',
+        }
+      );
+    } else {
+      rows.push({
+        label: 'Son Test Durumu',
+        value: 'Henüz çalıştırılmadı',
+        durum: 'bilgi',
+        aciklama: 'Hızlı test butonlarından biriyle anlık teşhis yapılabilir.',
+      });
+    }
+
+    return rows;
+  }
+
+  const refreshSelectedUser = async (userId: string) => {
+    const res = await fetch('/api/admin/users');
+    if (!res.ok) throw new Error('Kullanıcı yenilenemedi');
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : [];
+    setUsers(list);
+    const fresh = list.find((u: User) => u.id === userId);
+    if (fresh) {
+      setSelectedUser(fresh);
+      setPermissionsDraft(getSafePermissions(fresh));
+      setJsonDraft(prettifyJson(getSafePermissions(fresh)));
+      setDiagnosisRows(buildDiagnosis(fresh, lastTest));
+    }
+  };
+
   const toggleUserStatus = async (userId: string, currentStatus: boolean) => {
     try {
+      setBusy(true);
       const res = await fetch(`/api/admin/users/${userId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aktif_mi: !currentStatus })
+        body: JSON.stringify({ aktif_mi: !currentStatus }),
       });
 
       if (!res.ok) throw new Error('Durum güncellenemedi');
@@ -104,7 +208,9 @@ export default function AdminUsers() {
       setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, aktif_mi: !currentStatus } : u));
       toast.success('Kullanıcı durumu güncellendi');
     } catch (error: any) {
-      toast.error(error.message);
+      toast.error(error.message || 'Durum güncellenemedi');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -112,6 +218,7 @@ export default function AdminUsers() {
     if (!selectedUser || !creditAmount) return;
 
     try {
+      setBusy(true);
       const res = await fetch(`/api/admin/users/${selectedUser.id}/credits`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -128,6 +235,8 @@ export default function AdminUsers() {
       await fetchUsers();
     } catch (error: any) {
       toast.error(error.message);
+    } finally {
+      setSavingAccess(false);
     }
   };
 
