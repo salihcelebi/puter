@@ -99,6 +99,16 @@ aiRouter.get('/models', async (req, res) => {
   }
 });
 
+
+aiRouter.get('/effective-config/:feature', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const config = await aiService.getEffectiveFeatureConfig(req.params.feature);
+    return res.json({ feature: req.params.feature, config });
+  } catch (error: any) {
+    return sendError(res, error);
+  }
+});
+
 aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId, conversationId } = req.body || {};
@@ -109,7 +119,7 @@ aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: A
       userId: req.user.id,
       modelId,
       clientRequestId,
-      payload: { prompt, conversationId },
+      payload: { prompt, conversationId, sourcePage: req.headers['x-source-page'] || null },
     });
 
     res.json(result);
@@ -128,7 +138,7 @@ aiRouter.post('/image', requireAuth, requirePermission('use_image'), async (req:
       userId: req.user.id,
       modelId,
       clientRequestId,
-      payload: { prompt },
+      payload: { prompt, sourcePage: req.headers['x-source-page'] || null },
     });
 
     res.json(result);
@@ -150,6 +160,7 @@ aiRouter.post('/tts', requireAuth, requirePermission('use_tts'), async (req: Aut
       payload: {
         text,
         voiceName: voiceName || voice || 'default',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 
@@ -173,6 +184,7 @@ aiRouter.post('/video', requireAuth, requirePermission('use_video'), async (req:
         prompt,
         duration: Number(duration || 5),
         aspectRatio: aspectRatio || '16:9',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 
@@ -202,6 +214,7 @@ aiRouter.post('/photo-to-video', requireAuth, requirePermission('use_photo_to_vi
         imageUrl: resolvedImageUrl,
         duration: Number(duration || 5),
         aspectRatio: aspectRatio || '16:9',
+        sourcePage: req.headers['x-source-page'] || null,
       },
     });
 
