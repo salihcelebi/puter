@@ -304,7 +304,7 @@ SATIR SAYISI: 82
 
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
 - İç bağımlılıklar: `server/middleware/auth.ts`, `server/services/aiService.ts`, `server/services/musicAdapter.ts`, `server/db/kv.ts`.  
-- Kullanan frontend sayfaları: `src/pages/AI/Chat.tsx`, `src/pages/AI/ImageGen.tsx`, `src/pages/AI/VideoGen.tsx`, `src/pages/AI/PhotoToVideo.tsx`, `src/pages/AI/TTS.tsx`, `src/pages/AI/Music.tsx`.  
+- Kullanan frontend sayfaları: `src/pages/AI/Chat.tsx`, `src/pages/AI/ImageGen.tsx`, `src/pages/AI/VideoGen.tsx`, `src/pages/AI/PhotoToVideo.tsx`, `src/pages/AI/TTS.tsx`.
 - Mount noktası: `server.ts` içindeki `/api/ai`.  
 
 5. EK NOT  
@@ -330,10 +330,9 @@ SATIR SAYISI: 31
 
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
 - İç bağımlılıklar: `server/db/kv.ts`, `server/services/aiService.ts`.  
-- Kullanan dosya: `server/routes/ai.ts`.  
-- Tüketen frontend sayfası: `src/pages/AI/Music.tsx`.  
+- Kullanan dosya: `server/routes/ai.ts`.
 
-5. EK NOT  
+5. EK NOT
 - Bu snapshot’ta gerçek müzik üretimi yok; capability endpoint ile kontrollü pasif durum döner.  
 - Asset metadata kaydı oluşur ama fiziksel dosya yazılmaz.  
 - AI tarafında yardımcı servis dosyasıdır.  
@@ -653,7 +652,7 @@ SATIR SAYISI: 71
 
 4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
 - İç bağımlılık: `src/context/AuthContext.tsx`.  
-- Kullanan sayfalar: `src/pages/AI/Chat.tsx`, `src/pages/AI/ImageGen.tsx`, `src/pages/AI/VideoGen.tsx`, `src/pages/AI/PhotoToVideo.tsx`, `src/pages/AI/TTS.tsx`, `src/pages/AI/Music.tsx`.  
+- Kullanan sayfalar: `src/pages/AI/Chat.tsx`, `src/pages/AI/ImageGen.tsx`, `src/pages/AI/VideoGen.tsx`, `src/pages/AI/PhotoToVideo.tsx`, `src/pages/AI/TTS.tsx`.
 - Harici bağımlılık: React.  
 
 5. EK NOT  
@@ -1138,35 +1137,7 @@ SATIR SAYISI: 183
 
 ████████████████████████████
 
-DOSYA ADI: `src/pages/AI/Music.tsx`  
-SATIR SAYISI: 178
-
-1. AMACI  
-- Bu dosya metin tabanlı müzik üretim ekranını sağlar.  
-- Kullanıcı prompt’unu backend’e yollar ve ses sonucunu oynatır.  
-- Sağ panel yapısını `AILayout` ile paylaşır.  
-
-2. İÇİNDE BULUNAN FONKSİYONLAR VE AMAÇLARI  
-- `Music()`: Sayfa ekranını render eder.  
-- `handleGenerate()`: `/api/ai/music` çağrısı yapar.  
-- `settings`: Sağ panel ayarlarını üretir.  
-
-3. DOSYA YOLU  
-- `src/pages/AI/Music.tsx`
-
-4. BAĞIMLILIKLAR / DOSYALAR ARASI İLİŞKİLER  
-- İç bağımlılık: `src/components/AILayout.tsx`.  
-- Backend bağımlılığı: `server/routes/ai.ts`, `server/services/musicAdapter.ts`.  
-- Harici bağımlılık: React.  
-
-5. EK NOT  
-- Müzik tarafı capability-gated durumdadır; sahte başarı veya sample mp3 oynatımı hedeflenmez.  
-- Gerçek provider çağrısı bu snapshot’ta yoktur.  
-- Kısmen simülasyonlu AI sayfasıdır.  
-
-████████████████████████████
-
-DOSYA ADI: `src/pages/Admin/AdminDashboard.tsx`  
+DOSYA ADI: `src/pages/Admin/AdminDashboard.tsx`
 SATIR SAYISI: 119
 
 1. AMACI  
@@ -2058,10 +2029,10 @@ authService.ts      aiService.ts       billingService.ts       kv.ts            
     -> JWT cookie
     -> AuthContext user state
 
-[Chat / Image / Video / TTS / Music]
+[Chat / Image / Video / TTS]
     -> /api/ai/*
     -> requireAuth
-    -> aiService.ts or musicAdapter.ts
+    -> aiService.ts
     -> kredi kontrolü
     -> üretim / simülasyon
     -> usage log

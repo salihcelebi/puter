@@ -45,15 +45,6 @@ async function safeJsonResponse<T>(url: string, init?: RequestInit): Promise<T> 
   return data as T;
 }
 
-const AI_PERMISSIONS = ['use_chat', 'use_image', 'use_video', 'use_photo_to_video', 'use_tts', 'use_music'];
-const ADMIN_PERMISSIONS = ['access_admin', 'manage_users', 'manage_credits', 'manage_billing'];
-
-const defaultPermissionMap = (): PermissionMap => {
-  const map: PermissionMap = {};
-  [...AI_PERMISSIONS, ...ADMIN_PERMISSIONS].forEach((key) => { map[key] = false; });
-  return map;
-};
-
 export default function AdminUsers() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);

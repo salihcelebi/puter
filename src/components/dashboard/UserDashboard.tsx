@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Bell, User, Zap, MessageSquare, Image, Video, Mic, Music, CreditCard } from 'lucide-react';
+import { Search, Bell, User, Zap, MessageSquare, Image, Video, Mic, CreditCard } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Link } from 'react-router-dom';
 
@@ -51,7 +51,6 @@ export default function UserDashboard() {
           { name: 'Video Üret', icon: Video, path: '/video' },
           { name: 'Foto/Video', icon: Video, path: '/fotograftan-video' },
           { name: 'Seslendirme', icon: Mic, path: '/tts' },
-          { name: 'Müzik', icon: Music, path: '/muzik' },
           { name: 'Kredi Al', icon: CreditCard, path: '/odeme-paketleri' },
         ].map((action) => (
           <Link key={action.name} to={action.path} className="p-4 md:p-6 bg-white border border-zinc-100 rounded-2xl flex flex-col md:flex-row items-center justify-center md:justify-start gap-2 md:gap-4 hover:shadow-lg hover:border-emerald-200 transition cursor-pointer text-center md:text-left">
