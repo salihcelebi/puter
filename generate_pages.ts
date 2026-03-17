@@ -13,7 +13,6 @@ const pages = [
   { path: 'src/pages/AI/VideoGen.tsx', name: 'VideoGen' },
   { path: 'src/pages/AI/PhotoToVideo.tsx', name: 'PhotoToVideo' },
   { path: 'src/pages/AI/TTS.tsx', name: 'TTS' },
-  { path: 'src/pages/AI/Music.tsx', name: 'Music' },
   { path: 'src/pages/Admin/AdminDashboard.tsx', name: 'AdminDashboard' },
   { path: 'src/pages/Admin/AdminUsers.tsx', name: 'AdminUsers' },
   { path: 'src/pages/Admin/AdminModels.tsx', name: 'AdminModels' },
