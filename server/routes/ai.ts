@@ -102,8 +102,15 @@ aiRouter.get('/models', async (req, res) => {
 
 aiRouter.get('/effective-config/:feature', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const config = await aiService.getEffectiveFeatureConfig(req.params.feature);
-    return res.json({ feature: req.params.feature, config });
+    const requestedFeature = String(req.params.feature || '').trim().toLowerCase();
+    const allowed = new Set(['image', 'chat', 'video', 'tts', 'ocr', 'phototovideo']);
+    if (!allowed.has(requestedFeature)) {
+      return res.status(400).json({ error: 'Geçersiz feature parametresi', code: 'INVALID_FEATURE' });
+    }
+
+    const normalized = requestedFeature === 'phototovideo' ? 'video' : requestedFeature;
+    const config = await aiService.getEffectiveFeatureConfig(normalized);
+    return res.json({ ok: true, feature: normalized, config });
   } catch (error: any) {
     return sendError(res, error);
   }

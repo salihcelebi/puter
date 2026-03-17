@@ -30,10 +30,34 @@ const defaultPermissionMap = (): PermissionMap => {
   return map;
 };
 
+async function safeJsonResponse<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+
+  // DELILX: Bu koruma beyaz ekranı engellemek için eklendi; HTML fallback ve bozuk JSON doğrudan yakalanır.
+  if (/<!doctype|<html/i.test(text)) throw new Error('Beklenmeyen HTML yanıtı alındı.');
+  if (!contentType.includes('application/json')) throw new Error('JSON yerine farklı içerik döndü.');
+
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('Geçersiz JSON yanıtı alındı.'); }
+  if (!res.ok) throw new Error(data?.error || 'İstek başarısız');
+  return data as T;
+}
+
+const AI_PERMISSIONS = ['use_chat', 'use_image', 'use_video', 'use_photo_to_video', 'use_tts', 'use_music'];
+const ADMIN_PERMISSIONS = ['access_admin', 'manage_users', 'manage_credits', 'manage_billing'];
+
+const defaultPermissionMap = (): PermissionMap => {
+  const map: PermissionMap = {};
+  [...AI_PERMISSIONS, ...ADMIN_PERMISSIONS].forEach((key) => { map[key] = false; });
+  return map;
+};
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
@@ -65,13 +89,13 @@ export default function AdminUsers() {
 
   const fetchUsers = async () => {
     try {
-      setLoading(true);
-      const res = await fetch('/api/admin/users');
-      if (!res.ok) throw new Error('Kullanıcılar alınamadı');
-      const data = await res.json();
+      setLoadError('');
+      const data = await safeJsonResponse<any[]>('/api/admin/users');
       setUsers(Array.isArray(data) ? data : []);
     } catch (error: any) {
-      toast.error(error.message || 'Kullanıcılar alınamadı');
+      setLoadError(error.message || 'Kullanıcı listesi alınamadı');
+      toast.error(error.message || 'Kullanıcı listesi alınamadı');
+      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -284,7 +308,7 @@ export default function AdminUsers() {
 
   const handleBulkApply = async () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz??`)) return;
+    if (!window.confirm(`Toplu işlem ${selectedIds.size} kullanıcıya uygulanacak. Onaylıyor musunuz?`)) return;
 
     try {
       const res = await fetch('/api/admin/users/bulk-access', {
@@ -354,6 +378,13 @@ export default function AdminUsers() {
         <span className="text-sm text-zinc-500">Seçili kullanıcı: {selectedIds.size}</span>
       </div>
 
+      {loadError ? (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4">
+          <div className="font-semibold">Kullanıcı verisi alınamadı</div>
+          <div className="text-sm mt-1">{loadError}</div>
+        </div>
+      ) : null}
+
       <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -390,7 +421,7 @@ export default function AdminUsers() {
                     </td>
                     <td className="px-6 py-4"><span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${user.rol === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-zinc-100 text-zinc-700'}`}>{user.rol}</span></td>
                     <td className="px-6 py-4"><div className="font-medium text-zinc-900">{user.toplam_kredi} Kredi</div><div className="text-zinc-500">{user.kullanilan_kredi} Harcanan</div></td>
-                    <td className="px-6 py-4 text-zinc-500">{new Date(user.olusturma_tarihi).toLocaleDateString('tr-TR')}</td>
+                    <td className="px-6 py-4 text-zinc-500">{user.olusturma_tarihi ? new Date(user.olusturma_tarihi).toLocaleDateString('tr-TR') : '-'}</td>
                     <td className="px-6 py-4"><span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${user.aktif_mi ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{user.aktif_mi ? 'Aktif' : 'Pasif'}</span></td>
                     <td className="px-6 py-4 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => setSelectedUser(user)} className="p-2 text-zinc-400 hover:text-black hover:bg-zinc-100 rounded-lg" title="Detay Paneli"><Plus className="w-4 h-4" /></button>

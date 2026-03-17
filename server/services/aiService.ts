@@ -19,15 +19,17 @@ const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
     feature: 'image',
     selectedPage: 'image.tsx',
     compatiblePages: ['image.tsx'],
-    primaryWorkerKey: 'imgs',
+    primaryWorkerKey: 'im',
     fallbackWorkerKeys: ['api-cagrilari'],
-    modelSourceKey: 'models-worker',
-    customWorkerUrl: '',
-    customModelUrl: '',
+    modelSourceKey: 'im',
+    customWorkerUrl: 'https://im.puter.work',
+    customModelUrl: 'https://im.puter.work/models',
     useDefault: true,
     enabled: true,
     contractVersion: 'v1',
     shortDescription: 'Varsayılan görsel worker zinciri',
+    rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js',
+    editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js',
   },
   chat: {
     feature: 'chat',
@@ -35,7 +37,7 @@ const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
     compatiblePages: ['Chat.tsx', 'Chat1.tsx'],
     primaryWorkerKey: 'api-cagrilari',
     fallbackWorkerKeys: [],
-    modelSourceKey: 'models-worker',
+    modelSourceKey: 'im',
     customWorkerUrl: '',
     customModelUrl: '',
     useDefault: true,
@@ -49,7 +51,7 @@ const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
     compatiblePages: ['video.tsx'],
     primaryWorkerKey: 'api-cagrilari',
     fallbackWorkerKeys: [],
-    modelSourceKey: 'models-worker',
+    modelSourceKey: 'im',
     customWorkerUrl: '',
     customModelUrl: '',
     useDefault: true,
@@ -63,7 +65,7 @@ const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
     compatiblePages: ['TTS.tsx'],
     primaryWorkerKey: 'api-cagrilari',
     fallbackWorkerKeys: [],
-    modelSourceKey: 'models-worker',
+    modelSourceKey: 'im',
     customWorkerUrl: '',
     customModelUrl: '',
     useDefault: true,
@@ -77,7 +79,7 @@ const DEFAULT_WORKERS_CONFIG: Record<FeatureConfigKey, any> = {
     compatiblePages: ['image.tsx'],
     primaryWorkerKey: 'api-cagrilari',
     fallbackWorkerKeys: [],
-    modelSourceKey: 'models-worker',
+    modelSourceKey: 'im',
     customWorkerUrl: '',
     customModelUrl: '',
     useDefault: true,
@@ -367,10 +369,21 @@ export const aiService = {
     const stored = (await kv.get('settings:workers')) || {};
     const merged: Record<string, any> = {};
     for (const key of Object.keys(DEFAULT_WORKERS_CONFIG)) {
-      merged[key] = {
+      const row = {
         ...DEFAULT_WORKERS_CONFIG[key as FeatureConfigKey],
         ...(stored[key] || {}),
-      };
+      } as Record<string, any>;
+
+      // DELILX: image için legacy models-worker/ imgs kayıtları kırmadan okunur, yeni yazım im/im.puter.work'e normalize edilir.
+      if (key === 'image') {
+        if (String(row.modelSourceKey || '').toLowerCase() === 'models-worker') row.modelSourceKey = 'im';
+        if (String(row.primaryWorkerKey || '').toLowerCase() === 'imgs') row.primaryWorkerKey = 'im';
+        if (!String(row.customWorkerUrl || '').trim()) row.customWorkerUrl = 'https://im.puter.work';
+        if (!String(row.customModelUrl || '').trim()) row.customModelUrl = 'https://im.puter.work/models';
+        if (!String(row.rawCodeUrl || '').trim()) row.rawCodeUrl = 'https://turk.puter.site/workers/modeller/im.js';
+        if (!String(row.editCodeUrl || '').trim()) row.editCodeUrl = 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js';
+      }
+      merged[key] = row;
     }
     return merged;
   },

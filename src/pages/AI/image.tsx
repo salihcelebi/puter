@@ -136,8 +136,8 @@ type HistoryPayload = {
 
 type RatioObject = { w: number; h: number };
 
-const MODELS_BASE_URL = 'https://models-worker.puter.work';
-const IMGS_BASE_URL = 'https://imgs.puter.work';
+const DEFAULT_MODEL_SOURCE_URL = 'https://im.puter.work/models';
+const DEFAULT_IMAGE_WORKER_URL = 'https://im.puter.work';
 const POLL_MS = 1800;
 const TERMINAL = new Set<JobStatus>(['completed', 'failed', 'cancelled', 'failed_storage']);
 const DEFAULT_RATIO: RatioObject = { w: 1024, h: 1024 };
@@ -413,7 +413,23 @@ async function requestJson<T>(base: string, path: string, init?: RequestInit, re
         },
       });
       window.clearTimeout(timer);
-      const payload = await readEnvelope<T>(response);
+
+      const text = await response.text();
+      const contentType = response.headers.get('content-type') || '';
+      if (/<!doctype|<html/i.test(text)) {
+        throw new Error('Beklenmeyen HTML yanıtı alındı. Worker veya endpoint yönlendirmesini kontrol edin.');
+      }
+      if (!contentType.includes('application/json')) {
+        throw new Error('JSON beklenirken farklı içerik tipi döndü.');
+      }
+
+      let payload: WorkerEnvelope<T>;
+      try {
+        payload = text ? JSON.parse(text) as WorkerEnvelope<T> : ({ ok: false, code: 'EMPTY_BODY', data: null as unknown as T });
+      } catch {
+        throw new Error('Worker geçerli JSON döndürmedi.');
+      }
+
       if (!response.ok || payload.ok === false) {
         throw workerFailureFromEnvelope(payload, response.status);
       }
@@ -447,6 +463,9 @@ export default function ImagePage(): JSX.Element {
   const [error, setError] = useState('');
   const [errorBullets, setErrorBullets] = useState<string[]>([]);
   const [workerInfo, setWorkerInfo] = useState('');
+  const [effectiveConfig, setEffectiveConfig] = useState<any>(null);
+  const [modelSourceUrl, setModelSourceUrl] = useState<string>(DEFAULT_MODEL_SOURCE_URL);
+  const [imageWorkerUrl, setImageWorkerUrl] = useState<string>(DEFAULT_IMAGE_WORKER_URL);
 
   const pollRef = useRef<number | null>(null);
 
@@ -469,20 +488,41 @@ export default function ImagePage(): JSX.Element {
     }
   }, []);
 
+
+  const loadEffectiveConfig = useCallback(async () => {
+    try {
+      const response = await fetch('/api/ai/effective-config/image');
+      const text = await response.text();
+      const contentType = response.headers.get('content-type') || '';
+      if (/<!doctype|<html/i.test(text)) throw new Error('Effective config isteği HTML döndü.');
+      if (!contentType.includes('application/json')) throw new Error('Effective config JSON değil.');
+      const payload = JSON.parse(text);
+      const cfg = payload?.config || null;
+      setEffectiveConfig(cfg);
+      const resolvedModelSource = String(cfg?.customModelUrl || cfg?.customWorkerUrl || DEFAULT_MODEL_SOURCE_URL);
+      const resolvedWorkerUrl = String(cfg?.customWorkerUrl || DEFAULT_IMAGE_WORKER_URL);
+      setModelSourceUrl(resolvedModelSource);
+      setImageWorkerUrl(resolvedWorkerUrl);
+    } catch (error) {
+      setModelSourceUrl(DEFAULT_MODEL_SOURCE_URL);
+      setImageWorkerUrl(DEFAULT_IMAGE_WORKER_URL);
+    }
+  }, []);
+
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     setError('');
     setErrorBullets([]);
     try {
-      const envelope = await requestJson<ModelsPayload>(MODELS_BASE_URL, '/models?limit=250', undefined, 1);
+      const envelope = await requestJson<ModelsPayload>(modelSourceUrl.replace(/\/models\/?$/, ''), '/models?limit=250', undefined, 1);
       const items = normalizeArray<RawModelItem>(envelope.data?.items)
         .filter(isImageModel)
         .map(normalizeModelFromWorker);
       setModels(items);
-      setModelsSource(`${MODELS_BASE_URL}/models`);
+      setModelsSource(modelSourceUrl);
       setSelectedModelId((current) => current || modelKey(items[0]) || '');
       if (!items.length) {
-        setError('models-worker içinde görsel modeli bulunamadı.');
+        setError('Seçilen model kaynağında görsel modeli bulunamadı.');
       }
     } catch (requestError) {
       setError(workerErrorMessage(requestError, 'Modeller alınamadı.'));
@@ -490,34 +530,34 @@ export default function ImagePage(): JSX.Element {
     } finally {
       setModelsLoading(false);
     }
-  }, []);
+  }, [modelSourceUrl]);
 
   const loadWorkerInfo = useCallback(async () => {
     try {
-      const envelope = await requestJson<{ worker?: string; version?: string; modelsSource?: string; maxGenerationAttempts?: number }>(IMGS_BASE_URL, '/', undefined, 0);
+      const envelope = await requestJson<{ worker?: string; version?: string; modelsSource?: string; maxGenerationAttempts?: number }>(imageWorkerUrl, '/', undefined, 0);
       const info = envelope.data || {};
-      setWorkerInfo(`${info.worker || 'imgs'} · v${info.version || '-'} · deneme=${String(info.maxGenerationAttempts ?? '-')}`);
+      setWorkerInfo(`${info.worker || 'im'} · v${info.version || '-'} · deneme=${String(info.maxGenerationAttempts ?? '-')}`);
     } catch {
-      setWorkerInfo('imgs worker');
+      setWorkerInfo('im worker');
     }
-  }, []);
+  }, [imageWorkerUrl]);
 
   const refreshHistory = useCallback(async () => {
     setLoadingHistory(true);
     try {
-      const envelope = await requestJson<HistoryPayload>(IMGS_BASE_URL, '/jobs/history?limit=12', undefined, 0);
+      const envelope = await requestJson<HistoryPayload>(imageWorkerUrl, '/jobs/history?limit=12', undefined, 0);
       setHistory(Array.isArray(envelope.data?.items) ? envelope.data.items : []);
     } catch (requestError) {
       console.error(requestError);
     } finally {
       setLoadingHistory(false);
     }
-  }, []);
+  }, [imageWorkerUrl]);
 
   const ensureImageUrl = useCallback(async (job: JobRecord): Promise<JobRecord> => {
     if (!job.jobId || pickImages(job).length > 0) return job;
     try {
-      const envelope = await requestJson<{ outputUrl?: string | null; storageLogs?: string[] }>(IMGS_BASE_URL, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
+      const envelope = await requestJson<{ outputUrl?: string | null; storageLogs?: string[] }>(imageWorkerUrl, `/jobs/image/${encodeURIComponent(job.jobId)}`, undefined, 0);
       const outputUrl = envelope.data?.outputUrl || null;
       return {
         ...job,
@@ -528,12 +568,12 @@ export default function ImagePage(): JSX.Element {
     } catch {
       return job;
     }
-  }, []);
+  }, [imageWorkerUrl]);
 
   const pollJob = useCallback(async (jobId: string) => {
     stopPolling();
     try {
-      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 1);
+      const envelope = await requestJson<JobRecord>(imageWorkerUrl, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 1);
       let nextJob = envelope.data;
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
@@ -558,11 +598,13 @@ export default function ImagePage(): JSX.Element {
   }, [ensureImageUrl, refreshHistory, stopPolling]);
 
   useEffect(() => {
-    void loadWorkerInfo();
-    void loadModels();
-    void refreshHistory();
+    void loadEffectiveConfig().then(() => {
+      void loadWorkerInfo();
+      void loadModels();
+      void refreshHistory();
+    });
     return () => stopPolling();
-  }, [loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
+  }, [loadEffectiveConfig, loadModels, loadWorkerInfo, refreshHistory, stopPolling]);
 
   useEffect(() => {
     if (!selectedModel) return;
@@ -599,7 +641,7 @@ export default function ImagePage(): JSX.Element {
 
     try {
       const envelope = await requestJson<JobRecord>(
-        IMGS_BASE_URL,
+        imageWorkerUrl,
         '/generate',
         {
           method: 'POST',
@@ -623,8 +665,11 @@ export default function ImagePage(): JSX.Element {
             responseFormat: 'url',
             metadata: {
               page: 'src/pages/AI/image.tsx',
-              modelsSource: `${MODELS_BASE_URL}/models`,
-              worker: IMGS_BASE_URL,
+              modelsSource: modelSourceUrl,
+              worker: imageWorkerUrl,
+              selectedModelSourceKey: effectiveConfig?.modelSourceKey || 'im',
+              selectedModelSourceUrl: modelSourceUrl,
+              selectedImageWorkerUrl: imageWorkerUrl,
               tagUi: selectedModel.tagUi,
             },
           }),
@@ -657,12 +702,12 @@ export default function ImagePage(): JSX.Element {
       setError(workerErrorMessage(requestError, 'Görsel üretimi başlatılamadı.'));
       setErrorBullets(collectFailureBullets(requestError));
     }
-  }, [count, negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode]);
+  }, [count, negativePrompt, pollJob, prompt, quality, ratioObject, refreshHistory, selectedModel, selectedModelCore, stopPolling, style, testMode, imageWorkerUrl, modelSourceUrl, effectiveConfig]);
 
   const handleCancel = useCallback(async () => {
     if (!activeJob?.jobId || TERMINAL.has(activeJob.status)) return;
     try {
-      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, '/jobs/cancel', {
+      const envelope = await requestJson<JobRecord>(imageWorkerUrl, '/jobs/cancel', {
         method: 'POST',
         body: JSON.stringify({ jobId: activeJob.jobId }),
       }, 0);
@@ -682,7 +727,7 @@ export default function ImagePage(): JSX.Element {
     setErrorBullets([]);
     stopPolling();
     try {
-      const envelope = await requestJson<JobRecord>(IMGS_BASE_URL, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
+      const envelope = await requestJson<JobRecord>(imageWorkerUrl, `/jobs/status/${encodeURIComponent(jobId)}`, undefined, 0);
       let nextJob = envelope.data;
       if (nextJob.status === 'completed') {
         nextJob = await ensureImageUrl(nextJob);
@@ -707,7 +752,7 @@ export default function ImagePage(): JSX.Element {
           <div>
             <h1 className="text-3xl font-bold">Görsel Üretim</h1>
             <p className="mt-2 text-sm text-slate-300">
-              Model kaynağı: <strong>{MODELS_BASE_URL}</strong> · Üretim worker: <strong>{IMGS_BASE_URL}</strong>
+              Model kaynağı: <strong>{modelSourceUrl}</strong> · Üretim worker: <strong>{imageWorkerUrl}</strong>
             </p>
             <p className="mt-1 text-xs text-slate-400">
               Worker: {workerInfo || 'yükleniyor'} · Katalog: {modelsSource || 'yükleniyor'}
