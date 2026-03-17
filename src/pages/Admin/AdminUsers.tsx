@@ -105,7 +105,7 @@ export default function AdminUsers() {
         value: roleAdmin ? 'Admin' : user.rol || 'user',
         durum: roleAdmin ? 'basarili' : 'bilgi',
         aciklama: roleAdmin
-          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırır.'
+          ? 'Admin rolü birçok yönetim işlemini doğal olarak kolaylaştırırr.'
           : 'Normal kullanıcıda permission anahtarları daha kritik hale gelir.',
       },
       {
