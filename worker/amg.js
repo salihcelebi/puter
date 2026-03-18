@@ -971,36 +971,127 @@ router.post('/api/onbellek/sil', async function ({ request, me }) {
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
 });
+function tumOzetiOlustur(me) {
+  var kullanilabilirMePuter =
+    (me && me.puter) ||
+    (globalThis.me && globalThis.me.puter) ||
+    null;
 
-router.get('/', async function ({ request }) {
+  var amacMaddeleri = [
+    '1. Ortak uygulama ayarlarini merkezi olarak sunmak.',
+    '2. me.puter uzerinden ortak veriyi guvenli sekilde yonetmek.',
+    '3. Ortak anahtar-deger verilerini depolamak ve okumak.',
+    '4. Uygulama seviyesinde onbellek kullanmak.',
+    '5. Gerektiginde onbellek kayitlarini temizlemek.',
+    '6. Yonetici kontrollu islemleri tek merkezde toplamak.',
+    '7. Frontend icin duzenli JSON cevaplari saglamak.',
+    '8. Uygulama durumunu tek endpointten gostermek.',
+    '9. Calisma testi icin hizli kontrol endpointleri sunmak.',
+    '10. Saglik kontrolu ile runtime durumunu gostermek.',
+    '11. me.puter kaynaklarina dayali servis mantigini calistirmak.',
+    '12. Uygulama sahibinin hesabiyla ortak operasyonlari yurutmek.',
+    '13. Ortak ayarlarin istemciler tarafindan okunabilmesini saglamak.',
+    '14. Gerekli oldugunda yonetici anahtari ile korumali islem yapmak.',
+    '15. Tutarli hata cevabi uretmek.',
+    '16. Tutarli basari cevabi uretmek.',
+    '17. Hassas olmayan guvenli log kayitlari olusturmak.',
+    '18. Ortak veri yapisini daginiklik olmadan tek workerda toplamak.',
+    '19. Test, durum ve amac endpointleri ile debug surecini kolaylastirmak.',
+    '20. AMS sisteminin Puter Worker katmanini merkezi servis noktasi olarak calistirmak.'
+  ];
+
+  var tanimliYollar = [
+    '/',
+    '/tumu',
+    '/api',
+    '/api/test/calisiyor',
+    '/api/test/saglik',
+    '/api/test/me-puter',
+    '/api/amac'
+  ];
+
+  var tanimliFonksiyonlar = [
+    'tumOzetiOlustur',
+    'govdeyiCozumle',
+    'hataCevabiUret',
+    'basariCevabiUret',
+    'guvenliLogYaz',
+    'guvenliHataMesajiAl',
+    'onbellekSilGovdesiniDogrula',
+    'yoneticiYetkisiniDogrula'
+  ];
+
+  var handlerUzerindenMeVarMi = !!(me && me.puter);
+  var globalUzerindenMeVarMi = !!(globalThis.me && globalThis.me.puter);
+
+  var mePuterKaynakTuru = 'yok';
+  if (handlerUzerindenMeVarMi) {
+    mePuterKaynakTuru = 'handler-uzerinden';
+  } else if (globalUzerindenMeVarMi) {
+    mePuterKaynakTuru = 'global-uzerinden';
+  }
+
+  return {
+    mesaj: 'AMS Puter Worker toplu ozeti.',
+    worker: 'ams',
+    durum: 'ok',
+    zamanDamgasi: new Date().toISOString(),
+    yollar: tanimliYollar,
+    amac: {
+      baslik: 'AMS Puter Worker amaci',
+      maddeSayisi: amacMaddeleri.length,
+      maddeler: amacMaddeleri
+    },
+    mePuter: {
+      varMi: !!kullanilabilirMePuter,
+      kaynakTuru: mePuterKaynakTuru,
+      kvVarMi: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv),
+      kvMetotlari: {
+        get: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.get === 'function'),
+        set: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.set === 'function'),
+        del: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.del === 'function')
+      }
+    },
+    fonksiyonlar: {
+      not: 'Bu liste fonksiyonlari calistirmaz; sadece tanitici JSON ozetidir.',
+      sayi: tanimliFonksiyonlar.length,
+      maddeler: tanimliFonksiyonlar
+    }
+  };
+}
+
+router.get('/', async function ({ request, me }) {
   try {
-    return basariCevabiUret(request, {
-      mesaj: 'AMS Puter Worker çalışıyor.',
-      durum: 'ok',
-      worker: 'ams',
-      yollar: [
-        '/',
-        '/api',
-        '/api/test/calisiyor',
-        '/api/test/saglik',
-        '/api/amac'
-      ]
-    });
+    return basariCevabiUret(request, tumOzetiOlustur(me));
   } catch (hata) {
+    guvenliLogYaz('kok-endpoint-hatasi', guvenliHataMesajiAl(hata));
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
 });
 
-router.get('/api', async function ({ request }) {
+router.get('/tumu', async function ({ request, me }) {
+  try {
+    return basariCevabiUret(request, tumOzetiOlustur(me));
+  } catch (hata) {
+    guvenliLogYaz('tumu-endpoint-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api', async function ({ request, me }) {
   try {
     return basariCevabiUret(request, {
-      mesaj: 'AMS API erişilebilir.',
+      mesaj: 'AMS API erisilebilir.',
       durum: 'ok',
       onerilenTestYollari: [
+        '/',
+        '/tumu',
         '/api/test/calisiyor',
         '/api/test/saglik',
+        '/api/test/me-puter',
         '/api/amac'
-      ]
+      ],
+      ozet: tumOzetiOlustur(me)
     });
   } catch (hata) {
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
@@ -1012,7 +1103,7 @@ router.get('/api/test/calisiyor', async function ({ request }) {
     return basariCevabiUret(request, {
       calisiyor: true,
       durum: 'ok',
-      mesaj: 'Worker istek alıyor ve cevap üretiyor.'
+      mesaj: 'Worker istek aliyor ve cevap uretiyor.'
     });
   } catch (hata) {
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
@@ -1021,21 +1112,141 @@ router.get('/api/test/calisiyor', async function ({ request }) {
 
 router.get('/api/test/saglik', async function ({ request, me }) {
   try {
-    var saglikBilgisi = {
+    var handlerMeVarMi = !!me;
+    var handlerMePuterVarMi = !!(me && me.puter);
+    var globalMeVarMi = !!globalThis.me;
+    var globalMePuterVarMi = !!(globalThis.me && globalThis.me.puter);
+
+    var kullanilabilirMePuter =
+      (me && me.puter) ||
+      (globalThis.me && globalThis.me.puter) ||
+      null;
+
+    var kvNesnesiVarMi = !!(kullanilabilirMePuter && kullanilabilirMePuter.kv);
+
+    var kvTemelMetotlari = {
+      get: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.get === 'function'),
+      set: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.set === 'function'),
+      del: !!(kullanilabilirMePuter && kullanilabilirMePuter.kv && typeof kullanilabilirMePuter.kv.del === 'function')
+    };
+
+    var mePuterDurumu = 'yok';
+    if (handlerMePuterVarMi) {
+      mePuterDurumu = 'handler-uzerinden';
+    } else if (globalMePuterVarMi) {
+      mePuterDurumu = 'global-uzerinden';
+    }
+
+    return basariCevabiUret(request, {
       worker: 'ams',
-      durum: 'ok',
+      durum: kvNesnesiVarMi ? 'ok' : 'uyari',
+      mesaj: kvNesnesiVarMi
+        ? 'me.puter baglami bulundu ve kv erisimi tanimli.'
+        : 'Worker calisiyor ancak me.puter veya kv erisimi bu endpointte gorunmuyor.',
       zamanDamgasi: new Date().toISOString(),
       kontroller: {
         router: true,
         cevapUretimi: true,
-        mePuter: !!(me && me.puter),
-        kvErisimiTanimli: !!(me && me.puter && me.puter.kv)
+        handlerMe: handlerMeVarMi,
+        handlerMePuter: handlerMePuterVarMi,
+        globalMe: globalMeVarMi,
+        globalMePuter: globalMePuterVarMi,
+        mePuter: !!kullanilabilirMePuter,
+        kvErisimiTanimli: kvNesnesiVarMi,
+        mePuterKaynakTuru: mePuterDurumu,
+        kvTemelMetotlari: kvTemelMetotlari
+      },
+      yorum: {
+        beklenenHedef: 'Bu worker me.puter ile calisacagi icin ideal durumda mePuter ve kvErisimiTanimli true olmalidir.',
+        anlami: kvNesnesiVarMi
+          ? 'Saglik testi me.puter tabanli calisma icin olumlu gorunuyor.'
+          : 'Kod ayakta, fakat me.puter baglami bu testte bulunamadi veya kv nesnesi erisilebilir degil.'
       }
-    };
-
-    return basariCevabiUret(request, saglikBilgisi);
+    });
   } catch (hata) {
-    guvenliLogYaz('saglik-testi-hatasi', guvenliHataMesajiAl(hata));
+    guvenliLogYaz('gelismis-saglik-testi-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api/test/me-puter', async function ({ request, me }) {
+  var denemeAnahtari = 'ams:test:meputer:kontrol';
+  var denemeDegeri = 'ok-' + Date.now();
+
+  try {
+    var kullanilabilirMePuter =
+      (me && me.puter) ||
+      (globalThis.me && globalThis.me.puter) ||
+      null;
+
+    if (!kullanilabilirMePuter) {
+      return hataCevabiUret(request, 500, 'me.puter baglami yok.');
+    }
+
+    if (!kullanilabilirMePuter.kv) {
+      return hataCevabiUret(request, 500, 'me.puter.kv erisimi yok.');
+    }
+
+    if (typeof kullanilabilirMePuter.kv.set !== 'function') {
+      return hataCevabiUret(request, 500, 'me.puter.kv.set fonksiyonu tanimli degil.');
+    }
+
+    if (typeof kullanilabilirMePuter.kv.get !== 'function') {
+      return hataCevabiUret(request, 500, 'me.puter.kv.get fonksiyonu tanimli degil.');
+    }
+
+    if (typeof kullanilabilirMePuter.kv.del !== 'function') {
+      return hataCevabiUret(request, 500, 'me.puter.kv.del fonksiyonu tanimli degil.');
+    }
+
+    await kullanilabilirMePuter.kv.set(denemeAnahtari, denemeDegeri);
+    var okunanDeger = await kullanilabilirMePuter.kv.get(denemeAnahtari);
+    await kullanilabilirMePuter.kv.del(denemeAnahtari);
+
+    var yazmaOkumaBasarili = String(okunanDeger) === String(denemeDegeri);
+
+    if (!yazmaOkumaBasarili) {
+      return hataCevabiUret(request, 500, 'me.puter.kv yazma-okuma testi beklenen sonucu vermedi.');
+    }
+
+    return basariCevabiUret(request, {
+      durum: 'ok',
+      mesaj: 'me.puter ve kv erisimi dogrulandi. Yazma, okuma ve silme testi basarili.',
+      mePuter: true,
+      kvErisimiTanimli: true,
+      kvGercekTest: {
+        yazma: true,
+        okuma: true,
+        silme: true,
+        sonuc: 'basarili'
+      },
+      deneme: {
+        anahtar: denemeAnahtari,
+        yazilanDeger: denemeDegeri,
+        okunanDeger: okunanDeger
+      },
+      zamanDamgasi: new Date().toISOString()
+    });
+  } catch (hata) {
+    guvenliLogYaz('gelismis-me-puter-testi-hatasi', guvenliHataMesajiAl(hata));
+
+    try {
+      var temizlemeIcinMePuter =
+        (me && me.puter) ||
+        (globalThis.me && globalThis.me.puter) ||
+        null;
+
+      if (
+        temizlemeIcinMePuter &&
+        temizlemeIcinMePuter.kv &&
+        typeof temizlemeIcinMePuter.kv.del === 'function' 
+      ) {
+        await temizlemeIcinMePuter.kv.del(denemeAnahtari);
+      }
+    } catch (temizlemeHatasi) {
+      guvenliLogYaz('gelismis-me-puter-testi-temizleme-hatasi', guvenliHataMesajiAl(temizlemeHatasi));
+    }
+
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
 });
