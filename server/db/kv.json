@@ -1,13 +1,277 @@
-
 {
-  "version": 1,
-  "updatedAt": "2026-03-14T00:00:00.000Z",
+  "version": 2,
+  "updatedAt": "2026-03-18T00:00:00.000Z",
   "stats": {
     "reads": 0,
     "writes": 0,
     "deletes": 0
   },
-  "items": {},
+  "items": {
+    "admin_workers_sec_v2": {
+      "version": "admin-workers-sec-v2",
+      "updatedAt": "2026-03-18T00:00:00.000Z",
+      "siniflar": {
+        "api": {
+          "etiket": "SINIF 1 = AMG ÇEKİRDEĞİ",
+          "altBaslik": "Her hizmet türü ve tüm sayfalarda varsayılan; model çağrıları ve çekirdek servis omurgası.",
+          "renkSema": "border-blue-200 bg-blue-50",
+          "butonRenk": "bg-blue-600 hover:bg-blue-700"
+        },
+        "model": {
+          "etiket": "SINIF 2 = AMH ORKESTRASYON",
+          "altBaslik": "Her hizmet türü ve tüm sayfalarda varsayılan; API yönetimi, iş takibi ve teşhis katmanı.",
+          "renkSema": "border-emerald-200 bg-emerald-50",
+          "butonRenk": "bg-emerald-600 hover:bg-emerald-700"
+        },
+        "orkestra": {
+          "etiket": "SINIF 3 = DİĞER 1",
+          "altBaslik": "İleride yeni worker gerekirse kullanılacak rezerv alan.",
+          "renkSema": "border-violet-200 bg-violet-50",
+          "butonRenk": "bg-violet-600 hover:bg-violet-700"
+        },
+        "is": {
+          "etiket": "SINIF 4 = DİĞER 2",
+          "altBaslik": "İleride yeni worker gerekirse kullanılacak rezerv alan.",
+          "renkSema": "border-amber-200 bg-amber-50",
+          "butonRenk": "bg-amber-600 hover:bg-amber-700"
+        },
+        "test": {
+          "etiket": "SINIF 5 = DİĞER 3",
+          "altBaslik": "İleride yeni worker gerekirse kullanılacak rezerv alan.",
+          "renkSema": "border-rose-200 bg-rose-50",
+          "butonRenk": "bg-rose-600 hover:bg-rose-700"
+        }
+      },
+      "workers": {
+        "api": [
+          {
+            "kimlik": "amg-js",
+            "baslik": "amg.js",
+            "adres": "https://amg.puter.work/",
+            "tanim": "Model çağrıları ve AMG içindeki tüm çekirdek özellikler için ana giriş noktası.",
+            "gorevler": [
+              "MODEL ÇAĞRI",
+              "ÇEKİRDEK KURAL",
+              "SERVİS OMURGA",
+              "ORTAK AYAR",
+              "TEMEL KATMAN"
+            ],
+            "sinif": "api",
+            "aktifSayfalar": [
+              "chat.tsx",
+              "chat1.tsx",
+              "image.tsx",
+              "video.tsx",
+              "tts.tsx",
+              "ocr.tsx"
+            ],
+            "varsayilanSayfalar": [
+              "chat.tsx",
+              "chat1.tsx",
+              "image.tsx",
+              "video.tsx",
+              "tts.tsx",
+              "ocr.tsx"
+            ],
+            "durum": "Hazır",
+            "sonTestSonucu": "Henüz test edilmedi"
+          }
+        ],
+        "model": [
+          {
+            "kimlik": "amh-js",
+            "baslik": "amh.js",
+            "adres": "https://amh.puter.work/",
+            "tanim": "Tüm API çağrıları, orkestrasyon, iş durumu takibi ve teşhis mantığını kapsayan ana worker.",
+            "gorevler": [
+              "API ÇAĞRI",
+              "ORKESTRA",
+              "İŞ DURUMU",
+              "TEST",
+              "TEŞHİS"
+            ],
+            "sinif": "model",
+            "aktifSayfalar": [
+              "chat.tsx",
+              "chat1.tsx",
+              "image.tsx",
+              "video.tsx",
+              "tts.tsx",
+              "ocr.tsx"
+            ],
+            "varsayilanSayfalar": [
+              "chat.tsx",
+              "chat1.tsx",
+              "image.tsx",
+              "video.tsx",
+              "tts.tsx",
+              "ocr.tsx"
+            ],
+            "durum": "Hazır",
+            "sonTestSonucu": "Henüz test edilmedi"
+          }
+        ],
+        "orkestra": [
+          {
+            "kimlik": "diger-1",
+            "baslik": "diger1.js",
+            "adres": "https://diger1.puter.work/",
+            "tanim": "Rezerv alan worker. İleride ek ihtiyaçlar için kullanılabilir.",
+            "gorevler": [
+              "REZERV ALAN",
+              "EK WORKER",
+              "GENİŞLEME",
+              "İLERİDE",
+              "OPSİYONEL"
+            ],
+            "sinif": "orkestra",
+            "aktifSayfalar": [],
+            "varsayilanSayfalar": [],
+            "durum": "Bilinmiyor",
+            "sonTestSonucu": "Henüz test edilmedi"
+          }
+        ],
+        "is": [
+          {
+            "kimlik": "diger-2",
+            "baslik": "diger2.js",
+            "adres": "https://diger2.puter.work/",
+            "tanim": "Rezerv alan worker. İleride ek ihtiyaçlar için kullanılabilir.",
+            "gorevler": [
+              "REZERV ALAN",
+              "EK WORKER",
+              "GENİŞLEME",
+              "İLERİDE",
+              "OPSİYONEL"
+            ],
+            "sinif": "is",
+            "aktifSayfalar": [],
+            "varsayilanSayfalar": [],
+            "durum": "Bilinmiyor",
+            "sonTestSonucu": "Henüz test edilmedi"
+          }
+        ],
+        "test": [
+          {
+            "kimlik": "diger-3",
+            "baslik": "diger3.js",
+            "adres": "https://diger3.puter.work/",
+            "tanim": "Rezerv alan worker. İleride ek ihtiyaçlar için kullanılabilir.",
+            "gorevler": [
+              "REZERV ALAN",
+              "EK WORKER",
+              "GENİŞLEME",
+              "İLERİDE",
+              "OPSİYONEL"
+            ],
+            "sinif": "test",
+            "aktifSayfalar": [],
+            "varsayilanSayfalar": [],
+            "durum": "Bilinmiyor",
+            "sonTestSonucu": "Henüz test edilmedi"
+          }
+        ]
+      },
+      "configs": {
+        "chat.tsx": {
+          "sayfaId": "chat.tsx",
+          "baslik": "chat.tsx",
+          "aciklama": "chat.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        },
+        "chat1.tsx": {
+          "sayfaId": "chat1.tsx",
+          "baslik": "chat1.tsx",
+          "aciklama": "chat1.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        },
+        "image.tsx": {
+          "sayfaId": "image.tsx",
+          "baslik": "image.tsx",
+          "aciklama": "image.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        },
+        "video.tsx": {
+          "sayfaId": "video.tsx",
+          "baslik": "video.tsx",
+          "aciklama": "video.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        },
+        "tts.tsx": {
+          "sayfaId": "tts.tsx",
+          "baslik": "tts.tsx",
+          "aciklama": "tts.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        },
+        "ocr.tsx": {
+          "sayfaId": "ocr.tsx",
+          "baslik": "ocr.tsx",
+          "aciklama": "ocr.tsx için varsayılan sınıf 1 = AMG ve sınıf 2 = AMH.",
+          "secilenBirimler": {
+            "api": ["amg-js"],
+            "model": ["amh-js"],
+            "orkestra": [],
+            "is": [],
+            "test": []
+          },
+          "customModelUrl": "https://amg.puter.work/",
+          "rawCodeUrl": "",
+          "editCodeUrl": "",
+          "forceKaydetAcik": false
+        }
+      }
+    }
+  },
   "jobs": {
     "order": [],
     "history": [],
