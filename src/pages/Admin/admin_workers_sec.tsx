@@ -1,62 +1,43 @@
-// ==============================
-// 1) PAGE_IDS / PageId tanımlarının hemen altına bunları ekle
-// ==============================
+import React, { useEffect, useMemo, useState } from 'react';
+import { Layout, Shield, Cpu, Activity, TestTube, Save, RefreshCw, ExternalLink, Plus, Trash2, Check, AlertTriangle, Info, Search } from 'lucide-react';
+import toast, { Toaster } from 'react-hot-toast';
 
-const AMG_WORKER_URL = 'https://amg.puter.work'; // AMG worker URL farklıysa sadece bu satırı değiştir.
-const ALL_APICALL_ORKESTRA_URL = 'https://all-apicall-orkestra-isdurumu-teshis.puter.work';
-const DIGER1_WORKER_URL = 'https://diger1.puter.work';
-const DIGER2_WORKER_URL = 'https://diger2.puter.work';
-const DIGER3_WORKER_URL = 'https://diger3.puter.work';
-const TUM_SAYFALAR = [...PAGE_IDS] as PageId[];
-const ZORUNLU_SINIFLAR: WorkerClassId[] = ['api', 'model'];
+// --- TİP TANIMLAMALARI ---
+const PAGE_IDS = ['image.tsx', 'chat.tsx', 'video.tsx', 'tts.tsx', 'ocr.tsx'] as const;
+type PageId = typeof PAGE_IDS[number];
 
+const CLASS_IDS = ['api', 'model', 'orchestrator', 'job', 'test'] as const;
+type WorkerClassId = typeof CLASS_IDS[number];
 
-// ==============================
-// 2) SAYFA_META bloğunu bununla değiştir
-// ==============================
-
-const SAYFA_META: Record<PageId, { ozellik: string; kisa: string; aciklama: string }> = {
-  'image.tsx': {
-    ozellik: 'Görsel Üretim',
-    kisa: 'AMG + all-apicall varsayılan',
-    aciklama: 'image.tsx sayfası varsayılan olarak AMG çekirdeği ve all-apicall orkestrasyon workerı ile çalışır.',
-  },
-  'chat.tsx': {
-    ozellik: 'Sohbet',
-    kisa: 'AMG + all-apicall varsayılan',
-    aciklama: 'chat.tsx sayfası varsayılan olarak AMG çekirdeği ve all-apicall orkestrasyon workerı ile çalışır.',
-  },
-  'video.tsx': {
-    ozellik: 'Video',
-    kisa: 'AMG + all-apicall varsayılan',
-    aciklama: 'video.tsx sayfası varsayılan olarak AMG çekirdeği ve all-apicall orkestrasyon workerı ile çalışır.',
-  },
-  'tts.tsx': {
-    ozellik: 'Seslendirme',
-    kisa: 'AMG + all-apicall varsayılan',
-    aciklama: 'tts.tsx sayfası varsayılan olarak AMG çekirdeği ve all-apicall orkestrasyon workerı ile çalışır.',
-  },
-  'ocr.tsx': {
-    ozellik: 'OCR',
-    kisa: 'AMG + all-apicall varsayılan',
-    aciklama: 'ocr.tsx sayfası varsayılan olarak AMG çekirdeği ve all-apicall orkestrasyon workerı ile çalışır.',
-  },
+type WorkerItem = {
+  id: string;
+  ad: string;
+  url: string;
+  aciklama: string;
+  gorevler: [string, string, string, string, string];
+  sinif: WorkerClassId;
+  destekledigiSayfalar: PageId[];
+  varsayilanSayfalar?: PageId[];
+  durum?: 'Hazır' | 'Sorunlu' | 'Bilinmiyor';
+  sonTestSonucu?: 'Başarılı' | 'Başarısız' | 'Henüz test edilmedi';
 };
 
+type WorkerMap = Record<WorkerClassId, WorkerItem[]>;
 
-// ==============================
-// 3) SINIF_META bloğunu bununla değiştir
-// ==============================
+type PageConfig = {
+  sayfaId: PageId;
+  baslik: string;
+  aciklama: string;
+  secilenWorkerlar: Record<WorkerClassId, string[]>;
+  customModelUrl: string;
+  rawCodeUrl: string;
+  editCodeUrl: string;
+  forceKaydetAcik: boolean;
+  updatedAt?: string;
+};
 
-const SINIF_META: Record<
-  WorkerClassId,
-  {
-    baslik: string;
-    alt: string;
-    renk: string;
-    digerButonRenk: string;
-  }
-> = {
+// --- SINIF METADATA (REVİZE EDİLEN KISIM) ---
+const SINIF_META: Record<WorkerClassId, { baslik: string; alt: string; renk: string; digerButonRenk: string; }> = {
   api: {
     baslik: 'SINIF 1 = AMG ÇEKİRDEĞİ',
     alt: 'Her hizmet türü ve tüm sayfalarda varsayılan; model çağrıları ve amg içindeki tüm çekirdek özellikler için ana worker',
@@ -89,288 +70,184 @@ const SINIF_META: Record<
   },
 };
 
-
-// ==============================
-// 4) DEFAULT_WORKERS bloğunu bununla değiştir
-// ==============================
-
+// --- VARSAYILAN WORKER VERİLERİ ---
 const DEFAULT_WORKERS: WorkerMap = {
   api: [
     {
-      id: 'amg-cekirdegi',
+      id: 'amg-cekirdek-worker',
       ad: 'amg.js',
-      url: AMG_WORKER_URL,
-      aciklama: 'AMG çekirdeği. Her hizmet türü ve tüm sayfalarda varsayılan çalışır. Model çağrıları ve amg içindeki tüm çekirdek özellikleri taşır.',
-      gorevler: ['AMG ÇEKİRDEĞİ', 'MODEL ÇAĞIRIR', 'SERVİS AÇAR', 'ÖZELLİK TAŞIR', 'TEMEL KATMAN'],
+      url: 'https://amg.puter.work',
+      aciklama: 'Model çağrıları ve AMG içindeki tüm çekirdek özellikler için ana worker.',
+      gorevler: ['ÇEKİRDEK YÖNETİM', 'MODEL ÇAĞRISI', 'HIZLI YANIT', 'VERİ İŞLEME', 'SİSTEM ENTEGRASYON'],
       sinif: 'api',
-      destekledigiSayfalar: TUM_SAYFALAR,
-      varsayilanSayfalar: TUM_SAYFALAR,
+      destekledigiSayfalar: [...PAGE_IDS],
+      varsayilanSayfalar: [...PAGE_IDS],
       durum: 'Hazır',
       sonTestSonucu: 'Henüz test edilmedi',
-    },
+    }
   ],
   model: [
     {
-      id: 'all-apicall-orkestra-isdurumu-teshis',
+      id: 'all-apicall-orkestra-teshis-worker',
       ad: 'all-apicall-orkestra-isdurumu-teshis.js',
-      url: ALL_APICALL_ORKESTRA_URL,
-      aciklama:
-        'Tüm API çağrıları, orkestrasyon, iş durumu takibi, test ve teşhis akışlarını taşıyan ana worker. 50 maddelik sınıf 2 mantığı burada toplanır ve her sayfada varsayılan çalışır.',
-      gorevler: ['TÜM API', 'ORKESTRA', 'İŞ DURUMU', 'TEST', 'TEŞHİS'],
+      url: 'https://all-apicall-orkestra-isdurumu-teshis.puter.work',
+      aciklama: 'Tüm API çağrıları, orkestrasyon, iş durumu takibi ve teşhis mantığını kapsayan ana worker.',
+      gorevler: ['API ÇAĞRILARI', 'ORKESTRASYON', 'İŞ DURUMU TAKİBİ', 'SİSTEM TEST', 'TEŞHİS MANTIĞI'],
       sinif: 'model',
-      destekledigiSayfalar: TUM_SAYFALAR,
-      varsayilanSayfalar: TUM_SAYFALAR,
+      destekledigiSayfalar: [...PAGE_IDS],
+      varsayilanSayfalar: [...PAGE_IDS],
       durum: 'Hazır',
       sonTestSonucu: 'Henüz test edilmedi',
-    },
-  ],
-  orchestrator: [
-    {
-      id: 'diger-1-merkezi',
-      ad: 'diger1-merkezi',
-      url: DIGER1_WORKER_URL,
-      aciklama: 'İleride yeni worker açılırsa kullanılacak ek sınıf alanı. Şu an varsayılan değildir.',
-      gorevler: ['GELECEK ALANI', 'EK SINIF', 'BOŞ ALAN', 'GENİŞLER', 'YER TUTUCU'],
-      sinif: 'orchestrator',
-      destekledigiSayfalar: TUM_SAYFALAR,
-      durum: 'Bilinmiyor',
-      sonTestSonucu: 'Henüz test edilmedi',
-    },
-  ],
-  job: [
-    {
-      id: 'diger-2-merkezi',
-      ad: 'diger2-merkezi',
-      url: DIGER2_WORKER_URL,
-      aciklama: 'İleride yeni worker açılırsa kullanılacak ek sınıf alanı. Şu an varsayılan değildir.',
-      gorevler: ['GELECEK ALANI', 'EK SINIF', 'BOŞ ALAN', 'GENİŞLER', 'YER TUTUCU'],
-      sinif: 'job',
-      destekledigiSayfalar: TUM_SAYFALAR,
-      durum: 'Bilinmiyor',
-      sonTestSonucu: 'Henüz test edilmedi',
-    },
-  ],
-  test: [
-    {
-      id: 'diger-3-merkezi',
-      ad: 'diger3-merkezi',
-      url: DIGER3_WORKER_URL,
-      aciklama: 'İleride yeni worker açılırsa kullanılacak ek sınıf alanı. Şu an varsayılan değildir.',
-      gorevler: ['GELECEK ALANI', 'EK SINIF', 'BOŞ ALAN', 'GENİŞLER', 'YER TUTUCU'],
-      sinif: 'test',
-      destekledigiSayfalar: TUM_SAYFALAR,
-      durum: 'Bilinmiyor',
-      sonTestSonucu: 'Henüz test edilmedi',
-    },
-  ],
-};
-
-
-// ==============================
-// 5) DEFAULT_CONFIGS bloğunu bununla değiştir
-// ==============================
-
-const DEFAULT_CONFIGS: ConfigMap = {
-  'image.tsx': {
-    sayfaId: 'image.tsx',
-    baslik: 'image.tsx',
-    aciklama: SAYFA_META['image.tsx'].aciklama,
-    secilenWorkerlar: {
-      api: ['amg-cekirdegi'],
-      model: ['all-apicall-orkestra-isdurumu-teshis'],
-      orchestrator: [],
-      job: [],
-      test: [],
-    },
-    customModelUrl: AMG_WORKER_URL,
-    rawCodeUrl: 'https://turk.puter.site/workers/modeller/im.js',
-    editCodeUrl: 'https://github.com/salihcelebi/puter/edit/main/worker/modeller/im.js',
-    forceKaydetAcik: false,
-  },
-  'chat.tsx': {
-    sayfaId: 'chat.tsx',
-    baslik: 'chat.tsx',
-    aciklama: SAYFA_META['chat.tsx'].aciklama,
-    secilenWorkerlar: {
-      api: ['amg-cekirdegi'],
-      model: ['all-apicall-orkestra-isdurumu-teshis'],
-      orchestrator: [],
-      job: [],
-      test: [],
-    },
-    customModelUrl: AMG_WORKER_URL,
-    rawCodeUrl: '',
-    editCodeUrl: '',
-    forceKaydetAcik: false,
-  },
-  'video.tsx': {
-    sayfaId: 'video.tsx',
-    baslik: 'video.tsx',
-    aciklama: SAYFA_META['video.tsx'].aciklama,
-    secilenWorkerlar: {
-      api: ['amg-cekirdegi'],
-      model: ['all-apicall-orkestra-isdurumu-teshis'],
-      orchestrator: [],
-      job: [],
-      test: [],
-    },
-    customModelUrl: AMG_WORKER_URL,
-    rawCodeUrl: '',
-    editCodeUrl: '',
-    forceKaydetAcik: false,
-  },
-  'tts.tsx': {
-    sayfaId: 'tts.tsx',
-    baslik: 'tts.tsx',
-    aciklama: SAYFA_META['tts.tsx'].aciklama,
-    secilenWorkerlar: {
-      api: ['amg-cekirdegi'],
-      model: ['all-apicall-orkestra-isdurumu-teshis'],
-      orchestrator: [],
-      job: [],
-      test: [],
-    },
-    customModelUrl: AMG_WORKER_URL,
-    rawCodeUrl: '',
-    editCodeUrl: '',
-    forceKaydetAcik: false,
-  },
-  'ocr.tsx': {
-    sayfaId: 'ocr.tsx',
-    baslik: 'ocr.tsx',
-    aciklama: SAYFA_META['ocr.tsx'].aciklama,
-    secilenWorkerlar: {
-      api: ['amg-cekirdegi'],
-      model: ['all-apicall-orkestra-isdurumu-teshis'],
-      orchestrator: [],
-      job: [],
-      test: [],
-    },
-    customModelUrl: AMG_WORKER_URL,
-    rawCodeUrl: '',
-    editCodeUrl: '',
-    forceKaydetAcik: false,
-  },
-};
-
-
-// ==============================
-// 6) evaluateCompatibility fonksiyonunu bununla değiştir
-// ==============================
-
-function evaluateCompatibility(pageId: PageId, config: PageConfig, workers: WorkerMap) {
-  const uyumsuzlar: Array<{ sinif: WorkerClassId; workerId: string; worker?: WorkerItem }> = [];
-  const eksikSiniflar: WorkerClassId[] = [];
-
-  CLASS_IDS.forEach((sinif) => {
-    const selected = config.secilenWorkerlar[sinif] || [];
-
-    if (ZORUNLU_SINIFLAR.includes(sinif) && selected.length === 0) {
-      eksikSiniflar.push(sinif);
     }
+  ],
+  orchestrator: [], // Rezerv alan
+  job: [],          // Rezerv alan
+  test: [],         // Rezerv alan
+};
 
-    selected.forEach((workerId) => {
-      const worker = workers[sinif].find((w) => w.id === workerId);
-      if (!worker || !worker.destekledigiSayfalar.includes(pageId)) {
-        uyumsuzlar.push({ sinif, workerId, worker });
-      }
+// --- ANA BİLEŞEN ---
+export default function App() {
+  const [configs, setConfigs] = useState<Record<PageId, PageConfig>>(() => {
+    const initial: any = {};
+    PAGE_IDS.forEach(id => {
+      initial[id] = {
+        sayfaId: id,
+        baslik: id,
+        aciklama: `${id} sayfası için worker yapılandırması.`,
+        secilenWorkerlar: {
+          api: ['amg-cekirdek-worker'],
+          model: ['all-apicall-orkestra-teshis-worker'],
+          orchestrator: [],
+          job: [],
+          test: []
+        },
+        customModelUrl: '',
+        rawCodeUrl: '',
+        editCodeUrl: '',
+        forceKaydetAcik: false
+      };
     });
+    return initial;
   });
 
-  return {
-    uyumsuzlar,
-    eksikSiniflar,
-    hasHardWarning: uyumsuzlar.length > 0,
-    hasSoftWarning: eksikSiniflar.length > 0,
+  const [activeTab, setActiveTab] = useState<PageId>('chat.tsx');
+
+  const handleSave = (pageId: PageId) => {
+    toast.success(`${pageId} başarıyla kaydedildi!`);
+    setConfigs(prev => ({
+      ...prev,
+      [pageId]: { ...prev[pageId], updatedAt: new Date().toISOString() }
+    }));
   };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-900">
+      <Toaster position="top-right" />
+      
+      <header className="max-w-6xl mx-auto mb-8">
+        <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
+          <Cpu className="text-blue-600" size={32} />
+          Worker Orkestrasyon Paneli
+        </h1>
+        <p className="text-slate-500 mt-2">TSX Tabanlı Sınıf Mimarisi Revizyonu</p>
+      </header>
+
+      <main className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Sol Menü: Sayfalar */}
+        <div className="lg:col-span-1 space-y-2">
+          {PAGE_IDS.map((id) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`w-full text-left px-4 py-3 rounded-lg font-medium transition-all ${
+                activeTab === id 
+                ? 'bg-blue-600 text-white shadow-md' 
+                : 'bg-white text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+
+        {/* Sağ İçerik: Worker Sınıfları */}
+        <div className="lg:col-span-3 space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Layout size={20} className="text-blue-500" />
+                {activeTab} Yapılandırması
+              </h2>
+              <button 
+                onClick={() => handleSave(activeTab)}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition-colors shadow-sm"
+              >
+                <Save size={18} />
+                Ayarları Kaydet
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {CLASS_IDS.map((classId) => {
+                const meta = SINIF_META[classId];
+                const selectedWorkers = configs[activeTab].secilenWorkerlar[classId];
+                const availableWorkers = DEFAULT_WORKERS[classId];
+
+                return (
+                  <div key={classId} className={`p-5 rounded-xl border-2 transition-all ${meta.renk}`}>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                      <div>
+                        <h3 className="font-bold text-lg text-slate-800">{meta.baslik}</h3>
+                        <p className="text-sm text-slate-600 leading-tight">{meta.alt}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3">
+                      {availableWorkers.length > 0 ? (
+                        availableWorkers.map((worker) => (
+                          <div key={worker.id} className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex flex-col gap-2">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <span className="font-mono text-xs font-bold text-blue-600 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded">
+                                  {worker.ad}
+                                </span>
+                                <p className="text-sm font-semibold mt-1">{worker.url}</p>
+                              </div>
+                              <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-1 rounded-full font-bold">
+                                VARSAYILAN AKTİF
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 italic">{worker.aciklama}</p>
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {worker.gorevler.map((g, idx) => (
+                                <span key={idx} className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200">
+                                  {g}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="bg-slate-100/50 border border-dashed border-slate-300 p-4 rounded-lg text-center">
+                          <p className="text-sm text-slate-400 font-medium italic">Rezerv Alan: Henüz bu sınıf için aktif bir worker tanımlanmadı.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-blue-900 text-white p-6 rounded-xl shadow-lg flex items-center justify-between">
+            <div>
+              <h4 className="font-bold text-lg">Mimari Durum Raporu</h4>
+              <p className="text-blue-200 text-sm">SINIF 1 ve SINIF 2 tüm sayfalarda başarıyla orkestra edildi.</p>
+            </div>
+            <Activity className="text-blue-400 animate-pulse" size={40} />
+          </div>
+        </div>
+      </main>
+    </div>
+  );
 }
-
-
-// ==============================
-// 7) Header içindeki açıklama paragrafını bununla değiştir
-// ==============================
-
-<p className="mt-2 max-w-4xl text-sm leading-6 text-zinc-600">
-  Önce soldan bir sayfa seçilir. Sonra yalnızca o sayfanın ilgili workerları görünür. Yeni düzende her sayfada varsayılan olarak iki ana worker gelir:
-  Sınıf 1 = AMG çekirdeği, Sınıf 2 = all-apicall orkestrasyon çekirdeği. Sınıf 3, 4 ve 5 ise gelecekte açılacak ek workerlar için diğer alanlar olarak bırakılır.
-</p>
-
-
-// ==============================
-// 8) Sidebar kartlarındaki “5 sınıf” yazısını bununla değiştir
-// ==============================
-
-<div className={cx('mt-3 text-xs', active ? 'text-zinc-300' : 'text-zinc-500')}>
-  2 varsayılan + 3 diğer • {selected} seçim
-</div>
-
-
-// ==============================
-// 9) Sayfa seçilmediğinde görünen ilk StatCard üçlüsünü bununla değiştir
-// ==============================
-
-<div className="grid gap-4 md:grid-cols-3">
-  <StatCard label="Adım 1" value="Sayfa seç" hint="image.tsx veya başka bir sayfa seç." />
-  <StatCard label="Adım 2" value="2 ana sınıf otomatik gelir" hint="AMG ve all-apicall varsayılan görünür." />
-  <StatCard label="Adım 3" value="İstersen diğerlerini aç" hint="DİĞER WORKERLAR butonu ile ek sınıfları da görebilirsin." />
-</div>
-
-
-// ==============================
-// 10) ResetDialog içindeki ilk aşama madde listesini bununla değiştir
-// ==============================
-
-<ul className="list-disc space-y-2 pl-5 text-sm text-zinc-700">
-  <li>Sınıf 1 seçimi varsayılan AMG workerına dönecek.</li>
-  <li>Sınıf 2 seçimi varsayılan all-apicall workerına dönecek.</li>
-  <li>Sınıf 3, Sınıf 4 ve Sınıf 5 seçimleri boş hale dönecek.</li>
-  <li>Özel model adresi varsayılana dönecek.</li>
-  <li>Raw ve düzenleme bağlantıları kayıtlı varsayılan değerine dönecek.</li>
-  <li>Force kaydet tercihi kapanacak.</li>
-</ul>
-
-
-// ==============================
-// 11) startReset içindeki fallback summary dizisini bununla değiştir
-// ==============================
-
-setResetSummary(
-  data.summary || [
-    'Sınıf 1 seçimi varsayılan AMG workerına dönecek.',
-    'Sınıf 2 seçimi varsayılan all-apicall workerına dönecek.',
-    'Sınıf 3, Sınıf 4 ve Sınıf 5 seçimleri boş hale dönecek.',
-    'Özel model adresi varsayılana dönecek.',
-    'Raw ve düzenleme bağlantıları kayıtlı varsayılan değerine dönecek.',
-    'Force kaydet tercihi kapanacak.',
-  ]
-);
-
-
-// ==============================
-// 12) “Nasıl çalışır?” kartındaki adım listesini bununla değiştir
-// ==============================
-
-{[
-  'Sayfa seç',
-  'İlk 2 varsayılan sınıfı kontrol et',
-  'İstersen DİĞER WORKERLAR aç',
-  'Yeni worker ekle',
-  'Mevcut workerı düzenle',
-  'Test et',
-  'Kaydet veya force kaydet',
-].map((text, i) => (
-  <div key={text} className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-    <div className="text-xs font-semibold uppercase text-indigo-600">Adım {i + 1}</div>
-    <div className="mt-1 text-sm font-semibold text-zinc-950">{text}</div>
-  </div>
-))}
-
-
-// ==============================
-// 13) İstersen bu küçük metni de güncelle
-// “Sayfalar” panel açıklamasını bununla değiştir
-// ==============================
-
-<div className="mt-1 text-sm text-zinc-500">
-  Önce buradan bir sayfa seç. Seçince ilk 2 sınıf varsayılan görünür, diğer 3 sınıf isteğe bağlı açılır.
-</div>
