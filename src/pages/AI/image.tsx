@@ -215,8 +215,6 @@ type RatioOption = {
   height: number;
 };
 
-type JsonRecord = Record<string, unknown>;
-
 const AMG_BASE_URL = 'https://turk.puter.site/workers/all/amg.js';
 const AMH_BASE_URL = 'https://turk.puter.site/workers/all/amh.js';
 const POLL_MS = 2000;
@@ -230,40 +228,11 @@ const RATIO_OPTIONS: RatioOption[] = [
   { key: '4:5', label: '4:5', width: 1200, height: 1500 },
 ];
 const DEFAULT_PROVIDER_OPTIONS = ['', 'openai-image-generation', 'together', 'gemini', 'xai'];
-const STYLE_OPTIONS = ['', 'vivid', 'natural', 'photorealistic', 'illustration', 'cinematic', 'anime'] as const;
-
 const QUICK_PROMPTS = [
   'Sisli İstanbul gecesi, ıslak taş sokaklar, neon yansımalar, sinematik ışık, gerçekçi detay.',
   'Premium ürün çekimi, siyah arka plan, yumuşak stüdyo ışığı, lüks reklam estetiği.',
   'Anime karakter, dinamik poz, güçlü kontrast, ayrıntılı kostüm, poster kalitesi.',
 ] as const;
-
-const PAGE_DATA: Record<number, Array<{ image: string; title: string; tags: string[] }>> = {
-  1: [
-    { image: 'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?auto=format&fit=crop&w=1200&q=80', title: 'Sinematik gece kompozisyonu', tags: ['1 görsel', 'Prompt', 'OpenAI'] },
-    { image: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80', title: 'Ürün reklamı premium mock', tags: ['Reklam', 'Makro', 'Together'] },
-    { image: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=1200&q=80', title: 'Cyberpunk karakter portresi', tags: ['Anime', 'Poster', 'Gemini'] },
-    { image: 'https://images.unsplash.com/photo-1516321497487-e288fb19713f?auto=format&fit=crop&w=1200&q=80', title: 'Dikey sosyal medya kapak görseli', tags: ['9:16', 'Sosyal', 'xAI'] },
-  ],
-  2: [
-    { image: 'https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=1200&q=80', title: 'Dağ manzarası reklam afişi', tags: ['Doğa', 'Poster', 'OpenAI'] },
-    { image: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1200&q=80', title: 'Kurumsal tanıtım hero görseli', tags: ['Kurumsal', '4:5', 'Gemini'] },
-    { image: 'https://images.unsplash.com/photo-1504198453319-5ce911bafcde?auto=format&fit=crop&w=1200&q=80', title: 'Gün batımı editorial kare', tags: ['16:9', 'Editorial', 'Together'] },
-    { image: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=1200&q=80', title: 'Moda çekimi sosyal görseli', tags: ['Sosyal', '4:5', 'OpenAI'] },
-  ],
-  3: [
-    { image: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1200&q=80', title: 'Masaüstü ürün mock sahnesi', tags: ['Ürün', 'Minimal', 'Together'] },
-    { image: 'https://images.unsplash.com/photo-1493246318656-5bfd4cfb29b8?auto=format&fit=crop&w=1200&q=80', title: 'Fantastik şehir illüstrasyonu', tags: ['Anime', 'Konsept', 'Gemini'] },
-    { image: 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=80', title: 'Tipografi güçlü lansman kapağı', tags: ['Tipografi', 'Poster', 'OpenAI'] },
-    { image: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=1200&q=80', title: 'Belgesel stil şehir karesi', tags: ['Belgesel', 'Gerçekçi', 'xAI'] },
-  ],
-  4: [
-    { image: 'https://images.unsplash.com/photo-1502082553048-f009c37129b9?auto=format&fit=crop&w=1200&q=80', title: 'Kış manzarası sinematik key art', tags: ['Sinematik', 'Doğa', 'OpenAI'] },
-    { image: 'https://images.unsplash.com/photo-1460661419201-fd4cecdf8a8b?auto=format&fit=crop&w=1200&q=80', title: 'Müzik lansman kapak sahnesi', tags: ['Müzik', 'Poster', 'Gemini'] },
-    { image: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=80', title: 'Uzay temalı atmosferik art', tags: ['Konsept', '10/10', 'Together'] },
-    { image: 'https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1200&q=80', title: 'Sosyal içerik kapak düzeni', tags: ['Sosyal', '4:5', 'xAI'] },
-  ],
-};
 
 function buildUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
@@ -283,35 +252,24 @@ function ensureArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
-function prettyJson(value: unknown): string {
-  try {
-    const seen = new WeakSet<object>();
-    return JSON.stringify(
-      value,
-      (_key, current) => {
-        if (typeof current === 'object' && current !== null) {
-          if (seen.has(current)) return '[Circular]';
-          seen.add(current);
-        }
-        return current;
-      },
-      2,
-    );
-  } catch {
-    try {
-      return JSON.stringify(String(value ?? ''), null, 2);
-    } catch {
-      return '"[unserializable]"';
-    }
-  }
-}
-
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   try {
     return new Intl.DateTimeFormat('tr-TR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
   } catch {
     return value;
+  }
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    try {
+      return String(value ?? '');
+    } catch {
+      return '';
+    }
   }
 }
 
@@ -490,8 +448,6 @@ async function requestAmh<T>(path: string, init?: RequestInit): Promise<AmhEnvel
 export default function ImagePage(): JSX.Element {
   const clientId = useMemo(() => getClientId(), []);
   const pollRef = useRef<number | null>(null);
-  const promptRef = useRef<HTMLTextAreaElement | null>(null);
-  const modelWrapRef = useRef<HTMLDivElement | null>(null);
 
   const [workerMode, setWorkerMode] = useState<WorkerMode>('amg');
   const [autoFallback, setAutoFallback] = useState(true);
@@ -503,7 +459,6 @@ export default function ImagePage(): JSX.Element {
   const [selectedModelId, setSelectedModelId] = useState('');
 
   const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState('');
   const [style, setStyle] = useState('');
   const [referenceImageUrl, setReferenceImageUrl] = useState('');
   const [quality, setQuality] = useState<Quality>('medium');
@@ -512,8 +467,6 @@ export default function ImagePage(): JSX.Element {
   const [height, setHeight] = useState(1024);
   const [count, setCount] = useState(1);
   const [testMode, setTestMode] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -532,13 +485,6 @@ export default function ImagePage(): JSX.Element {
   const [amhArchive, setAmhArchive] = useState<AmhArchivePayload['arsiv'] | null>(null);
   const [amhRunPayload, setAmhRunPayload] = useState<AmhRunPayload | null>(null);
 
-  const [amgHealthTest, setAmgHealthTest] = useState<JsonRecord | null>(null);
-  const [amgSharedState, setAmgSharedState] = useState<JsonRecord | null>(null);
-  const [amhDiagnostics, setAmhDiagnostics] = useState<JsonRecord | null>(null);
-  const [amhServiceDiagnostics, setAmhServiceDiagnostics] = useState<JsonRecord | null>(null);
-  const [amhProviderDiagnostics, setAmhProviderDiagnostics] = useState<JsonRecord | null>(null);
-  const [amhProof, setAmhProof] = useState<JsonRecord | null>(null);
-
   const selectedModel = useMemo(
     () => models.find((item) => item.kimlik === selectedModelId) || null,
     [models, selectedModelId],
@@ -548,20 +494,6 @@ export default function ImagePage(): JSX.Element {
     const dynamic = Array.from(new Set(models.map((item) => safeText(item.saglayici)).filter(Boolean)));
     return Array.from(new Set([...DEFAULT_PROVIDER_OPTIONS, ...dynamic]));
   }, [models]);
-
-  const previewCards = useMemo(() => {
-    const base = PAGE_DATA[currentPage] || PAGE_DATA[1];
-    if (!result?.images?.length || currentPage !== 1) return base;
-    const mapped = [...base];
-    result.images.slice(0, 4).forEach((src, index) => {
-      mapped[index] = {
-        image: src,
-        title: index === 0 ? 'Yeni oluşturulan görsel' : `Üretilen görsel ${index + 1}`,
-        tags: [ratioLabel(ratio), quality, result.provider || safeText(selectedModel?.saglayici, 'Model')],
-      };
-    });
-    return mapped;
-  }, [currentPage, quality, ratio, result, selectedModel]);
 
   const amgTone = healthToneFromStatus(amgHealth?.durum ?? amgHealth?.servis ?? null, null);
   const amhTone = healthToneFromStatus(amhHealth?.durum ?? null, amhHealth?.saglik?.saglikPuani ?? null);
@@ -588,28 +520,6 @@ export default function ImagePage(): JSX.Element {
       console.error(loadError);
     }
   }, []);
-
-  const loadDiagnostics = useCallback(async (forcedProvider?: string) => {
-    const provider = safeText(forcedProvider || selectedModel?.saglayici || providerFilter || 'auto', 'auto');
-    const results = await Promise.allSettled([
-      requestAmg<JsonRecord>('/api/test/saglik'),
-      requestAmg<JsonRecord>('/api/ortak-durum/oku'),
-      requestAmh<JsonRecord>('/api/ispat/ozet'),
-      requestAmh<JsonRecord>('/api/teshis/IMG'),
-      requestAmh<JsonRecord>(`/api/saglayici/IMG/${encodeURIComponent(provider)}`),
-      requestAmh<JsonRecord>('/api/teshis', {
-        method: 'POST',
-        body: JSON.stringify({ hizmetTuru: 'IMG', saglayici: provider, gorunum: 'panel' }),
-      }),
-    ]);
-
-    if (results[0].status === 'fulfilled') setAmgHealthTest(results[0].value.veri || null);
-    if (results[1].status === 'fulfilled') setAmgSharedState(results[1].value.veri || null);
-    if (results[2].status === 'fulfilled') setAmhProof(results[2].value.veri || null);
-    if (results[3].status === 'fulfilled') setAmhServiceDiagnostics(results[3].value.veri || null);
-    if (results[4].status === 'fulfilled') setAmhProviderDiagnostics(results[4].value.veri || null);
-    if (results[5].status === 'fulfilled') setAmhDiagnostics(results[5].value.veri || null);
-  }, [providerFilter, selectedModel]);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -715,29 +625,6 @@ export default function ImagePage(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [loadModels]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadDiagnostics();
-    }, 320);
-    return () => window.clearTimeout(timer);
-  }, [loadDiagnostics]);
-
-  useEffect(() => {
-    const textarea = promptRef.current;
-    if (!textarea) return;
-    textarea.style.height = '56px';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
-  }, [negativePrompt, prompt, referenceImageUrl]);
-
-  useEffect(() => {
-    const onOutside = (event: MouseEvent) => {
-      if (!modelWrapRef.current) return;
-      if (!modelWrapRef.current.contains(event.target as Node)) setModelMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onOutside);
-    return () => document.removeEventListener('mousedown', onOutside);
-  }, []);
-
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   const pushLocalHistory = useCallback((entry: LocalRunRecord) => {
@@ -748,7 +635,6 @@ export default function ImagePage(): JSX.Element {
     if (!selectedModel) throw new Error('Model seçmelisin.');
     const payload = {
       prompt: prompt.trim(),
-      negativePrompt: negativePrompt.trim(),
       model: selectedModel.kimlik,
       modelId: selectedModel.kimlik,
       kalite: quality,
@@ -763,13 +649,17 @@ export default function ImagePage(): JSX.Element {
 
     const envelope = await requestAmg<AmgGeneratePayload>('/api/gorsel', {
       method: 'POST',
-      headers: { 'X-Istemci-Kimligi': clientId },
+      headers: {
+        'X-Istemci-Kimligi': clientId,
+      },
       body: JSON.stringify(payload),
     });
 
     const imageUrl = safeText(envelope.veri?.url);
     const images = imageUrl ? [imageUrl] : collectImagesDeep(envelope.veri?.ham);
-    if (!images.length) throw new Error('AMG görsel URL döndürmedi.');
+    if (!images.length) {
+      throw new Error('AMG görsel URL döndürmedi.');
+    }
 
     const nextResult: ResultCard = {
       source: 'AMG',
@@ -793,7 +683,7 @@ export default function ImagePage(): JSX.Element {
       provider: nextResult.provider,
       at: new Date().toISOString(),
     });
-  }, [clientId, count, negativePrompt, prompt, pushLocalHistory, quality, selectedModel, testMode, width, height]);
+  }, [clientId, count, prompt, pushLocalHistory, quality, selectedModel, testMode, width, height]);
 
   const amhGenerate = useCallback(async (fallbackUsed = false) => {
     if (!selectedModel) throw new Error('Model seçmelisin.');
@@ -803,7 +693,6 @@ export default function ImagePage(): JSX.Element {
       serviceType: 'IMG',
       hizmetTuru: 'IMG',
       prompt: prompt.trim(),
-      negativePrompt: negativePrompt.trim(),
       model: selectedModel.kimlik,
       saglayici: safeText(selectedModel.saglayici),
       kalite: quality,
@@ -871,7 +760,7 @@ export default function ImagePage(): JSX.Element {
         await pollAmhJob(nextJobId);
       }
     }
-  }, [clientId, count, loadAmhArtifacts, negativePrompt, pollAmhJob, prompt, pushLocalHistory, quality, ratio, referenceImageUrl, selectedModel, style, testMode]);
+  }, [clientId, count, loadAmhArtifacts, pollAmhJob, prompt, pushLocalHistory, quality, ratio, referenceImageUrl, selectedModel, style, testMode]);
 
   const handleGenerate = useCallback(async () => {
     const trimmedPrompt = prompt.trim();
@@ -914,13 +803,12 @@ export default function ImagePage(): JSX.Element {
         setNotice('AMH orkestrasyon akışı kullanıldı.');
       }
       await loadWorkerHealth();
-      await loadDiagnostics();
     } catch (generateError) {
       setError(extractErrorMessage(generateError, 'Görsel üretimi başlatılamadı.'));
     } finally {
       setSubmitting(false);
     }
-  }, [amgGenerate, amhGenerate, autoFallback, loadDiagnostics, loadWorkerHealth, prompt, resetResultState, selectedModel, workerMode]);
+  }, [amgGenerate, amhGenerate, autoFallback, loadWorkerHealth, prompt, resetResultState, selectedModel, workerMode]);
 
   const loadHistoryRecord = useCallback(async (entry: LocalRunRecord) => {
     setError('');
@@ -952,1156 +840,616 @@ export default function ImagePage(): JSX.Element {
     <>
       <style>{`
         :root {
+          --bg: #f4f6f8;
           --panel: #ffffff;
-          --line: #e6e8ed;
-          --line-soft: #edf0f4;
-          --text: #202123;
-          --muted: #6b7280;
-          --muted-2: #8a909c;
-          --green: #5c8f88;
-          --green-dark: #4f827b;
-          --green-soft: #eef6f4;
-          --chip: #f3f4f7;
-          --warn: #b78328;
-          --bad: #bf4a4a;
-          --ok: #5c8f88;
-          --shadow: 0 12px 32px rgba(15, 23, 42, 0.05);
-          --shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.04);
+          --line: #e4e7ec;
+          --text: #18212f;
+          --muted: #667085;
+          --brand: #2f6f64;
+          --brand-soft: #edf6f3;
+          --shadow: 0 18px 44px rgba(15, 23, 42, 0.08);
+          --ok: #1d9f64;
+          --warn: #b47c12;
+          --bad: #c23636;
         }
-
         * { box-sizing: border-box; }
-        html, body { height: 100%; }
         body { margin: 0; }
-
-        .app-shell {
-          margin: 0;
-          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          background: radial-gradient(circle at top, #f7f7f8 0%, #f1f3f5 44%, #edf0f3 100%);
-          color: var(--text);
-          padding: 20px;
+        .shell {
           min-height: 100vh;
+          background: radial-gradient(circle at top, #fafbfc 0%, #eef2f6 100%);
+          color: var(--text);
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          padding: 24px;
         }
-
         .app {
           max-width: 1380px;
-          min-height: calc(100vh - 40px);
           margin: 0 auto;
-          background: var(--panel);
-          border: 1px solid #e8eaee;
-          border-radius: 22px;
-          overflow: hidden;
-          box-shadow: var(--shadow);
-          display: flex;
-          flex-direction: column;
-        }
-
-        .topbar {
-          min-height: 80px;
-          border-bottom: 1px solid var(--line);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 0 28px;
-          background: rgba(255,255,255,0.95);
-          gap: 20px;
-        }
-
-        .brand {
-          font-size: 28px;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          color: #1f2937;
-          min-width: 160px;
-        }
-
-        .nav {
-          flex: 1;
-          display: flex;
-          align-items: center;
-          justify-content: flex-start;
-          gap: 28px;
-          padding-left: 8px;
-          flex-wrap: wrap;
-        }
-
-        .nav a {
-          position: relative;
-          text-decoration: none;
-          color: #3b4452;
-          font-size: 18px;
-          font-weight: 500;
-          padding: 25px 0 23px;
-        }
-
-        .nav a.active {
-          font-weight: 700;
-          color: #202123;
-        }
-
-        .nav a.active::after {
-          content: "";
-          position: absolute;
-          left: 0;
-          right: 0;
-          bottom: -1px;
-          height: 4px;
-          border-radius: 999px 999px 0 0;
-          background: rgba(92, 143, 136, 0.92);
-        }
-
-        .top-right {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          margin-left: auto;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-
-        .status {
-          min-height: 40px;
-          border-radius: 999px;
-          border: 1px solid var(--line);
-          background: #f8f9fb;
-          color: #4b5563;
-          font-size: 14px;
-          font-weight: 700;
-          padding: 8px 16px;
-          display: inline-flex;
-          align-items: center;
-          gap: 10px;
-          white-space: nowrap;
-        }
-
-        .status::before {
-          content: "";
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          background: #9ab8b2;
-          box-shadow: 0 0 0 3px rgba(154, 184, 178, 0.15);
-        }
-
-        .status.ok::before { background: var(--ok); box-shadow: 0 0 0 3px rgba(92, 143, 136, 0.16); }
-        .status.warn::before { background: var(--warn); box-shadow: 0 0 0 3px rgba(183, 131, 40, 0.16); }
-        .status.bad::before { background: var(--bad); box-shadow: 0 0 0 3px rgba(191, 74, 74, 0.16); }
-
-        .icon-ghost {
-          width: 40px;
-          height: 40px;
-          border-radius: 999px;
-          border: 1px solid var(--line);
-          background: #f8f9fb;
-          color: #6b7280;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-        }
-
-        .page {
-          display: flex;
-          flex-direction: column;
-          min-height: 0;
-          flex: 1;
-          background: linear-gradient(180deg, #f9fafb 0%, #f7f7f8 100%);
-        }
-
-        .toolbar {
-          border-bottom: 1px solid var(--line-soft);
-          padding: 14px 28px 16px;
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
-          background: rgba(255,255,255,0.42);
-        }
-
-        .toolbar-row {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 18px;
-          flex-wrap: wrap;
-        }
-
-        .toolbar-label {
-          font-size: 18px;
-          font-weight: 700;
-          color: #202123;
-          white-space: nowrap;
-        }
-
-        .pill-track {
-          display: inline-flex;
-          align-items: center;
-          gap: 0;
-          background: #f2f4f7;
-          border: 1px solid #e5e7eb;
-          border-radius: 999px;
-          overflow: hidden;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
-          flex-wrap: wrap;
-        }
-
-        .pill {
-          min-height: 46px;
-          padding: 0 22px;
-          border: none;
-          background: transparent;
-          color: #3d4653;
-          font-size: 16px;
-          font-weight: 500;
-          cursor: pointer;
-          border-right: 1px solid #e5e7eb;
-          white-space: nowrap;
-        }
-
-        .pill:last-child { border-right: none; }
-
-        .pill.active {
-          background: rgba(92, 143, 136, 0.13);
-          color: var(--green-dark);
-          font-weight: 700;
-        }
-
-        .mode-pills .pill,
-        .ratio-pills .pill,
-        .duration-pills .pill,
-        .sort-pills .pill,
-        .quality-pills .pill,
-        .worker-pills .pill {
-          min-height: 42px;
-          padding: 0 18px;
-          font-size: 15px;
-        }
-
-        .mode-pills .pill.active,
-        .ratio-pills .pill.active,
-        .duration-pills .pill.active,
-        .sort-pills .pill.active,
-        .quality-pills .pill.active,
-        .worker-pills .pill.active {
-          background: linear-gradient(180deg, #7ea9a3 0%, #5c8f88 100%);
-          color: #ffffff;
-        }
-
-        .toolbar-input,
-        .toolbar-select {
-          min-height: 42px;
-          border-radius: 14px;
-          border: 1px solid #dbe0e8;
-          background: #ffffff;
-          padding: 0 14px;
-          color: #202123;
-          font-size: 14px;
-          min-width: 180px;
-          outline: none;
-        }
-
-        .hero {
-          padding: 20px 28px 10px;
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
-        }
-
-        .hero-card {
-          border: 1px solid #dbe0e8;
-          background: linear-gradient(180deg, #ffffff 0%, #fbfbfc 100%);
-          border-radius: 28px;
-          padding: 18px 18px 16px;
-          box-shadow: 0 10px 24px rgba(17, 24, 39, 0.04);
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-
-        .prompt-top {
           display: grid;
-          grid-template-columns: 1fr auto;
           gap: 16px;
-          align-items: stretch;
         }
-
-        .composer {
-          min-height: 130px;
-          display: flex;
-          align-items: flex-start;
-          gap: 14px;
-          border: 1px solid #d8dce4;
-          background: #ffffff;
+        .panel {
+          background: var(--panel);
+          border: 1px solid var(--line);
           border-radius: 24px;
-          padding: 14px 14px 12px 16px;
-          box-shadow: 0 2px 8px rgba(17, 24, 39, 0.03);
+          box-shadow: var(--shadow);
+          overflow: hidden;
         }
-
-        .composer-main {
-          flex: 1;
+        .header {
+          padding: 22px 24px 18px;
+          display: grid;
+          gap: 14px;
+        }
+        .title-row {
           display: flex;
-          flex-direction: column;
-          gap: 10px;
-          min-width: 0;
-        }
-
-        .composer textarea {
-          width: 100%;
-          resize: none;
-          border: none;
-          background: transparent;
-          outline: none;
-          font: inherit;
-          font-size: 21px;
-          line-height: 1.5;
-          color: var(--text);
-          min-height: 56px;
-          max-height: 220px;
-          padding: 4px 0;
-        }
-
-        .composer textarea::placeholder,
-        .mini-field::placeholder { color: #7f8795; }
-
-        .mini-field {
-          width: 100%;
-          resize: none;
-          border: 1px solid #e1e5ea;
-          background: #f8fafc;
-          outline: none;
-          font: inherit;
-          font-size: 14px;
-          line-height: 1.5;
-          color: var(--text);
-          min-height: 56px;
-          border-radius: 18px;
-          padding: 12px 14px;
-        }
-
-        .composer-tools {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 10px;
-          padding-top: 4px;
-        }
-
-        .round-icon {
-          width: 46px;
-          height: 46px;
-          border-radius: 999px;
-          border: 1px solid #e0e3e8;
-          background: #f7f8fa;
-          color: #8b919b;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          flex: 0 0 auto;
-        }
-
-        .generate {
-          min-width: 220px;
-          min-height: 64px;
-          padding: 0 24px;
-          border-radius: 999px;
-          border: 1px solid #9ab8b2;
-          background: linear-gradient(180deg, #6d9b95 0%, #5c8f88 100%);
-          color: #ffffff;
-          font-size: 20px;
-          font-weight: 800;
-          box-shadow: 0 14px 30px rgba(92, 143, 136, 0.2);
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 12px;
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
-        .generate:disabled,
-        .cancel-btn:disabled,
-        .ghost-btn:disabled { opacity: 0.65; cursor: not-allowed; }
-
-        .cancel-btn,
-        .ghost-btn {
-          min-width: 160px;
-          min-height: 54px;
-          padding: 0 20px;
-          border-radius: 999px;
-          border: 1px solid #d1d5db;
-          background: #ffffff;
-          color: #1f2937;
-          font-size: 16px;
-          font-weight: 700;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
-        .hero-meta {
-          display: flex;
-          align-items: center;
           justify-content: space-between;
           gap: 16px;
+          align-items: center;
           flex-wrap: wrap;
         }
-
-        .subhint {
-          color: #555d6b;
+        .title {
+          font-size: 30px;
+          font-weight: 900;
+          letter-spacing: -0.02em;
+        }
+        .subtitle {
           font-size: 15px;
+          color: var(--muted);
           line-height: 1.6;
         }
-
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; word-break: break-word; }
-
-        .model-select-wrap {
-          position: relative;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .model-select {
-          min-height: 54px;
-          padding: 0 18px 0 20px;
-          border: 1px solid #9ab8b2;
-          background: linear-gradient(180deg, #6d9b95 0%, #5c8f88 100%);
-          color: #ffffff;
-          font-size: 17px;
-          font-weight: 800;
-          border-radius: 18px;
-          display: inline-flex;
-          align-items: center;
-          gap: 12px;
-          box-shadow: 0 14px 30px rgba(92, 143, 136, 0.2);
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
-        .model-menu {
-          position: absolute;
-          top: calc(100% + 10px);
-          right: 0;
-          min-width: 360px;
-          max-height: 360px;
-          overflow-y: auto;
-          border-radius: 18px;
-          border: 1px solid #dfe5ea;
-          background: #ffffff;
-          box-shadow: 0 20px 42px rgba(15, 23, 42, 0.12);
-          padding: 10px;
-          display: none;
-          z-index: 30;
-        }
-
-        .model-select-wrap.open .model-menu { display: block; }
-
-        .model-option {
-          width: 100%;
-          min-height: 52px;
-          border: none;
-          background: transparent;
-          border-radius: 14px;
-          padding: 10px 14px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 16px;
-          text-align: left;
-          cursor: pointer;
-          font-size: 15px;
-          font-weight: 700;
-          color: #1f2937;
-        }
-
-        .model-option:hover,
-        .model-option.active { background: #f5f8f7; }
-
-        .model-option-text {
-          display: flex;
-          flex-direction: column;
-          gap: 3px;
-          min-width: 0;
-        }
-
-        .model-option-name {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .model-option-meta {
-          font-size: 12px;
-          font-weight: 600;
-          color: #6b7280;
-        }
-
-        .model-option-speed {
-          font-size: 12px;
-          font-weight: 800;
-          color: #48635e;
-          white-space: nowrap;
-        }
-
-        .detail-filters {
+        .badge-row {
           display: flex;
           flex-wrap: wrap;
-          gap: 12px 14px;
-          align-items: center;
-          justify-content: center;
+          gap: 10px;
         }
-
-        .filter-group {
+        .badge {
+          min-height: 40px;
+          border-radius: 999px;
+          padding: 0 14px;
           display: inline-flex;
           align-items: center;
           gap: 10px;
-          flex-wrap: wrap;
-        }
-
-        .mini-label {
-          font-size: 15px;
+          border: 1px solid var(--line);
+          background: #f8fafc;
+          font-size: 14px;
           font-weight: 700;
-          color: #2a2f39;
-          white-space: nowrap;
         }
-
-        .error-box,
-        .notice-box {
-          margin: 0 28px;
-          border-radius: 18px;
-          padding: 14px 16px;
-        }
-
-        .error-box {
-          border: 1px solid #fca5a5;
-          background: #fff1f2;
-          color: #991b1b;
-        }
-
-        .notice-box {
-          border: 1px solid #bfdbfe;
-          background: #eff6ff;
-          color: #1d4ed8;
-        }
-
-        .suggestions {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 14px;
-        }
-
-        .suggestion {
-          min-height: 58px;
-          border-radius: 22px;
-          border: 1px solid #e6e8ed;
-          background: linear-gradient(180deg, #fafafa 0%, #f3f3f5 100%);
-          box-shadow: var(--shadow-soft);
-          padding: 0 18px;
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          color: #303643;
-          font-size: 16px;
-          font-weight: 500;
-          cursor: pointer;
-          text-align: left;
-        }
-
-        .media-grid {
-          padding: 6px 28px 20px;
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 16px;
-        }
-
-        .card {
-          position: relative;
-          aspect-ratio: 16 / 11;
-          border-radius: 18px;
-          overflow: hidden;
-          box-shadow: var(--shadow-soft);
-          background: linear-gradient(135deg, #dfe6ea, #c7d2db);
-        }
-
-        .card img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          display: block;
-        }
-
-        .card-gradient {
-          position: absolute;
-          inset: auto 0 0 0;
-          height: 52%;
-          background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(16,24,40,0.68) 100%);
-        }
-
-        .play-badge {
-          position: absolute;
-          left: 14px;
-          top: 14px;
-          width: 44px;
-          height: 44px;
-          border-radius: 50%;
-          border: 1px solid rgba(255,255,255,0.5);
-          background: rgba(255,255,255,0.18);
-          backdrop-filter: blur(10px);
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          color: #ffffff;
-        }
-
-        .media-meta {
-          position: absolute;
-          left: 14px;
-          right: 14px;
-          bottom: 14px;
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-          color: #ffffff;
-        }
-
-        .media-title {
-          font-size: 16px;
-          font-weight: 700;
-          line-height: 1.35;
-        }
-
-        .media-tags {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-
-        .media-tag,
-        .tiny-badge {
-          min-height: 28px;
-          padding: 0 10px;
-          border-radius: 999px;
-          background: rgba(255,255,255,0.18);
-          border: 1px solid rgba(255,255,255,0.22);
-          backdrop-filter: blur(8px);
-          font-size: 12px;
-          font-weight: 700;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .details-grid {
-          padding: 0 28px 22px;
+        .dot { width: 10px; height: 10px; border-radius: 50%; }
+        .dot.ok { background: var(--ok); }
+        .dot.warn { background: var(--warn); }
+        .dot.bad { background: var(--bad); }
+        .dot.idle { background: #98a2b3; }
+        .grid {
           display: grid;
           grid-template-columns: 1.1fr 0.9fr;
           gap: 16px;
         }
-
-        .detail-panel {
-          border: 1px solid #e5e7eb;
-          background: #ffffff;
-          border-radius: 22px;
-          box-shadow: var(--shadow-soft);
-          padding: 18px;
+        .section {
+          padding: 20px 24px 24px;
+          display: grid;
+          gap: 18px;
         }
-
-        .detail-title {
+        .section-title {
           font-size: 18px;
           font-weight: 800;
-          color: #1f2937;
-          margin-bottom: 12px;
         }
-
-        .progress-box,
-        .info-box,
-        .list-card {
-          border: 1px solid #e5e7eb;
-          background: #f8fafc;
-          border-radius: 18px;
-          padding: 14px;
-        }
-
-        .progress-bar {
-          margin-top: 10px;
-          height: 10px;
-          border-radius: 999px;
-          background: #e5e7eb;
-          overflow: hidden;
-        }
-
-        .progress-bar > div {
-          height: 100%;
-          border-radius: 999px;
-          background: linear-gradient(180deg, #7ea9a3 0%, #5c8f88 100%);
-          transition: width .35s ease;
-        }
-
-        .result-grid,
-        .result-image-grid {
+        .controls-grid {
           display: grid;
-          gap: 12px;
           grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
         }
-
-        .result-image-grid img,
-        .preview-large img {
+        .field {
+          display: grid;
+          gap: 8px;
+        }
+        .field.full { grid-column: 1 / -1; }
+        .label {
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
+          color: #344054;
+          text-transform: uppercase;
+        }
+        input, select, textarea {
           width: 100%;
+          border-radius: 16px;
+          border: 1px solid #d7dde5;
+          background: #fff;
+          font: inherit;
+          color: var(--text);
+          padding: 13px 14px;
+          outline: none;
+        }
+        textarea { min-height: 148px; resize: vertical; }
+        .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+        .chip {
+          min-height: 42px;
+          border-radius: 999px;
+          padding: 0 16px;
+          border: 1px solid #d7dde5;
+          background: #fff;
+          color: #344054;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .chip.active {
+          background: linear-gradient(180deg, #458679 0%, #2f6f64 100%);
+          color: #fff;
+          border-color: #2f6f64;
+        }
+        .switch-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: center;
+        }
+        .switch {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 14px;
+          border-radius: 999px;
+          border: 1px solid var(--line);
+          background: #fff;
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .switch input { width: auto; margin: 0; }
+        .actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: center;
+        }
+        .primary, .secondary {
+          min-height: 52px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          padding: 0 22px;
+          font-size: 16px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .primary {
+          background: linear-gradient(180deg, #458679 0%, #2f6f64 100%);
+          color: white;
+          box-shadow: 0 14px 30px rgba(47, 111, 100, 0.22);
+        }
+        .secondary {
+          background: white;
+          color: #344054;
+          border-color: var(--line);
+        }
+        .primary:disabled, .secondary:disabled { opacity: 0.58; cursor: not-allowed; }
+        .hint, .info-box {
           border-radius: 18px;
-          border: 1px solid #e5e7eb;
+          border: 1px solid var(--line);
+          background: #f8fafc;
+          padding: 14px 16px;
+          color: #475467;
+          font-size: 14px;
+          line-height: 1.6;
+        }
+        .info-box.brand {
+          background: var(--brand-soft);
+          border-color: #d5e7e2;
+          color: #244b44;
+        }
+        .error-box {
+          border-radius: 18px;
+          border: 1px solid #fecaca;
+          background: #fff1f2;
+          color: #9f1239;
+          padding: 14px 16px;
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .notice-box {
+          border-radius: 18px;
+          border: 1px solid #cfe7de;
+          background: #f0faf6;
+          color: #14532d;
+          padding: 14px 16px;
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .result-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+        .image-card {
+          border-radius: 20px;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          background: #f8fafc;
+          min-height: 220px;
+        }
+        .image-card img {
           display: block;
+          width: 100%;
+          height: 100%;
           object-fit: cover;
         }
-
-        .log-list {
+        .result-meta {
           display: grid;
           gap: 10px;
         }
-
-        .json-box {
-          border: 1px solid #e5e7eb;
-          background: #f8fafc;
+        .meta-list { display: grid; gap: 8px; font-size: 14px; color: #475467; }
+        .list {
+          display: grid;
+          gap: 10px;
+          max-height: 420px;
+          overflow: auto;
+        }
+        .list-card {
           border-radius: 18px;
-          overflow: hidden;
+          border: 1px solid var(--line);
+          background: #fff;
+          padding: 14px 16px;
+          display: grid;
+          gap: 8px;
         }
-
-        .json-head {
-          border-bottom: 1px solid #e5e7eb;
-          padding: 10px 14px;
-          font-size: 11px;
-          font-weight: 800;
-          color: #6b7280;
-          text-transform: uppercase;
-          letter-spacing: .08em;
+        .history-button {
+          width: 100%;
+          border: none;
+          text-align: left;
+          cursor: pointer;
         }
-
-        .json-box pre,
+        .tiny {
+          font-size: 12px;
+          color: #667085;
+        }
+        .mono {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+          word-break: break-word;
+        }
         pre {
           margin: 0;
-          padding: 14px;
-          font-size: 11px;
-          color: #d5f5e3;
+          border-radius: 16px;
           background: #0f172a;
-          max-height: 280px;
+          color: #d5f5e3;
+          padding: 14px;
+          font-size: 12px;
           overflow: auto;
-          border-radius: 0;
+          max-height: 260px;
         }
-
-        .footer-row {
-          padding: 0 28px 22px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+        @media (max-width: 1060px) {
+          .grid, .result-grid, .controls-grid { grid-template-columns: 1fr; }
         }
-
-        .pagination-block {
-          display: inline-flex;
-          align-items: center;
-          gap: 14px;
-        }
-
-        .pagination-label {
-          font-size: 18px;
-          font-weight: 700;
-          color: #2a2f39;
-          white-space: nowrap;
-        }
-
-        .pagination {
-          display: inline-flex;
-          align-items: center;
-          border: 1px solid #e5e7eb;
-          background: #f3f4f7;
-          border-radius: 22px;
-          overflow: hidden;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
-        }
-
-        .page-btn,
-        .page-arrow {
-          min-width: 56px;
-          height: 52px;
-          border: none;
-          background: transparent;
-          color: #475163;
-          font-size: 20px;
-          font-weight: 600;
-          cursor: pointer;
-          border-right: 1px solid #e5e7eb;
-        }
-
-        .page-btn:last-child,
-        .page-arrow:last-child { border-right: none; }
-
-        .page-btn.active {
-          background: linear-gradient(180deg, #7ea9a3 0%, #5c8f88 100%);
-          color: #ffffff;
-          font-weight: 800;
-          min-width: 52px;
-          border-radius: 14px;
-          margin: 5px;
-          height: 42px;
-          border-right: none;
-        }
-
-        .split-stats {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-        }
-
-        .tiny,
-        .muted { font-size: 12px; color: #667085; }
-        .soft-text { color: #475467; font-size: 14px; line-height: 1.6; }
-        .stack { display: grid; gap: 12px; }
-        .row-wrap { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-
-        @media (max-width: 1280px) {
-          .media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .suggestions { grid-template-columns: 1fr; }
-          .details-grid { grid-template-columns: 1fr; }
-        }
-
-        @media (max-width: 980px) {
-          .app-shell { padding: 10px; }
-          .app { min-height: calc(100vh - 20px); }
-          .topbar { padding: 16px; align-items: flex-start; flex-direction: column; }
-          .nav { gap: 18px; }
-          .toolbar, .hero, .media-grid, .footer-row, .details-grid { padding-left: 16px; padding-right: 16px; }
-          .prompt-top { grid-template-columns: 1fr; }
-          .hero-meta { flex-direction: column; align-items: flex-start; }
-          .generate, .cancel-btn, .ghost-btn { width: 100%; }
-        }
-
-        @media (max-width: 760px) {
-          .media-grid, .result-grid, .result-image-grid, .split-stats { grid-template-columns: 1fr; }
-          .toolbar-row, .detail-filters { justify-content: flex-start; }
-          .pagination-block { flex-direction: column; align-items: flex-start; }
-          .model-select-wrap, .model-select { width: 100%; }
-          .model-select { justify-content: center; }
-          .composer { flex-direction: column; align-items: stretch; }
-          .composer-tools { justify-content: flex-start; flex-wrap: wrap; flex-direction: row; }
-          .toolbar-input, .toolbar-select { width: 100%; min-width: 0; }
+        @media (max-width: 720px) {
+          .shell { padding: 12px; }
+          .header, .section { padding-left: 16px; padding-right: 16px; }
+          .title { font-size: 24px; }
         }
       `}</style>
 
-      <div className="app-shell">
+      <div className="shell">
         <div className="app">
-          <header className="topbar">
-            <div className="brand">NISAI</div>
-            <nav className="nav" aria-label="Ana menü">
-              <a href="/sohbet">Sohbet</a>
-              <a href="/gorsel" className="active">Görsel Üretim</a>
-              <a href="/video">Video</a>
-              <a href="/tts">Ses (TTS)</a>
-              <a href="/ai-katalog">Ai Katalog</a>
-              <a href="/blog">Blog</a>
-            </nav>
-            <div className="top-right">
-              <div className={`status ${amgTone}`}>AMG · {toneText(amgTone)}</div>
-              <div className={`status ${amhTone}`}>AMH · {toneText(amhTone)}</div>
-              <div className={`status ${panelTone}`}>Panel · {toneText(panelTone)}</div>
-              <button className="icon-ghost" aria-label="Tanıyı yenile" type="button" onClick={() => void loadDiagnostics()}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"></circle><circle cx="12" cy="12" r="2"></circle><circle cx="19" cy="12" r="2"></circle></svg>
-              </button>
-            </div>
-          </header>
-
-          <main className="page">
-            <section className="toolbar">
-              <div className="toolbar-row">
-                <div className="toolbar-label">Akış</div>
-                <div className="pill-track worker-pills">
-                  <button type="button" className={`pill ${workerMode === 'amg' ? 'active' : ''}`} onClick={() => setWorkerMode('amg')}>AMG birincil</button>
-                  <button type="button" className={`pill ${workerMode === 'amh' ? 'active' : ''}`} onClick={() => setWorkerMode('amh')}>AMH orkestra</button>
-                </div>
-                <div className="toolbar-label">Kalite</div>
-                <div className="pill-track quality-pills">
-                  {QUALITY_OPTIONS.map((item) => (
-                    <button key={item} type="button" className={`pill ${quality === item ? 'active' : ''}`} onClick={() => setQuality(item)}>{item}</button>
-                  ))}
+          <section className="panel header">
+            <div className="title-row">
+              <div>
+                <div className="title">IMAGE.TSX</div>
+                <div className="subtitle">
+                  Birincil worker AMG. İkincil/orchestrator worker AMH. Model listesi AMG <span className="mono">GET /api/modeller</span> ile,
+                  üretim AMG <span className="mono">POST /api/gorsel</span> ile; orkestrasyon ise AMH <span className="mono">POST /api/calistir</span> ile yürütülür.
                 </div>
               </div>
+              <div className="badge-row">
+                <div className="badge"><span className={`dot ${amgTone}`}></span> AMG · {toneText(amgTone)}</div>
+                <div className="badge"><span className={`dot ${amhTone}`}></span> AMH · {toneText(amhTone)}</div>
+                <div className="badge"><span className={`dot ${panelTone}`}></span> Panel · {toneText(panelTone)}</div>
+              </div>
+            </div>
+            <div className="tiny">
+              AMG durum: {safeText(amgHealth?.durum, '-')} · AMH sağlık puanı: {safeNumber(amhHealth?.saglik?.saglikPuani, 0) || '-'} · Panel aktif iş: {safeNumber(amhPanel?.aktifIsSayisi, 0)}
+            </div>
+          </section>
 
-              <div className="toolbar-row">
-                <div ref={modelWrapRef} className={`model-select-wrap ${modelMenuOpen ? 'open' : ''}`}>
-                  <button className="model-select" type="button" aria-expanded={modelMenuOpen} onClick={() => setModelMenuOpen((prev) => !prev)}>
-                    <span>{selectedModel ? `${selectedModel.ad} · ${selectedModel.saglayici}` : modelsLoading ? 'Model yükleniyor' : 'Model seçimi'}</span>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path></svg>
+          {error ? <div className="error-box">{error}</div> : null}
+          {notice ? <div className="notice-box">{notice}</div> : null}
+
+          <div className="grid">
+            <section className="panel section">
+              <div className="section-title">Üretim Formu</div>
+
+              <div className="field full">
+                <div className="label">Prompt</div>
+                <textarea
+                  placeholder="Ne üretileceğini açık yaz. Stil, ışık, kompozisyon ve kullanım amacı ekle."
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+                <div className="tiny">AMG sınırı {MAX_PROMPT}, AMH IMG sınırı {MAX_AMH_PROMPT} karakter.</div>
+              </div>
+
+              <div className="chips">
+                {QUICK_PROMPTS.map((item) => (
+                  <button key={item} type="button" className="chip" onClick={() => setPrompt(item)}>
+                    Hızlı prompt
                   </button>
-                  <div className="model-menu">
-                    {modelsLoading && <button className="model-option active" type="button" disabled>Model yükleniyor...</button>}
-                    {!modelsLoading && models.length === 0 && <button className="model-option active" type="button" disabled>Görsel modeli bulunamadı</button>}
-                    {!modelsLoading && models.map((item) => {
-                      const active = item.kimlik === selectedModelId;
-                      return (
-                        <button key={item.kimlik} className={`model-option ${active ? 'active' : ''}`} type="button" onClick={() => { setSelectedModelId(item.kimlik); setModelMenuOpen(false); }}>
-                          <div className="model-option-text">
-                            <span className="model-option-name">{item.ad}</span>
-                            <span className="model-option-meta">{safeText(item.saglayici, '-')} · bağlam {safeNumber(item.baglam, 0) || '-'}</span>
-                          </div>
-                          <span className="model-option-speed">{safeText(item.kimlik, 'model')}</span>
-                        </button>
-                      );
-                    })}
+                ))}
+              </div>
+
+              <div className="controls-grid">
+                <div className="field">
+                  <div className="label">Çalışma modu</div>
+                  <div className="chips">
+                    <button type="button" className={`chip ${workerMode === 'amg' ? 'active' : ''}`} onClick={() => setWorkerMode('amg')}>
+                      AMG birincil
+                    </button>
+                    <button type="button" className={`chip ${workerMode === 'amh' ? 'active' : ''}`} onClick={() => setWorkerMode('amh')}>
+                      AMH orkestra
+                    </button>
                   </div>
                 </div>
 
-                <div className="pill-track sort-pills">
-                  {STYLE_OPTIONS.map((item) => (
-                    <button key={item || 'default-style'} type="button" className={`pill ${style === item ? 'active' : ''}`} onClick={() => setStyle(item)}>
-                      {item || 'Varsayılan'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="detail-filters">
-                <div className="filter-group">
-                  <div className="mini-label">Sağlayıcı</div>
-                  <select className="toolbar-select" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}>
-                    {providerOptions.map((provider) => <option key={provider || 'all'} value={provider}>{provider || 'Tümü'}</option>)}
+                <div className="field">
+                  <div className="label">Sağlayıcı filtresi</div>
+                  <select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}>
+                    <option value="">Tümü</option>
+                    {providerOptions.filter(Boolean).map((provider) => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
                   </select>
                 </div>
-                <div className="filter-group">
-                  <div className="mini-label">Model ara</div>
-                  <input className="toolbar-input" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="AMG /api/modeller üzerinde ara" />
+
+                <div className="field">
+                  <div className="label">Model arama</div>
+                  <input
+                    value={modelSearch}
+                    onChange={(event) => setModelSearch(event.target.value)}
+                    placeholder="AMG /api/modeller üzerinde ara"
+                  />
                 </div>
-                <div className="filter-group">
-                  <div className="mini-label">Oran</div>
-                  <div className="pill-track ratio-pills">
+
+                <div className="field">
+                  <div className="label">Model</div>
+                  <select
+                    value={selectedModelId}
+                    onChange={(event) => setSelectedModelId(event.target.value)}
+                    disabled={modelsLoading || !models.length}
+                  >
+                    {!models.length ? <option value="">{modelsLoading ? 'Modeller yükleniyor...' : 'Model bulunamadı'}</option> : null}
+                    {models.map((item) => (
+                      <option key={item.kimlik} value={item.kimlik}>
+                        {item.ad} · {item.saglayici}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <div className="label">Kalite</div>
+                  <div className="chips">
+                    {QUALITY_OPTIONS.map((item) => (
+                      <button key={item} type="button" className={`chip ${quality === item ? 'active' : ''}`} onClick={() => setQuality(item)}>
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="label">Oran</div>
+                  <div className="chips">
                     {RATIO_OPTIONS.map((item) => (
-                      <button key={item.key} type="button" className={`pill ${ratio === item.key ? 'active' : ''}`} onClick={() => { setRatio(item.key); setWidth(item.width); setHeight(item.height); }}>
+                      <button
+                        key={item.key}
+                        type="button"
+                        className={`chip ${ratio === item.key ? 'active' : ''}`}
+                        onClick={() => {
+                          setRatio(item.key);
+                          setWidth(item.width);
+                          setHeight(item.height);
+                        }}
+                      >
                         {item.label}
                       </button>
                     ))}
                   </div>
                 </div>
-                <div className="filter-group">
-                  <div className="mini-label">Test Modu</div>
-                  <div className="pill-track mode-pills">
-                    <button type="button" className={`pill ${!testMode ? 'active' : ''}`} onClick={() => setTestMode(false)}>Kapalı</button>
-                    <button type="button" className={`pill ${testMode ? 'active' : ''}`} onClick={() => setTestMode(true)}>Açık</button>
-                  </div>
+
+                <div className="field">
+                  <div className="label">Genişlik</div>
+                  <input
+                    type="number"
+                    min={256}
+                    max={2048}
+                    step={1}
+                    value={width}
+                    onChange={(event) => {
+                      const nextWidth = Math.max(256, Math.min(2048, safeNumber(event.target.value, 1024)));
+                      setWidth(nextWidth);
+                      setRatio(ratioFromSize(nextWidth, height));
+                    }}
+                  />
                 </div>
-                <div className="filter-group">
-                  <div className="mini-label">Adet</div>
-                  <div className="pill-track duration-pills">
-                    {[1, 2, 3, 4].map((item) => <button key={item} type="button" className={`pill ${count === item ? 'active' : ''}`} onClick={() => setCount(item)}>{item}</button>)}
-                  </div>
+
+                <div className="field">
+                  <div className="label">Yükseklik</div>
+                  <input
+                    type="number"
+                    min={256}
+                    max={2048}
+                    step={1}
+                    value={height}
+                    onChange={(event) => {
+                      const nextHeight = Math.max(256, Math.min(2048, safeNumber(event.target.value, 1024)));
+                      setHeight(nextHeight);
+                      setRatio(ratioFromSize(width, nextHeight));
+                    }}
+                  />
                 </div>
-                <div className="filter-group">
-                  <div className="mini-label">Fallback</div>
-                  <div className="pill-track mode-pills">
-                    <button type="button" className={`pill ${autoFallback ? 'active' : ''}`} onClick={() => setAutoFallback(true)} disabled={workerMode !== 'amg'}>Açık</button>
-                    <button type="button" className={`pill ${!autoFallback ? 'active' : ''}`} onClick={() => setAutoFallback(false)} disabled={workerMode !== 'amg'}>Kapalı</button>
-                  </div>
+
+                <div className="field">
+                  <div className="label">Adet</div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={4}
+                    step={1}
+                    value={count}
+                    onChange={(event) => setCount(Math.max(1, Math.min(4, safeNumber(event.target.value, 1))))}
+                  />
                 </div>
+
+                <div className="field">
+                  <div className="label">Stil (özellikle AMH)</div>
+                  <input
+                    value={style}
+                    onChange={(event) => setStyle(event.target.value)}
+                    placeholder="ör. cinematic, anime, photoreal"
+                  />
+                </div>
+
+                <div className="field full">
+                  <div className="label">Referans görsel URL (özellikle AMH)</div>
+                  <input
+                    value={referenceImageUrl}
+                    onChange={(event) => setReferenceImageUrl(event.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+
+              <div className="switch-row">
+                <label className="switch">
+                  <input type="checkbox" checked={testMode} onChange={(event) => setTestMode(event.target.checked)} />
+                  Test modu
+                </label>
+                <label className="switch">
+                  <input type="checkbox" checked={autoFallback} onChange={(event) => setAutoFallback(event.target.checked)} disabled={workerMode !== 'amg'} />
+                  AMG hata verirse AMH fallback
+                </label>
+              </div>
+
+              <div className="actions">
+                <button className="primary" type="button" onClick={() => void handleGenerate()} disabled={submitting || modelsLoading}>
+                  {submitting ? 'Çalışıyor...' : workerMode === 'amg' ? 'AMG ile üret' : 'AMH ile üret'}
+                </button>
+                <button className="secondary" type="button" onClick={() => { resetResultState(); setError(''); setNotice(''); }} disabled={submitting}>
+                  Sonucu temizle
+                </button>
+                <button className="secondary" type="button" onClick={() => { void loadModels(); void loadWorkerHealth(); }} disabled={submitting}>
+                  Modelleri ve durumu yenile
+                </button>
+              </div>
+
+              <div className="info-box brand">
+                Sayfa artık AMG için <span className="mono">/api/modeller</span>, <span className="mono">/api/gorsel</span> ve <span className="mono">/api/durum</span> kullanır.
+                AMH tarafında ise <span className="mono">/api/calistir</span>, <span className="mono">/api/durum</span>, <span className="mono">/api/panel</span>,
+                <span className="mono"> /api/is/:isKimligi</span>, <span className="mono">/gecmis</span>, <span className="mono">/arsiv</span> ve <span className="mono">/izle</span> kullanılır.
               </div>
             </section>
 
-            {error ? <div className="error-box"><div>{error}</div></div> : null}
-            {notice ? <div className="notice-box"><div>{notice}</div></div> : null}
+            <section className="panel section">
+              <div className="section-title">Aktif Sonuç ve İzleme</div>
 
-            <section className="hero">
-              <div className="hero-card">
-                <div className="prompt-top">
-                  <div className="composer">
-                    <div className="composer-main">
-                      <textarea ref={promptRef} rows={1} placeholder="Görsel talimatını yaz. Stil, kalite, oran ve kullanım amacı ile yönlendir." value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-                      <textarea className="mini-field" rows={2} placeholder="Negatif prompt (görünüm korunuyor, worker çekirdeği destekliyorsa kullanılır)" value={negativePrompt} onChange={(event) => setNegativePrompt(event.target.value)} />
-                      <textarea className="mini-field" rows={2} placeholder="Referans görsel URL (özellikle AMH referans akışı için)" value={referenceImageUrl} onChange={(event) => setReferenceImageUrl(event.target.value)} />
-                    </div>
-                    <div className="composer-tools">
-                      <button className="round-icon" type="button" aria-label="Durumu yenile" onClick={() => { void loadModels(); void loadWorkerHealth(); void loadDiagnostics(); }}>
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path><path d="M20 4v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path></svg>
-                      </button>
-                      <button className="round-icon" type="button" aria-label="Tanı paneli" onClick={() => void loadDiagnostics()}>
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2"></circle><path d="M12 10v5M12 7.5h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"></path></svg>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gap: 12 }}>
-                    <button className="generate" type="button" onClick={() => void handleGenerate()} disabled={submitting || modelsLoading}>
-                      {submitting ? 'Görsel Hazırlanıyor' : workerMode === 'amg' ? 'AMG ile Görsel Oluştur' : 'AMH ile Görsel Oluştur'}
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"></path></svg>
-                    </button>
-                    <button className="cancel-btn" type="button" onClick={() => { resetResultState(); setNotice('Sonuç alanı temizlendi.'); setError(''); }} disabled={submitting}>Sonucu Temizle</button>
-                    <button className="ghost-btn" type="button" onClick={() => void loadDiagnostics()} disabled={submitting}>Tanıyı Yenile</button>
-                  </div>
-                </div>
-
-                <div className="hero-meta">
-                  <div className="subhint">
-                    AMG <strong className="mono">GET /api/modeller</strong> ile <strong>saglayici</strong>, <strong>ara</strong> ve <strong>sinir</strong> filtrelerini kullanır; üretim <strong className="mono">POST /api/gorsel</strong> ile yürür. AMH tarafında <strong className="mono">POST /api/calistir</strong> ana giriş, iş takibi ise <strong className="mono">/api/panel</strong>, <strong className="mono">/api/is/:isKimligi</strong>, <strong className="mono">/gecmis</strong>, <strong className="mono">/arsiv</strong>, <strong className="mono">/izle</strong> ve tanı için <strong className="mono">/api/teshis</strong> zincirini kullanır.
-                  </div>
-                  <div className="subhint">
-                    İstemci kimliği: <strong className="mono">{clientId}</strong> · AMG durum: <strong>{safeText(amgHealth?.durum, '-')}</strong> · AMH sağlık puanı: <strong>{safeNumber(amhHealth?.saglik?.saglikPuani, 0) || '-'}</strong>
-                  </div>
-                </div>
-              </div>
-
-              <div className="suggestions">
-                {QUICK_PROMPTS.map((item) => (
-                  <button key={item} className="suggestion" type="button" onClick={() => setPrompt(item)}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3c3.3 0 6 2.7 6 6 0 2.1-1 3.6-2.2 4.8-.8.8-1.2 1.4-1.3 2.2H9.5c-.1-.8-.5-1.4-1.3-2.2C7 12.6 6 11.1 6 9c0-3.3 2.7-6 6-6Z" stroke="currentColor" strokeWidth="1.8"></path><path d="M9.5 18h5M10 21h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"></path></svg>
-                    {item}
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="media-grid">
-              {previewCards.map((item, index) => (
-                <article key={`${item.title}_${index}`} className="card">
-                  <img src={item.image} alt={item.title} />
-                  <div className="play-badge"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 6.5v11l9-5.5-9-5.5Z"></path></svg></div>
-                  <div className="card-gradient"></div>
-                  <div className="media-meta">
-                    <div className="media-title">{item.title}</div>
-                    <div className="media-tags">{item.tags.map((tag) => <span key={`${item.title}_${tag}`} className="media-tag">{tag}</span>)}</div>
-                  </div>
-                </article>
-              ))}
-            </section>
-
-            <section className="details-grid">
-              <div className="detail-panel">
-                <div className="detail-title">Aktif İş ve Görsel Önizleme</div>
-                {result ? (
-                  <div className="stack">
-                    <div className="progress-box">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 14, flexWrap: 'wrap' }}>
-                        <span><strong>Kaynak:</strong> {result.source}{result.fallbackUsed ? ' · fallback' : ''}</span>
-                        <span style={{ color: '#64748b' }}><strong>Durum:</strong> {result.status}</span>
-                      </div>
-                      {result.source === 'AMH' ? (
-                        <>
-                          <div className="progress-bar"><div style={{ width: `${Math.max(0, Math.min(100, safeNumber(amhJobStatus?.yuzde, result.images.length ? 100 : 0)))}%` }} /></div>
-                          <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
-                            <span>{safeText(amhJobStatus?.aktifAdim, result.message || 'Bekleniyor')}</span>
-                            <span>%{Math.max(0, Math.min(100, safeNumber(amhJobStatus?.yuzde, result.images.length ? 100 : 0)))}</span>
-                          </div>
-                        </>
-                      ) : null}
-                    </div>
-                    <div className="info-box">
+              {result ? (
+                <>
+                  <div className="result-meta">
+                    <div className="meta-list">
+                      <div><strong>Kaynak:</strong> {result.source}{result.fallbackUsed ? ' · fallback' : ''}</div>
+                      <div><strong>Durum:</strong> {result.status}</div>
                       <div><strong>Model:</strong> {result.model}</div>
                       <div><strong>Sağlayıcı:</strong> {result.provider}</div>
                       <div><strong>Mesaj:</strong> {result.message}</div>
-                      <div className="soft-text" style={{ marginTop: 8 }}>{result.prompt}</div>
                     </div>
-                    {result.images.length > 0 ? <div className="result-image-grid">{result.images.map((src) => <img key={src} src={src} alt="Üretilen görsel" />)}</div> : <div className="info-box" style={{ textAlign: 'center', color: '#64748b' }}>Görsel hazır olduğunda burada görünecek.</div>}
-                    <div className="json-box"><div className="json-head">Sonuç ham gövdesi</div><pre>{prettyJson(result.raw)}</pre></div>
+                    <div className="hint">{result.prompt}</div>
                   </div>
-                ) : <div className="info-box" style={{ textAlign: 'center', color: '#64748b' }}>Henüz aktif iş yok.</div>}
-              </div>
 
-              <div className="detail-panel">
-                <div className="detail-title">Model, Sağlık ve İstek Omurgası</div>
-                {selectedModel ? (
-                  <div className="stack">
-                    <div className="info-box">
-                      <div className="row-wrap">
-                        <strong>{selectedModel.ad}</strong>
-                        <span className="tiny-badge">{safeText(selectedModel.saglayici, '-')}</span>
-                        <span className="tiny-badge">{safeText(selectedModel.kimlik, 'kimlik')}</span>
-                      </div>
-                      <div className="soft-text" style={{ marginTop: 10 }}>AMG liste filtreleri: sağlayıcı={providerFilter || 'tümü'} · arama={modelSearch || 'yok'} · oran={ratioLabel(ratio)} · boyut={width}x{height} · kalite={quality}</div>
-                      <div className="soft-text">Takma adlar: {selectedModel.takmaAdlar?.length ? selectedModel.takmaAdlar.join(', ') : 'yok'}</div>
-                      <div className="soft-text">Bağlam: {safeNumber(selectedModel.baglam, 0) || '-'} · Azami token: {safeNumber(selectedModel.azamiToken, 0) || '-'}</div>
+                  {result.images.length ? (
+                    <div className="result-grid">
+                      {result.images.map((src) => (
+                        <div key={src} className="image-card">
+                          <img src={src} alt="Üretilen görsel" />
+                        </div>
+                      ))}
                     </div>
-                    <div className="split-stats">
-                      <div className="list-card"><div><strong>AMG durum</strong></div><div className="tiny">{safeText(amgHealth?.durum, '-')} · ortak durum={String(amgHealth?.ortakDurumVar ?? false)}</div><div className="tiny">sağlık test durumu: {safeText(amgHealthTest?.durum, '-')}</div></div>
-                      <div className="list-card"><div><strong>AMH durum</strong></div><div className="tiny">{safeText(amhHealth?.durum, '-')} · puan {safeNumber(amhHealth?.saglik?.saglikPuani, 0) || '-'}</div><div className="tiny">panel aktif iş: {safeNumber(amhPanel?.aktifIsSayisi, 0)}</div></div>
-                    </div>
-                    <div className="json-box"><div className="json-head">AMG üretim gövdesi</div><pre>{prettyJson({ prompt: prompt.trim(), negativePrompt: negativePrompt.trim(), model: selectedModel.kimlik, kalite: quality, genislik: width, yukseklik: height, adet: count, testModu: testMode, istemciKimligi: clientId })}</pre></div>
-                    <div className="json-box"><div className="json-head">AMH çalışma gövdesi</div><pre>{prettyJson({ hizmetTuru: 'IMG', prompt: prompt.trim(), negativePrompt: negativePrompt.trim(), model: selectedModel.kimlik, saglayici: safeText(selectedModel.saglayici), kalite: quality, oran: ratioLabel(ratio), adet: count, stil: style.trim(), referansGorsel: safeText(referenceImageUrl) || null, testModu: testMode, kullaniciKimligi: clientId })}</pre></div>
-                  </div>
-                ) : <div className="info-box" style={{ textAlign: 'center', color: '#64748b' }}>Model seçildiğinde detay burada görünür.</div>}
-              </div>
-            </section>
+                  ) : (
+                    <div className="info-box">Görsel henüz dönmedi. AMH iş takibi panelini aşağıdan izle.</div>
+                  )}
+                </>
+              ) : (
+                <div className="info-box">Henüz aktif sonuç yok.</div>
+              )}
 
-            <section className="details-grid" style={{ paddingTop: 0 }}>
-              <div className="detail-panel">
-                <div className="detail-title">AMH İş Durumu, Geçmiş ve Arşiv</div>
-                <div className="stack">
-                  {amhJobId ? (
-                    <div className="progress-box">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 14, flexWrap: 'wrap' }}>
-                        <span><strong>İş kimliği:</strong> <span className="mono">{amhJobId}</span></span>
-                        <span style={{ color: '#64748b' }}>{runStatusText(amhJobStatus?.durum)}</span>
-                      </div>
-                      <div className="progress-bar"><div style={{ width: `${Math.max(0, Math.min(100, safeNumber(amhJobStatus?.yuzde, 0)))}%` }} /></div>
-                      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
-                        <span>{safeText(amhJobStatus?.aktifAdim, 'Bekleniyor')}</span>
-                        <span>%{Math.max(0, Math.min(100, safeNumber(amhJobStatus?.yuzde, 0)))}</span>
-                      </div>
-                      <div className="row-wrap" style={{ marginTop: 10 }}>
-                        <button className="ghost-btn" type="button" onClick={() => void loadAmhArtifacts(amhJobId)}>Geçmiş ve arşivi yenile</button>
-                        {!isAmhTerminal(amhJobStatus?.durum) ? <button className="ghost-btn" type="button" onClick={() => void pollAmhJob(amhJobId)}>İzlemeyi sürdür</button> : null}
-                      </div>
-                    </div>
-                  ) : <div className="info-box">AMH iş kimliği oluşmadıysa şu an AMG sonucu gösteriliyor olabilir.</div>}
-                  <div className="log-list">
-                    {amhHistory.length === 0 ? <div className="info-box">Henüz AMH olay geçmişi yok.</div> : amhHistory.map((event) => (
-                      <div key={safeText(event.olayKimligi, randomId('evt'))} className="list-card">
-                        <div className="row-wrap" style={{ justifyContent: 'space-between' }}><strong>{safeText(event.olay, 'olay')}</strong><span className="tiny">{formatDate(event.zamanDamgasi)}</span></div>
-                        <pre>{prettyJson(event.veri)}</pre>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="json-box"><div className="json-head">AMH arşiv özeti</div><pre>{prettyJson(amhArchive)}</pre></div>
-                </div>
-              </div>
-
-              <div className="detail-panel">
-                <div className="detail-title">Ek Tanı Panelleri ve Atlanan Worker Yüzleri</div>
-                <div className="stack">
-                  <div className="split-stats">
-                    <div className="list-card"><div><strong>AMG test/saglik</strong></div><div className="tiny">{safeText(amgHealthTest?.mesaj, safeText(amgHealthTest?.durum, '-'))}</div></div>
-                    <div className="list-card"><div><strong>AMG ortak durum</strong></div><div className="tiny">{prettyJson(amgSharedState?.durum).slice(0, 120) || '-'}</div></div>
-                  </div>
-                  <div className="json-box"><div className="json-head">AMH /api/teshis (IMG)</div><pre>{prettyJson(amhDiagnostics)}</pre></div>
-                  <div className="json-box"><div className="json-head">AMH /api/teshis/IMG</div><pre>{prettyJson(amhServiceDiagnostics)}</pre></div>
-                  <div className="json-box"><div className="json-head">AMH /api/saglayici/IMG/{encodeURIComponent(safeText(selectedModel?.saglayici, providerFilter || 'auto'))}</div><pre>{prettyJson(amhProviderDiagnostics)}</pre></div>
-                  <div className="json-box"><div className="json-head">AMH /api/ispat/ozet</div><pre>{prettyJson(amhProof)}</pre></div>
-                </div>
-              </div>
-            </section>
-
-            <section className="details-grid" style={{ paddingTop: 0 }}>
-              <div className="detail-panel" style={{ gridColumn: '1 / -1' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-                  <div className="detail-title" style={{ marginBottom: 0 }}>Yerel Geçmiş</div>
-                  <div className="row-wrap">
-                    <button type="button" className="ghost-btn" style={{ minHeight: 46, minWidth: 120 }} onClick={() => { void loadModels(); void loadWorkerHealth(); void loadDiagnostics(); }}>Yenile</button>
-                    <button type="button" className="ghost-btn" style={{ minHeight: 46, minWidth: 120 }} onClick={() => setLocalHistory([])}>Geçmişi Temizle</button>
-                  </div>
-                </div>
-                <div className="log-list">
-                  {localHistory.length === 0 ? <div className="info-box" style={{ color: '#64748b' }}>Bu oturumda henüz üretim geçmişi yok.</div> : localHistory.map((entry) => (
-                    <button key={entry.id} type="button" onClick={() => void loadHistoryRecord(entry)} className="list-card" style={{ textAlign: 'left', cursor: 'pointer' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}><span style={{ fontSize: 14, fontWeight: 700, color: '#1f2937' }}>{entry.source} · {entry.status}{entry.fallbackUsed ? ' · fallback' : ''}</span><span style={{ fontSize: 12, color: '#64748b' }}>{formatDate(entry.at)}</span></div>
-                      <div style={{ marginTop: 8, fontSize: 13, color: '#334155' }}>{entry.prompt}</div>
-                      <div style={{ marginTop: 6, fontSize: 12, color: '#64748b' }}>{entry.model} · {entry.provider}</div>
+              <div className="section-title">AMH iş durumu</div>
+              {amhJobId ? (
+                <div className="list-card">
+                  <div><strong>İş kimliği:</strong> <span className="mono">{amhJobId}</span></div>
+                  <div><strong>Durum:</strong> {runStatusText(amhJobStatus?.durum)}</div>
+                  <div><strong>Yüzde:</strong> %{safeNumber(amhJobStatus?.yuzde, 0)}</div>
+                  <div><strong>Aktif adım:</strong> {safeText(amhJobStatus?.aktifAdim, '-')}</div>
+                  <div><strong>Son güncelleme:</strong> {formatDate(amhJobStatus?.sonGuncelleme)}</div>
+                  <div className="actions">
+                    <button className="secondary" type="button" onClick={() => void loadAmhArtifacts(amhJobId)}>
+                      Geçmiş ve arşivi yenile
                     </button>
-                  ))}
+                    {!isAmhTerminal(amhJobStatus?.durum) ? (
+                      <button className="secondary" type="button" onClick={() => void pollAmhJob(amhJobId)}>
+                        İzlemeyi sürdür
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
+              ) : (
+                <div className="info-box">AMH iş kimliği oluşmadıysa şu an AMG sonucu gösteriliyor olabilir.</div>
+              )}
+            </section>
+          </div>
+
+          <div className="grid">
+            <section className="panel section">
+              <div className="section-title">AMH olay geçmişi</div>
+              <div className="list">
+                {!amhHistory.length ? (
+                  <div className="info-box">Henüz AMH olay geçmişi yok.</div>
+                ) : (
+                  amhHistory.map((event) => (
+                    <div key={safeText(event.olayKimligi, randomId('evt'))} className="list-card">
+                      <div><strong>{safeText(event.olay, 'olay')}</strong></div>
+                      <div className="tiny">{formatDate(event.zamanDamgasi)}</div>
+                      <pre>{JSON.stringify(event.veri, null, 2)}</pre>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
 
-            <div className="footer-row">
-              <div className="pagination-block">
-                <div className="pagination-label">Sayfa Sayısı</div>
-                <div className="pagination">
-                  <button className="page-arrow" type="button" aria-label="Önceki sayfa" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"></path></svg></button>
-                  {[1, 2, 3, 4].map((page) => <button key={page} className={`page-btn ${currentPage === page ? 'active' : ''}`} type="button" onClick={() => setCurrentPage(page)}>{page}</button>)}
-                  <button className="page-arrow" type="button" aria-label="Sonraki sayfa" onClick={() => setCurrentPage((page) => Math.min(4, page + 1))}><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9.5 5.5L16 12l-6.5 6.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"></path></svg></button>
+            <section className="panel section">
+              <div className="section-title">AMH arşiv özeti</div>
+              {amhArchive ? (
+                <div className="list-card">
+                  <div><strong>Durum:</strong> {safeText(amhArchive.durum, '-')}</div>
+                  <div><strong>Başlangıç:</strong> {formatDate(amhArchive.baslangicZamani)}</div>
+                  <div><strong>Bitiş:</strong> {formatDate(amhArchive.bitisZamani)}</div>
+                  <div><strong>Son mesaj:</strong> {safeText(amhArchive.sonMesaj, '-')}</div>
+                  <pre>{JSON.stringify(amhArchive.sonuc, null, 2)}</pre>
                 </div>
-              </div>
+              ) : (
+                <div className="info-box">Arşiv kaydı henüz yok.</div>
+              )}
+            </section>
+          </div>
+
+          <section className="panel section">
+            <div className="section-title">Yerel geçmiş</div>
+            <div className="list">
+              {!localHistory.length ? (
+                <div className="info-box">Bu oturumda henüz üretim geçmişi yok.</div>
+              ) : (
+                localHistory.map((entry) => (
+                  <button key={entry.id} type="button" className="list-card history-button" onClick={() => void loadHistoryRecord(entry)}>
+                    <div><strong>{entry.source}</strong> · {entry.status}{entry.fallbackUsed ? ' · fallback' : ''}</div>
+                    <div className="tiny">{formatDate(entry.at)}</div>
+                    <div>{entry.prompt}</div>
+                    <div className="tiny">{entry.model} · {entry.provider}</div>
+                  </button>
+                ))
+              )}
             </div>
-          </main>
+          </section>
         </div>
       </div>
     </>
