@@ -943,7 +943,6 @@ router.post('/api/ortak-durum/yaz', async function ({ request, me }) {
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
 });
-
 router.post('/api/onbellek/sil', async function ({ request, me }) {
   try {
     var govde = await govdeyiCozumle(request);
@@ -969,6 +968,108 @@ router.post('/api/onbellek/sil', async function ({ request, me }) {
     });
   } catch (hata) {
     guvenliLogYaz('onbellek-sil-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/', async function ({ request }) {
+  try {
+    return basariCevabiUret(request, {
+      mesaj: 'AMS Puter Worker çalışıyor.',
+      durum: 'ok',
+      worker: 'ams',
+      yollar: [
+        '/',
+        '/api',
+        '/api/test/calisiyor',
+        '/api/test/saglik',
+        '/api/amac'
+      ]
+    });
+  } catch (hata) {
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api', async function ({ request }) {
+  try {
+    return basariCevabiUret(request, {
+      mesaj: 'AMS API erişilebilir.',
+      durum: 'ok',
+      onerilenTestYollari: [
+        '/api/test/calisiyor',
+        '/api/test/saglik',
+        '/api/amac'
+      ]
+    });
+  } catch (hata) {
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api/test/calisiyor', async function ({ request }) {
+  try {
+    return basariCevabiUret(request, {
+      calisiyor: true,
+      durum: 'ok',
+      mesaj: 'Worker istek alıyor ve cevap üretiyor.'
+    });
+  } catch (hata) {
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api/test/saglik', async function ({ request, me }) {
+  try {
+    var saglikBilgisi = {
+      worker: 'ams',
+      durum: 'ok',
+      zamanDamgasi: new Date().toISOString(),
+      kontroller: {
+        router: true,
+        cevapUretimi: true,
+        mePuter: !!(me && me.puter),
+        kvErisimiTanimli: !!(me && me.puter && me.puter.kv)
+      }
+    };
+
+    return basariCevabiUret(request, saglikBilgisi);
+  } catch (hata) {
+    guvenliLogYaz('saglik-testi-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api/amac', async function ({ request }) {
+  try {
+    return basariCevabiUret(request, {
+      baslik: 'AMS Puter Worker amaci',
+      maddeSayisi: 20,
+      maddeler: [
+        '1. Ortak uygulama ayarlarini merkezi olarak sunmak.',
+        '2. me.puter uzerinden ortak veriyi guvenli sekilde yonetmek.',
+        '3. Ortak anahtar-deger verilerini depolamak ve okumak.',
+        '4. Uygulama seviyesinde onbellek kullanmak.',
+        '5. Gerektiginde onbellek kayitlarini temizlemek.',
+        '6. Yonetici kontrollu islemleri tek merkezde toplamak.',
+        '7. Frontend icin duzenli JSON cevaplari saglamak.',
+        '8. Uygulama durumunu tek endpointten gostermek.',
+        '9. Calisma testi icin hizli kontrol endpointleri sunmak.',
+        '10. Saglik kontrolu ile runtime durumunu gostermek.',
+        '11. me.puter kaynaklarina dayali servis mantigini calistirmak.',
+        '12. Uygulama sahibinin hesabiyla ortak operasyonlari yurutmek.',
+        '13. Ortak ayarlarin istemciler tarafindan okunabilmesini saglamak.',
+        '14. Gerekli oldugunda yonetici anahtari ile korumali islem yapmak.',
+        '15. Tutarli hata cevabi uretmek.',
+        '16. Tutarli basari cevabi uretmek.',
+        '17. Hassas olmayan guvenli log kayitlari olusturmak.',
+        '18. Ortak veri yapisini daginiklik olmadan tek workerda toplamak.',
+        '19. Test, durum ve amac endpointleri ile debug surecini kolaylastirmak.',
+        '20. AMS sisteminin Puter Worker katmanini merkezi servis noktasi olarak calistirmak.'
+      ]
+    });
+  } catch (hata) {
+    guvenliLogYaz('amac-endpoint-hatasi', guvenliHataMesajiAl(hata));
     return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
 });
