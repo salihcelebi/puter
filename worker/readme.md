@@ -1,289 +1,705 @@
-# README.md
-# AMG + AMH — KAYNAK KODU GÖRMEDEN UYUMLU KODLAMA İÇİN TAM TEKNİK SÖZLEŞME
+Aşağıdaki README, mevcut `worker/readme.md` temel alınarak ve gerçek `amg.js` ile `amh.js` davranışları üzerinden boşlukları kapatacak şekilde yeniden kuruldu.   
 
-> AMAÇ:
-> Bu belge, herhangi bir yapay zekânın (ör. Codex), **kaynak kodu doğrudan görmeden**
-> AMG ve AMH worker’larının davranışını anlayıp **uyumlu yeniden uygulama**
-> geliştirebilmesi için hazırlanmıştır.
->
-> KISA CEVAP:
-> - Bu README seviyesinde teknik sözleşme ile: **EVET, kaynak kod görülmeden bile %90 ile %95  doğrulukta kodlama yapılabilir.**
-> - Birebir davranış uyumunu son aşamada doğrulamak için: **contract test (sözleşme testi)** uygulanmalıdır.
+````md
+# README.md
+# AMG + AMH — KAYNAK KODU GÖRÜLMEDEN %95 DOĞRULUKTA UYUMLU KODLAMA İÇİN TAM TEKNİK SÖZLEŞME
 
 ## BU README.md NEDEN OLUŞTURULDU?
 
-1. Bu README.md, AMG ve AMH worker’larının kaynak kodu açılmadan da **%90 ile %95  doğrulukta yeniden kodlanabilmesi** için oluşturuldu.  
-2. Bu belge, bir yapay zekânın veya geliştiricinin sistemin dış davranışını anlayıp uyumlu kod üretebilmesi için hazırlandı.  
-3. Bu README.md, endpoint’lerin görevini, girişlerini, çıkışlarını ve kurallarını tek yerde toplamak için yazıldı.  
-4. Bu belge, AMG ile AMH’nin rol farkını netleştirip yanlış mimari kurulmasını önlemek için oluşturuldu.  
-5. Bu README.md, kaynak kod görünmese bile route, response, yetki, KV ve iş akışlarının doğru kurulabilmesi için hazırlandı.  
-6. Bu belge, tahmine dayalı değil, açık teknik sözleşmeye dayalı kodlama yapılabilmesi için oluşturuldu.  
-7. Bu README.md, başka bir AI aracının sistemi eksik anlamadan, kontrollü ve tutarlı biçimde geliştirme yapabilmesi için yazıldı.  
-8. Bu belge, bakım, taşıma, yeniden yazım ve genişletme süreçlerinde resmi teknik referans olarak kullanılmak için hazırlandı.  
-9. Bu README.md, canlı davranışı koruyarak iç kod farklı olsa bile dış uyumun korunmasını sağlamak için oluşturuldu.  
+1. Bu README.md, AMG ve AMH worker’larının kaynak kodu açılmadan da %95 doğrulukta yeniden kodlanabilmesi için oluşturuldu.
+2. Bu belge, bir yapay zekânın veya geliştiricinin sistemin dış davranışını anlayıp uyumlu kod üretebilmesi için hazırlandı.
+3. Bu README.md, endpoint’lerin görevini, girişlerini, çıkışlarını ve kurallarını tek yerde toplamak için yazıldı.
+4. Bu belge, AMG ile AMH’nin rol farkını netleştirip yanlış mimari kurulmasını önlemek için oluşturuldu.
+5. Bu README.md, kaynak kod görünmese bile route, response, yetki, KV ve iş akışlarının doğru kurulabilmesi için hazırlandı.
+6. Bu belge, tahmine dayalı değil, açık teknik sözleşmeye dayalı kodlama yapılabilmesi için oluşturuldu.
+7. Bu README.md, başka bir AI aracının sistemi eksik anlamadan, kontrollü ve tutarlı biçimde geliştirme yapabilmesi için yazıldı.
+8. Bu belge, bakım, taşıma, yeniden yazım ve genişletme süreçlerinde resmi teknik referans olarak kullanılmak için hazırlandı.
+9. Bu README.md, canlı davranışı koruyarak iç kod farklı olsa bile dış uyumun korunmasını sağlamak için oluşturuldu.
 10. Bu belge, AMG ve AMH worker’larının kaynak kod görülmeden bile yüksek doğrulukla kodlanabileceğini net biçimde tanımlayan ana teknik sözleşmedir.
+
+---
+
+## AMAÇ
+
+Bu belge, herhangi bir yapay zekânın veya geliştiricinin, AMG ve AMH worker’larının **kaynak kodunu doğrudan görmeden** davranışı anlayıp **uyumlu yeniden uygulama** geliştirebilmesi için hazırlanmıştır.
+
+## KISA CEVAP
+
+- Sadece kısa amaç listeleriyle: güvenli ve yüksek doğruluklu kodlama yapılamaz.
+- Bu README seviyesinde teknik sözleşme ile: kaynak kod görülmeden bile **%95 doğrulukta** kodlama yapılabilir.
+- Son davranış eşleşmesini doğrulamak için: **contract test** uygulanmalıdır.
 
 ---
 
 # 1) SİSTEM KİMLİĞİ
 
 ## 1.1 Worker’lar
-- Worker adı: `amg`
-- Canlı worker URL’si: `https://amg.puter.work`
 
-- Worker adı: `amh`
-- Canlı worker URL’si: `https://amh.puter.work`
+### AMG
+- worker adı: `amg`
+- canlı worker URL’si: `https://amg.puter.work`
+
+### AMH
+- worker adı: `amh`
+- canlı worker URL’si: `https://amh.puter.work`
 
 ## 1.2 Kamuya açık raw kaynaklar
-AMG ve AMH worker’ları Puter hosting üstündedir.
-Doğrudan Puter hosting üzerinden okunmaları garanti olmadığı için kamuya açık raw erişim URL’leri:
+
+AMG ve AMH worker’ları Puter hosting üzerindedir.  
+Doğrudan Puter hosting üzerinden okunmaları garanti edilmediği için kamuya açık raw erişim URL’leri:
 
 - `https://turk.puter.site/workers/all/amg.js`
 - `https://turk.puter.site/workers/all/amh.js`
 
-## 1.3 Çalışma varsayımı
-Bu iki worker da Puter Worker ortamında çalışır.
-Temel runtime bağımlılığı:
+## 1.3 Runtime varsayımları
+
+Her iki worker da Puter Worker ortamını hedefler.  
+Pratikte şu nesneler beklenir:
+
 - `router`
+- `Response`
+- `ReadableStream`
+- `TextEncoder`
+- `URL`
+- `me`
 - `me.puter`
 - `me.puter.kv`
 - `me.puter.ai.*`
-- standard web runtime nesneleri (`Response`, `ReadableStream`, `TextEncoder`, `URL`)
+- bazı akışlarda `globalThis.me.puter`
 
 ---
 
-# 2) EN KRİTİK AYRIM — AMG VE AMH AYNI ŞEY DEĞİLDİR
+# 2) ANA AYRIM
 
 ## 2.1 AMG nedir?
-AMG, **uygulamaya yakın ortak servis worker’ıdır**.
-Ana rolü:
+AMG, uygulamaya yakın ortak servis worker’ıdır.
+
+Ana işi:
 - sohbet
 - akışlı sohbet
 - görsel üretim
+- model listesi
 - ayar okuma/kaydetme
 - ortak durum okuma/yazma
 - önbellek silme
-- durum / test / amaç endpointleri
+- sağlık/test/amaç endpointleri
 
-Yani AMG, “frontend’in konuştuğu pratik API worker” gibi düşünülmelidir.
+Kısa tanım:
+**frontend’e yakın, pratik, doğrudan kullanılan servis worker**
 
 ## 2.2 AMH nedir?
-AMH, **genel AI orkestrasyon worker’ıdır**.
-Ana rolü:
-- hizmet türünü çözmek
-- girdiyi normalize etmek
-- uygun sağlayıcı / işçi seçmek
-- timeout uygulamak
-- maliyet bütçesi korumak
-- fallback zinciri kurmak
-- iş kaydı / geçmiş / arşiv tutmak
-- teşhis / sağlık / sağlayıcı erişim testleri üretmek
+AMH, çok hizmetli AI orkestrasyon worker’ıdır.
 
-Yani AMH, “arka plandaki orkestra şefi + iş takip uzmanı + teşhis motoru” olarak düşünülmelidir.
+Ana işi:
+- hizmet türü çözmek
+- girdi doğrulamak
+- etkin ayar üretmek
+- sağlayıcı önceliği belirlemek
+- fallback kurmak
+- timeout uygulamak
+- maliyet bütçesi yönetmek
+- iş kaydı / geçmiş / arşiv tutmak
+- sağlık / teşhis / panel verisi üretmek
+
+Kısa tanım:
+**AI çağrılarının arka plandaki orkestra şefi + iş takip + teşhis çekirdeği**
 
 ## 2.3 Tek cümlede fark
-- **AMG = doğrudan uygulama servis worker’ı**
-- **AMH = çok hizmetli AI çağrı orkestratörü**
+- **AMG = uygulama servis worker’ı**
+- **AMH = AI orkestrasyon worker’ı**
 
 ---
 
-# 3) AI İÇİN UYGULAMA KURALI
-Bir yapay zekâ bu belgeye göre kod yazacaksa şu kuralları bozmayacak:
+# 3) KAYNAK KOD GÖRÜLMEDEN KODLAMA KURALI
 
-1. Endpoint adlarını değiştirmeyecek.
-2. JSON response şekillerini bozmayacak.
-3. AMG ile AMH response şemalarını birbirine karıştırmayacak.
-4. Rate limit davranışını AMG’de koruyacak.
-5. İş kaydı / geçmiş / arşiv mantığını AMH’de koruyacak.
-6. CORS başlıklarını eksiltmeyecek.
-7. Yönetici koruması olan akışları açık bırakmayacak.
-8. Puter runtime yoksa bunu sessizce yutmayacak; kontrollü hata veya degrade davranış üretecek.
-9. Birebir aynı iç kodu yazmak zorunda değil; ama **aynı dış sözleşmeyi** üretmek zorunda.
-10. “Benzer” değil, **uyumlu** davranış hedeflenecek.
+Bu belgeye göre yeniden uygulama yazacak bir AI aşağıdaki kuralları bozmayacaktır:
+
+1. Route adlarını değiştirmeyecek.
+2. Request alanlarını bozmayacak.
+3. Response sözleşmesini bozmayacak.
+4. AMG ile AMH cevap şemalarını birbirine karıştırmayacak.
+5. AMG’deki admin koruma mantığını gevşetmeyecek.
+6. AMG’deki rate limit ve cache anahtarlarını koruyacak.
+7. AMH’deki iş kaydı / geçmiş / arşiv omurgasını koruyacak.
+8. AMH’deki timeout / retry / fallback / maliyet mantığını koruyacak.
+9. PDF ve DEEPSEARCH’i tek adımlı yalancı akışa çevirmeyecek.
+10. İç implementasyon birebir aynı olmak zorunda değildir; dış davranış birebir uyumlu olmalıdır.
 
 ---
 
-# 4) RESPONSE ŞEMALARI — EN ÖNEMLİ BÖLÜM
+# 4) RESPONSE SÖZLEŞMELERİ
 
-## 4.1 AMG response sözleşmesi
-AMG başarı cevabı:
-- `ok: true`
-- `veri: <payload>`
-- `hata: null`
+## 4.1 AMG cevap şeması
 
-AMG hata cevabı:
-- `ok: false`
-- `veri: null | ekVeri`
-- `hata: <string>`
-
-### AMG örnek başarı
+### Başarı
+```json
 {
   "ok": true,
-  "veri": {
-    "durum": "hazir"
-  },
+  "veri": {},
   "hata": null
 }
+````
 
-### AMG örnek hata
+### Hata
+
+```json
 {
   "ok": false,
   "veri": null,
-  "hata": "Geçersiz JSON gövdesi."
+  "hata": "..."
 }
+```
 
-## 4.2 AMH response sözleşmesi
-AMH standard cevabı:
-- `ok: boolean`
-- `veri: any | null`
-- `hata: object | null`
-- `meta: object`
+### AMG notları
 
-### AMH meta alanları
-AMH meta objesinde tipik alanlar:
-- `dosya`
-- `surum`
-- `zamanDamgasi`
-- `isKimligi`
-- `sureMs`
-- `maliyet`
-- `teshis`
+* `meta` alanı yoktur.
+* `Content-Type: application/json; charset=utf-8`
+* `Cache-Control: no-store`
 
-### AMH örnek başarı
+---
+
+## 4.2 AMH cevap şeması
+
+### Standart gövde
+
+```json
 {
   "ok": true,
-  "veri": {
-    "hizmetTuru": "CHAT"
-  },
+  "veri": {},
   "hata": null,
   "meta": {
     "dosya": "amh.js",
     "surum": "2026-03-18.1",
-    "zamanDamgasi": "2026-03-18T12:00:00.000Z",
-    "isKimligi": "is_xxx",
-    "sureMs": 123,
-    "maliyet": 0.0012,
-    "teshis": null
-  }
-}
-
-### AMH örnek hata
-{
-  "ok": false,
-  "veri": null,
-  "hata": {
-    "mesaj": "Girdi doğrulaması başarısız.",
-    "kod": "DOGRULAMA_HATASI",
-    "ayrintilar": ["CHAT için mesajlar veya prompt zorunludur."]
-  },
-  "meta": {
-    "dosya": "amh.js",
-    "surum": "2026-03-18.1",
-    "zamanDamgasi": "2026-03-18T12:00:00.000Z",
+    "zamanDamgasi": "ISO_DATE",
     "isKimligi": null,
     "sureMs": 0,
     "maliyet": 0,
     "teshis": null
   }
 }
+```
+
+### Hata gövdesi
+
+```json
+{
+  "ok": false,
+  "veri": null,
+  "hata": {
+    "mesaj": "...",
+    "kod": "...",
+    "ayrintilar": []
+  },
+  "meta": {
+    "dosya": "amh.js",
+    "surum": "2026-03-18.1",
+    "zamanDamgasi": "ISO_DATE",
+    "isKimligi": null,
+    "sureMs": 0,
+    "maliyet": 0,
+    "teshis": null
+  }
+}
+```
+
+### AMH notları
+
+* `meta` zorunlu omurganın parçasıdır.
+* `dosya` ve `surum` AMH içinde sabittir.
+* `yanitDondur()` tüm nihai JSON cevabın alt taşıyıcısıdır.
 
 ---
 
-# 5) CORS VE ORTAK HTTP KURALLARI
+# 5) CORS VE HTTP KURALLARI
 
 ## 5.1 AMG CORS
-İzin verilen header’lar:
-- `Content-Type`
-- `Authorization`
-- `X-Istemci-Kimligi`
-- `X-Yonetici-Anahtari`
 
-İzin verilen method’lar:
-- `GET`
-- `POST`
-- `PUT`
-- `DELETE`
-- `OPTIONS`
+Başlıklar:
+
+* `Access-Control-Allow-Origin: origin || *`
+* `Access-Control-Allow-Headers: Content-Type, Authorization, X-Istemci-Kimligi, X-Yonetici-Anahtari`
+* `Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS`
+* `Access-Control-Allow-Credentials: origin ? true : false`
+* `Vary: Origin`
 
 ## 5.2 AMH CORS
-AMH, AMG’deki header’lara ek olarak şunu da tanır:
-- `X-Korelasyon-Anahtari`
 
-## 5.3 OPTIONS davranışı
-Her iki worker da OPTIONS isteğine:
-- `204`
-- boş body
-- CORS başlıkları
-ile cevap vermelidir.
+AMH aynı mantığı kullanır, ek olarak şunu kabul eder:
+
+* `X-Korelasyon-Anahtari`
+
+## 5.3 OPTIONS
+
+Her iki worker:
+
+* `204`
+* boş body
+* CORS başlıkları
+  döndürür.
 
 ---
 
-# 6) AMG — TAM TEKNİK SÖZLEŞME
+# 6) AMG — TAM DAVRANIŞ SÖZLEŞMESİ
 
 ---
 
-## 6.1 AMG’nin ana sorumluluğu
-AMG şu alanları yönetir:
+## 6.1 AMG’nin ana görevi
 
-1. sohbet isteği alma
-2. akışlı sohbet üretme
-3. görsel üretme
-4. model listesi dökme
-5. ayarları KV’den okuma
-6. ayarları KV’ye yazma
+AMG aşağıdaki alanları yönetir:
+
+1. sohbet
+2. akışlı sohbet
+3. görsel üretim
+4. model listesi
+5. ayar okuma
+6. ayar kaydetme
 7. ortak durum okuma
 8. ortak durum yazma
-9. önbellek kaydı silme
-10. servis sağlık / amaç / test endpointleri sunma
+9. önbellek silme
+10. sağlık, test, amaç ve tanıtım endpointleri
 
 ---
 
-## 6.2 AMG endpoint listesi
+## 6.2 AMG route listesi
 
-### Genel / kök
-- `GET /`
-- `GET /tumu`
-- `GET /api`
-- `GET /api/amac`
+### Genel
 
-### Test / sağlık
-- `GET /api/test/calisiyor`
-- `GET /api/test/saglik`
-- `GET /api/test/me-puter`
+* `GET /`
+* `GET /tumu`
+* `GET /api`
+* `GET /api/amac`
 
 ### Durum / modeller
-- `GET /api/durum`
-- `GET /api/modeller`
+
+* `GET /api/durum`
+* `GET /api/modeller`
 
 ### Sohbet
-- `POST /api/sohbet`
-- `POST /api/sohbet/akis`
+
+* `POST /api/sohbet`
+* `POST /api/sohbet/akis`
 
 ### Görsel
-- `POST /api/gorsel`
+
+* `POST /api/gorsel`
 
 ### Ayarlar
-- `GET /api/ayarlar/getir`
-- `POST /api/ayarlar/kaydet`
+
+* `GET /api/ayarlar/getir`
+* `POST /api/ayarlar/kaydet`
 
 ### Ortak durum
-- `GET /api/ortak-durum/oku`
-- `POST /api/ortak-durum/yaz`
+
+* `GET /api/ortak-durum/oku`
+* `POST /api/ortak-durum/yaz`
 
 ### Önbellek
-- `POST /api/onbellek/sil`
+
+* `POST /api/onbellek/sil`
+
+### Test
+
+* `GET /api/test/calisiyor`
+* `GET /api/test/saglik`
+* `GET /api/test/me-puter`
+
+### Preflight
+
+* `OPTIONS /*yol`
 
 ---
 
-## 6.3 AMG — endpoint ayrıntıları
+## 6.3 AMG gövde parse davranışı
 
-### 6.3.1 `GET /api/durum`
+Fonksiyon: `govdeyiCozumle(request)`
+
+Kurallar:
+
+* `content-type` içinde `application/json` yoksa `{}` döner.
+* `application/json` ise `request.json()` dener.
+* parse başarısızsa `null` döner.
+* route’lar `govde === null` kontrolü ile `400 Geçersiz JSON gövdesi.` döndürür.
+
+Önemli sonuç:
+
+* AMG form-data veya urlencoded parse etmez.
+* JSON dışı body’ler hata değil, boş nesne gibi görülür.
+
+---
+
+## 6.4 AMG KV anahtarları
+
+### Ayarlar
+
+* `uygulama:ayarlar`
+
+### Ortak durum
+
+* `ortakveri:durum`
+
+### Rate limit sayaçları
+
+* `oran:<istemciKimligi>:<dakikaDamgasi>`
+
+### Sohbet cache
+
+* `onbellek:sohbet:<timestamp>`
+
+### Akış cache
+
+* `onbellek:akis:<timestamp>`
+
+### Görsel cache
+
+* `onbellek:gorsel:<timestamp>`
+
+### Test key
+
+* `ams:test:meputer:kontrol`
+
+---
+
+## 6.5 AMG TTL kuralları
+
+### Rate limit
+
+* TTL: `saniyeDamgasiAl() + 120`
+
+### Sohbet cache
+
+* TTL: `saniyeDamgasiAl() + 3600`
+
+### Akış cache
+
+* TTL: `saniyeDamgasiAl() + 3600`
+
+### Görsel cache
+
+* TTL: `saniyeDamgasiAl() + 3600`
+
+---
+
+## 6.6 AMG istemci kimliği çıkarma mantığı
+
+Fonksiyon: `istemciKimliginiCikar(request, user)`
+
+Sıra:
+
+1. `x-istemci-kimligi`
+2. `origin`
+3. `user.id`
+4. `user.uuid`
+5. `user.username`
+6. `user.email`
+7. fallback: `genel`
+
+Ek kural:
+
+* sonuç string’e çevrilir
+* en fazla `160` karakter tutulur
+
+---
+
+## 6.7 AMG rate limit kuralları
+
+Fonksiyon: `istekSiniriniKontrolEt(me, istemciKimligi, dakikaBasinaSinir)`
+
+Limitler:
+
+* `/api/sohbet` → `12`
+* `/api/sohbet/akis` → `8`
+* `/api/gorsel` → `4`
+
+Hata metni:
+
+* `İstek sınırı aşıldı. Lütfen kısa süre sonra tekrar dene.`
+
+Aşım durumunda:
+
+* HTTP `429`
+
+---
+
+## 6.8 AMG sohbet doğrulama kuralları
+
+Fonksiyon: `sohbetGovdesiniDogrula(govde)`
+
+### Zorunlu alanlar
+
+* `model` zorunlu
+* `mesajlar` veya `prompt` zorunlu
+
+### Prompt fallback
+
+* `mesajlar` yok ama `prompt` varsa:
+
+```json
+[{ "role": "user", "content": "<prompt>" }]
+```
+
+### Mesaj sayısı
+
+* en fazla `40`
+
+### Geçerli roller
+
+* `system`
+* `assistant`
+* `user`
+* `tool`
+
+### İçerik tipleri
+
+* string içerik kabul edilir
+* içerik dizisi kabul edilir
+* dizi içindeki desteklenen tipler:
+
+  * `text`
+  * `file`
+
+### text öğesi
+
+* boş olamaz
+* tek text öğesi max `12000`
+
+### file öğesi
+
+* `puter_path` zorunlu
+
+### Bir mesajdaki toplam text
+
+* max `16000`
+
+### Tüm mesajların toplam text’i
+
+* max `30000`
+
+### Normalize edilen alanlar
+
+* `sicaklik` → varsayılan `0.7`, aralık `0–2`
+* `azamiToken` → varsayılan `1200`, aralık `1–4000`
+* `dusunmeSeviyesi`
+* `metinKisalikSeviyesi`
+* `webArama`
+* `istemciKimligi`
+
+---
+
+## 6.9 AMG görsel doğrulama kuralları
+
+Fonksiyon: `gorselGovdesiniDogrula(govde)`
+
+### Zorunlu
+
+* `prompt`
+
+### Sınırlar
+
+* prompt max `2000`
+* `genislik` → `256–2048`
+* `yukseklik` → `256–2048`
+* `adet` → `1–4`
+
+### Normalize edilen alanlar
+
+* `model`
+* `kalite` → varsayılan `low`
+* `genislik` → varsayılan `1024`
+* `yukseklik` → varsayılan `1024`
+* `adet` → varsayılan `1`
+* `testModu`
+* `istemciKimligi`
+
+---
+
+## 6.10 AMG ayar doğrulama kuralları
+
+Fonksiyon: `ayarGirdisiniDogrula(govde)`
+
+Alanlar:
+
+* `ayarlar`
+* `yoneticiAnahtari`
+* `yeniYoneticiAnahtari`
+
+Kural:
+
+* boş `ayarlar` + boş `yeniYoneticiAnahtari` birlikte kabul edilmez
+
+---
+
+## 6.11 AMG ortak durum doğrulama kuralları
+
+Fonksiyon: `ortakDurumGovdesiniDogrula(govde)`
+
+`durum` şu tiplerden biri olabilir:
+
+* object
+* array
+* string
+* number
+* boolean
+
+Aksi halde hata:
+
+* `durum alanı zorunludur.`
+
+---
+
+## 6.12 AMG önbellek silme doğrulama kuralları
+
+Fonksiyon: `onbellekSilGovdesiniDogrula(govde)`
+
+Kurallar:
+
+* `anahtar` zorunlu
+* sadece `onbellek:` ile başlayan anahtarlar silinebilir
+* `yoneticiAnahtari` gövdeden alınır
+
+---
+
+## 6.13 AMG yönetici anahtarı kuralları
+
+### Fonksiyonlar
+
+* `yoneticiAnahtariVarMi`
+* `yoneticiYetkisiniDogrula`
+
+### İlk kurulum
+
+* `gizliYoneticiAnahtari` yoksa
+* `yeniYoneticiAnahtari` zorunlu
+* minimum `16` karakter
+
+### Sonraki kaydetmeler
+
+* `yoneticiAnahtari` ile doğrulama gerekir
+
+### Saklanan alan
+
+* `gizliYoneticiAnahtari`
+
+### Dışarıya asla verilmez
+
+* `ayarlariDisariHazirla()` bu alanı response’tan siler
+
+---
+
+## 6.14 AMG AI seçenekleri
+
+Fonksiyon: `sohbetSecenekleriniHazirla(sohbetVerisi, akisModu)`
+
+Çıkan alanlar:
+
+* `model`
+* `stream`
+* `max_tokens`
+* `temperature`
+
+Opsiyonel:
+
+* `reasoning_effort` ← `dusunmeSeviyesi`
+* `text_verbosity` ← `metinKisalikSeviyesi`
+* `tools: [{ type: 'web_search' }]` ← `webArama = true`
+
+---
+
+## 6.15 AMG SSE kuralları
+
+Fonksiyonlar:
+
+* `sseSatiriUret`
+* `akisDestegiVarMi`
+* `akisYanitiUret`
+
+### Ortam uygunsa
+
+* `ReadableStream`
+* `TextEncoder`
+
+Vardır ve SSE açılır.
+
+### Ortam uygun değilse
+
+AMG normal JSON döner:
+
+```json
+{
+  "ok": true,
+  "veri": {
+    "akisaUygunOrtam": false,
+    "metin": "..."
+  },
+  "hata": null
+}
+```
+
+### SSE event adları
+
+* `hazir`
+* `parca`
+* `arac`
+* `bitti`
+* `hata`
+
+### Hazır event
+
+```txt
+event: hazir
+data: {"ok":true,"veri":{"durum":"hazir"},"hata":null}
+```
+
+### Parça event
+
+```txt
+event: parca
+data: {"ok":true,"veri":{"metin":"..."}, "hata":null}
+```
+
+### Araç event
+
+Tool parçası gelirse:
+
+```json
+{
+  "ok": true,
+  "veri": {
+    "ad": "<tool name>",
+    "girdi": {}
+  },
+  "hata": null
+}
+```
+
+### Bitti event
+
+Toplu metni döner.
+
+### Hata event
+
+Güvenli hata mesajı döner.
+
+### SSE response başlıkları
+
+* `Content-Type: text/event-stream; charset=utf-8`
+* `Cache-Control: no-cache, no-transform`
+* `Connection: keep-alive`
+
+---
+
+## 6.16 AMG route sözleşmeleri
+
+### `GET /api/durum`
+
 Amaç:
-- worker çalışıyor mu?
-- yönetici kurulmuş mu?
-- ortak durum var mı?
 
-Başarı payload’ı:
+* worker hazır mı
+* yönetici kurulmuş mu
+* ortak durum var mı
+
+Örnek veri:
+
+```json
 {
   "servis": "amg",
   "durum": "hazir",
@@ -292,47 +708,48 @@ Başarı payload’ı:
   "ortakDurumVar": true,
   "zaman": "ISO_DATE"
 }
+```
 
 ---
 
-### 6.3.2 `GET /api/modeller`
+### `GET /api/modeller`
+
 Amaç:
-- Puter AI model listesini istemciye vermek
 
-Query parametreleri:
-- `saglayici`
-- `ara`
-- `sinir`
+* model listesi döndürmek
 
-Beklenen davranış:
-- `me.puter.ai.listModels(saglayici || null)` çağrılır
-- sonuç normalize edilir
-- filtrelenir
-- üst sınır uygulanır
+Query:
 
-Başarı payload’ı:
-{
-  "toplam": 25,
-  "modeller": [
-    {
-      "kimlik": "gpt-5-nano",
-      "ad": "GPT-5 Nano",
-      "saglayici": "openai",
-      "baglam": null,
-      "azamiToken": 128000,
-      "maliyet": null,
-      "takmaAdlar": []
-    }
-  ]
-}
+* `saglayici`
+* `ara`
+* `sinir`
+
+Normalizasyon:
+
+* `kimlik`
+* `ad`
+* `saglayici`
+* `baglam`
+* `azamiToken`
+* `maliyet`
+* `takmaAdlar`
+
+Sınır:
+
+* varsayılan `150`
+* aralık `1–500`
 
 ---
 
-### 6.3.3 `POST /api/sohbet`
-Amaç:
-- senkron sohbet cevabı üretmek
+### `POST /api/sohbet`
 
-İstek gövdesi:
+Amaç:
+
+* senkron sohbet
+
+Body örneği:
+
+```json
 {
   "model": "gpt-5-nano",
   "mesajlar": [
@@ -345,1087 +762,1929 @@ Amaç:
   "webArama": false,
   "istemciKimligi": "optional"
 }
+```
 
-Alternatif giriş:
-- `mesajlar` yoksa `prompt` kabul edilir
-- bu durumda worker bunu tek user mesajına çevirir
+Akış:
 
-Davranış:
-1. body parse edilir
-2. gövde doğrulanır
-3. istemci kimliği çıkarılır
-4. rate limit uygulanır
-5. `me.puter.ai.chat(...)` çağrılır
-6. cevap metne dönüştürülür
-7. 1 saat TTL ile KV önbelleğe yazılır
-8. standart başarı cevabı döner
+1. JSON parse
+2. sohbet doğrulama
+3. istemci kimliği çıkarma
+4. rate limit
+5. `me.puter.ai.chat(...)`
+6. metne dönüştürme
+7. cache yazma
+8. başarı cevabı
 
-Başarı payload’ı:
-{
-  "model": "gpt-5-nano",
-  "metin": "LLM cevabı",
-  "oranSayisi": 3,
-  "onbellekAnahtari": "onbellek:sohbet:TIMESTAMP"
-}
+Cache gövdesi:
 
-Rate limit:
-- dakika başına `12`
+* `model`
+* `istemciKimligi`
+* `soru`
+* `cevap`
+* `zaman`
 
-KV önbellek kaydı:
-- anahtar: `onbellek:sohbet:<timestamp>`
-- içerik:
-  - `model`
-  - `istemciKimligi`
-  - `soru`
-  - `cevap`
-  - `zaman`
+Başarı veri alanları:
 
-TTL:
-- `3600 saniye`
+* `model`
+* `metin`
+* `oranSayisi`
+* `onbellekAnahtari`
 
 ---
 
-### 6.3.4 `POST /api/sohbet/akis`
+### `POST /api/sohbet/akis`
+
 Amaç:
-- SSE ile akışlı sohbet üretmek
 
-İstek gövdesi:
-- `/api/sohbet` ile aynıdır
+* akışlı sohbet
 
-Davranış:
-1. gövde parse edilir
-2. sohbet gövdesi doğrulanır
-3. istemci kimliği çıkarılır
-4. rate limit uygulanır
-5. ortam `ReadableStream` destekliyorsa SSE açılır
-6. `me.puter.ai.chat(..., { stream: true })` çağrılır
-7. parçalar `event:` satırlarıyla yayınlanır
-8. bittiğinde özet KV’ye yazılır
+Akış:
 
-Rate limit:
-- dakika başına `8`
+1. JSON parse
+2. sohbet doğrulama
+3. istemci kimliği
+4. rate limit
+5. SSE veya fallback JSON
+6. `me.puter.ai.chat(..., { stream: true })`
+7. text parçaları `parca` event’i
+8. tool parçaları `arac` event’i
+9. tamamlanan metni `onbellek:akis:*` altında kaydet
 
-SSE event tipleri:
-- `hazir`
-- `parca`
-- `arac`
-- `bitti`
-- `hata`
+Cache gövdesi:
 
-SSE veri şekli:
-- her event için `data: <JSON>`
-
-Örnek event akışı:
-event: hazir
-data: {"ok":true,"veri":{"durum":"hazir"},"hata":null}
-
-event: parca
-data: {"ok":true,"veri":{"metin":"Mer"},"hata":null}
-
-event: parca
-data: {"ok":true,"veri":{"metin":"haba"},"hata":null}
-
-event: bitti
-data: {"ok":true,"veri":{"metin":"Merhaba"},"hata":null}
-
-KV önbellek:
-- anahtar: `onbellek:akis:<timestamp>`
-- TTL: 1 saat
+* `model`
+* `istemciKimligi`
+* `cevap`
+* `zaman`
 
 ---
 
-### 6.3.5 `POST /api/gorsel`
+### `POST /api/gorsel`
+
 Amaç:
-- txt2img görsel üretmek
 
-İstek gövdesi:
-{
-  "prompt": "kırmızı bir araba",
-  "model": "optional-model",
-  "kalite": "low",
-  "genislik": 1024,
-  "yukseklik": 1024,
-  "adet": 1,
-  "testModu": false,
-  "istemciKimligi": "optional"
-}
+* txt2img üretimi
 
-Davranış:
-1. gövde parse edilir
-2. prompt zorunlu kontrolü yapılır
-3. rate limit uygulanır
-4. `me.puter.ai.txt2img(...)` çağrılır
-5. çıktı normalize edilir
-6. KV’ye cache kaydı yazılır
-7. JSON cevap döner
+AI çağrısı:
 
-Rate limit:
-- dakika başına `4`
+```js
+me.puter.ai.txt2img({
+  prompt,
+  test_mode,
+  quality,
+  width,
+  height,
+  n,
+  model?
+})
+```
 
-Başarı payload’ı:
-{
-  "model": "optional-model",
-  "prompt": "kırmızı bir araba",
-  "url": "https://...",
-  "ham": {}
-}
+Çıktı çözümleme:
 
-KV cache:
-- anahtar: `onbellek:gorsel:<timestamp>`
-- alanlar:
-  - `model`
-  - `istemciKimligi`
-  - `prompt`
-  - `url`
-  - `zaman`
-- TTL: 1 saat
+* string → `url`
+* object.url → `url`
+* object.src → `url`
+* object.image_url → `url`
+
+Cache gövdesi:
+
+* `model`
+* `istemciKimligi`
+* `prompt`
+* `url`
+* `zaman`
+
+Başarı veri alanları:
+
+* `model`
+* `prompt`
+* `url`
+* `ham`
 
 ---
 
-### 6.3.6 `GET /api/ayarlar/getir`
+### `GET /api/ayarlar/getir`
+
 Amaç:
-- uygulama ayarlarını istemciye vermek
 
-Davranış:
-- `uygulama:ayarlar` KV kaydı okunur
-- `gizliYoneticiAnahtari` dışarı verilmez
+* ayarları döndürmek
 
-Başarı payload’ı:
-{
-  "...": "ayar alanları",
-  "gizliYoneticiAnahtari": "ASLA DÖNMEZ"
-}
+Kural:
+
+* `gizliYoneticiAnahtari` response’a asla girmez
 
 ---
 
-### 6.3.7 `POST /api/ayarlar/kaydet`
-Amaç:
-- ayar kaydetmek
-- ilk yönetici anahtarını kurmak
-- mevcut ayarları güncellemek
+### `POST /api/ayarlar/kaydet`
 
-İstek gövdesi:
-{
-  "ayarlar": { "...": "..." },
-  "yoneticiAnahtari": "optional",
-  "yeniYoneticiAnahtari": "optional"
-}
+Amaç:
+
+* ayar kaydetmek
+* ilk yönetici anahtarı kurmak
+* admin anahtarını yenilemek
 
 Kurallar:
-- İlk kurulumda:
-  - mevcut gizli anahtar yoksa
-  - `yeniYoneticiAnahtari` zorunlu
-  - minimum uzunluk: `16`
-- Kurulum sonrası:
-  - `yoneticiAnahtari` doğrulanmalı
-- Yeni admin anahtarı verilirse:
-  - `gizliYoneticiAnahtari` olarak saklanır
 
-KV anahtarı:
-- `uygulama:ayarlar`
+* ilk kurulumda `yeniYoneticiAnahtari` min `16`
+* kurulum sonrası `yoneticiAnahtari` zorunlu doğrulama
+* `yeniYoneticiAnahtari` gelirse `gizliYoneticiAnahtari` olarak saklanır
 
-Başarı payload’ı:
-{
-  "mesaj": "Ayarlar kaydedildi.",
-  "ayarlar": { "...": "..." }
-}
+Başarı veri:
+
+* `mesaj`
+* `ayarlar`
 
 ---
 
-### 6.3.8 `GET /api/ortak-durum/oku`
-Amaç:
-- ortak durum nesnesini okumak
+### `GET /api/ortak-durum/oku`
 
-KV anahtarı:
-- `ortakveri:durum`
+Başarı veri:
 
-Başarı payload’ı:
+```json
 {
   "durum": {}
 }
+```
 
 ---
 
-### 6.3.9 `POST /api/ortak-durum/yaz`
+### `POST /api/ortak-durum/yaz`
+
+Gerekli:
+
+* `durum`
+* `yoneticiAnahtari`
+
+Başarı veri:
+
+* `mesaj`
+* `durum`
+
+---
+
+### `POST /api/onbellek/sil`
+
+Gerekli:
+
+* `anahtar`
+* `yoneticiAnahtari`
+
+Kural:
+
+* yalnız `onbellek:` ile başlayan anahtar
+
+Başarı veri:
+
+* `mesaj`
+* `anahtar`
+
+---
+
+### `GET /`
+
+### `GET /tumu`
+
 Amaç:
-- ortak durumu güncellemek
 
-İstek gövdesi:
-{
-  "durum": {},
-  "yoneticiAnahtari": "SECRET"
-}
+* `tumOzetiOlustur(me)` sonucunu döndürmek
 
-Kurallar:
-- `durum` şu tiplerden biri olabilir:
-  - object
-  - array
-  - string
-  - number
-  - boolean
-- yönetici doğrulaması zorunludur
+Önemli:
 
-KV anahtarı:
-- `ortakveri:durum`
-
-Başarı payload’ı:
-{
-  "mesaj": "Ortak durum güncellendi.",
-  "durum": {}
-}
+* burada worker alanı **`ams`** olarak döner
+* bu legacy / metinsel kimliktir
+* canlı worker adı yine **amg**’dir
 
 ---
 
-### 6.3.10 `POST /api/onbellek/sil`
+### `GET /api`
+
 Amaç:
-- belirli cache kaydını silmek
 
-İstek gövdesi:
-{
-  "anahtar": "onbellek:sohbet:123",
-  "yoneticiAnahtari": "SECRET"
-}
+* API erişilebilirlik cevabı
+* önerilen test yolları
+* kök özet
 
-Kurallar:
-- `anahtar` zorunlu
-- sadece `onbellek:` prefix’i ile başlayan anahtar silinebilir
-- yönetici doğrulaması şarttır
+Alanlar:
 
-Başarı payload’ı:
-{
-  "mesaj": "Önbellek kaydı silindi.",
-  "anahtar": "onbellek:sohbet:123"
-}
+* `mesaj`
+* `durum`
+* `onerilenTestYollari`
+* `ozet`
 
 ---
 
-### 6.3.11 `GET /api/test/calisiyor`
+### `GET /api/test/calisiyor`
+
 Amaç:
-- worker yanıt veriyor mu?
 
-Başarı payload’ı:
-{
-  "calisiyor": true,
-  "durum": "ok",
-  "mesaj": "Worker istek aliyor ve cevap uretiyor."
-}
+* worker cevap veriyor mu
+
+Alanlar:
+
+* `calisiyor: true`
+* `durum: "ok"`
+* `mesaj`
 
 ---
 
-### 6.3.12 `GET /api/test/saglik`
+### `GET /api/test/saglik`
+
 Amaç:
-- `me.puter`
-- `me.puter.kv`
-- handler/global bağlamı
-var mı görmek
 
-Başarı payload’ı:
-- handlerMe
-- handlerMePuter
-- globalMe
-- globalMePuter
-- kvErisimiTanimli
-- kvTemelMetotlari
-gibi tanılama alanları içerir
+* `me`
+* `me.puter`
+* `globalThis.me`
+* `kv`
+* temel KV metotları
+  kontrol etmek
+
+Önemli alanlar:
+
+* `worker: "ams"`
+* `durum: "ok" | "uyari"`
+* `kontroller.handlerMe`
+* `kontroller.handlerMePuter`
+* `kontroller.globalMe`
+* `kontroller.globalMePuter`
+* `kontroller.mePuter`
+* `kontroller.kvErisimiTanimli`
+* `kontroller.mePuterKaynakTuru`
+* `kontroller.kvTemelMetotlari.get`
+* `kontroller.kvTemelMetotlari.set`
+* `kontroller.kvTemelMetotlari.del`
 
 ---
 
-### 6.3.13 `GET /api/test/me-puter`
+### `GET /api/test/me-puter`
+
 Amaç:
-- gerçek KV yazma/okuma/silme testi yapmak
 
-Davranış:
-1. test key üretir
-2. KV’ye yazar
-3. okur
-4. siler
-5. sonucu doğrular
+* gerçek KV roundtrip testi
 
-Bu endpoint gerçek ortam testi için kritiktir.
+Akış:
+
+1. key üret
+2. set
+3. get
+4. del
+5. eşleşme doğrula
+
+Hata verebileceği durumlar:
+
+* `me.puter baglami yok.`
+* `me.puter.kv erisimi yok.`
+* `me.puter.kv.set fonksiyonu tanimli degil.`
+* `me.puter.kv.get fonksiyonu tanimli degil.`
+* `me.puter.kv.del fonksiyonu tanimli degil.`
+* `me.puter.kv yazma-okuma testi beklenen sonucu vermedi.`
+
+Başarı veri:
+
+* `durum`
+* `mesaj`
+* `mePuter`
+* `kvErisimiTanimli`
+* `kvGercekTest`
+* `deneme`
+* `zamanDamgasi`
 
 ---
 
-### 6.3.14 `GET /`
-### 6.3.15 `GET /tumu`
-### 6.3.16 `GET /api`
-### 6.3.17 `GET /api/amac`
+### `GET /api/amac`
+
 Amaç:
-- tanıtım / amaç / özet / önerilen test yolları dönmek
 
-ÖNEMLİ NOT:
-Root özet içinde bazı yerlerde worker kimliği `ams` olarak geçebilir.
-Bu, davranış sözleşmesinde **legacy/metinsel etiket** olarak kabul edilmelidir.
-Canlı worker adı yine de `amg`’dir.
+* 20 maddelik amaç listesi döndürmek
 
----
+Başlık:
 
-## 6.4 AMG giriş doğrulama kuralları
-
-### Sohbet doğrulama
-- `model` zorunlu
-- `mesajlar` veya `prompt` zorunlu
-- en fazla `40` mesaj
-- geçerli roller:
-  - `system`
-  - `assistant`
-  - `user`
-  - `tool`
-- tek string mesaj max: `12000`
-- içerik dizisinde toplam metin max: `16000`
-- toplam mesaj metni max: `30000`
-- desteklenen içerik tipleri:
-  - `text`
-  - `file`
-- file için `puter_path` zorunlu
-
-### Görsel doğrulama
-- `prompt` zorunlu
-- prompt max: `2000`
-- `genislik`: 256–2048
-- `yukseklik`: 256–2048
-- `adet`: 1–4
-
-### Ayar doğrulama
-- boş ayar + boş yeni admin key kabul edilmez
-
-### Ortak durum doğrulama
-- `durum` zorunludur
-
-### Önbellek silme doğrulama
-- `anahtar` zorunlu
-- `onbellek:` prefix’i zorunlu
+* `AMS Puter Worker amaci`
 
 ---
 
-## 6.5 AMG rate limit kuralları
-İstemci kimliği sırası:
-1. `x-istemci-kimligi` header
-2. `origin` header
-3. `user.id | user.uuid | user.username | user.email`
-4. fallback: `genel`
+## 6.17 AMG tam fonksiyon envanteri
 
-Dakika penceresi bazlı limit:
-- `/api/sohbet` → `12`
-- `/api/sohbet/akis` → `8`
-- `/api/gorsel` → `4`
+### Çekirdek HTTP
 
-Sayaç KV anahtarı:
-- `oran:<istemciKimligi>:<dakikaDamgasi>`
+* `corsBasliklariniHazirla`
+* `jsonBasliklariniHazirla`
+* `basariCevabiUret`
+* `hataCevabiUret`
+* `secenekIsteginiYanitla`
+* `govdeyiCozumle`
 
-TTL:
-- yaklaşık `120 saniye`
+### Yardımcılar
 
----
+* `metniKirp`
+* `sayiDonustur`
+* `dakikayiDamgala`
+* `saniyeDamgasiAl`
+* `anahtariOlustur`
+* `diziMi`
+* `nesneMi`
+* `bosMu`
 
-# 7) AMH — TAM TEKNİK SÖZLEŞME
+### Ayar / kimlik / yetki
 
----
+* `ayarlariGetir`
+* `ayarlariKaydet`
+* `ayarlariDisariHazirla`
+* `istemciKimliginiCikar`
+* `yoneticiAnahtariVarMi`
+* `yoneticiYetkisiniDogrula`
 
-## 7.1 AMH’nin ana görevi
-AMH şunları yapar:
+### Doğrulama
 
-1. hizmet türü çözme
-2. girdi normalize etme
-3. etkin ayar üretme
-4. sağlayıcı önceliği hesaplama
-5. fallback zinciri kurma
-6. timeout uygulama
-7. maliyet bütçesi koruma
-8. çok adımlı iş akışlarını yürütme
-9. sonuç birleştirme
-10. iş kaydı / geçmiş / arşiv / teşhis yönetme
+* `rolGecerliMi`
+* `yaziIceriginiTopla`
+* `mesajIceriginiDogrula`
+* `sohbetGovdesiniDogrula`
+* `gorselGovdesiniDogrula`
+* `ayarGirdisiniDogrula`
+* `ortakDurumGovdesiniDogrula`
+* `onbellekSilGovdesiniDogrula`
 
----
+### KV / durum
 
-## 7.2 AMH desteklediği hizmet türleri
-AMH şu hizmet türlerini bilir:
+* `ortakDurumuOku`
+* `ortakDurumuYaz`
+* `istekSiniriniKontrolEt`
 
-- `CHAT`
-- `IMG`
-- `VIDEO`
-- `TTS`
-- `OCR`
-- `PDF`
-- `DEEPSEARCH`
+### AI / çıktı
 
----
+* `sohbetSecenekleriniHazirla`
+* `sohbetYanitiniMetneDonustur`
+* `gorselCiktisiniCozumle`
+* `sohbetiCalistir`
 
-## 7.3 AMH varsayılan timeout değerleri
-- `CHAT` → `45000 ms`
-- `IMG` → `60000 ms`
-- `VIDEO` → `120000 ms`
-- `TTS` → `45000 ms`
-- `OCR` → `45000 ms`
-- `PDF` → `90000 ms`
-- `DEEPSEARCH` → `120000 ms`
-- `TESHIS` → `20000 ms`
+### Hata / log / akış
 
----
+* `guvenliHataMesajiAl`
+* `guvenliLogYaz`
+* `sseSatiriUret`
+* `akisDestegiVarMi`
+* `akisYanitiUret`
 
-## 7.4 AMH gereken me.puter yetkinlikleri
-- `CHAT` → `ai.chat`
-- `IMG` → `ai.txt2img`
-- `VIDEO` → `ai.txt2vid`
-- `TTS` → `ai.txt2speech`
-- `OCR` → `ai.img2txt`
-- `PDF` → doğrudan zorunlu metot yok; orkestrasyon destekli
-- `DEEPSEARCH` → `ai.chat`
+### Özet
+
+* `tumOzetiOlustur`
 
 ---
 
-## 7.5 AMH endpoint listesi
+# 7) AMH — TAM DAVRANIŞ SÖZLEŞMESİ
+
+---
+
+## 7.1 Sabitler
+
+### Dosya adı
+
+* `DOSYA_ADI = "amh.js"`
+
+### Sürüm
+
+* `SURUM = "2026-03-18.1"`
+
+### Depo ön eki
+
+* `DEPO_ONEKI = "aaoit"`
+
+### Varsayılan timeout değerleri
+
+* `CHAT = 45000`
+* `IMG = 60000`
+* `VIDEO = 120000`
+* `TTS = 45000`
+* `OCR = 45000`
+* `PDF = 90000`
+* `DEEPSEARCH = 120000`
+* `TESHIS = 20000`
+
+### Hizmet yetkinlikleri
+
+* `CHAT -> ai.chat`
+* `IMG -> ai.txt2img`
+* `VIDEO -> ai.txt2vid`
+* `TTS -> ai.txt2speech`
+* `OCR -> ai.img2txt`
+* `PDF -> []`
+* `DEEPSEARCH -> ai.chat`
+
+---
+
+## 7.2 AMH route listesi
 
 ### Kök
-- `GET /`
-- `GET /tumu`
 
-### Genel durum / panel
-- `GET /api/durum`
-- `GET /api/panel`
+* `GET /`
+* `GET /tumu`
 
-### İş yönetimi
-- `GET /api/is/:isKimligi`
-- `GET /api/is/:isKimligi/gecmis`
-- `GET /api/is/:isKimligi/arsiv`
-- `GET /api/is/:isKimligi/izle`
+### Durum / panel
 
-### Ana yürütme
-- `POST /api/calistir`
+* `GET /api/durum`
+* `GET /api/panel`
+
+### İş izleme
+
+* `GET /api/is/:isKimligi`
+* `GET /api/is/:isKimligi/gecmis`
+* `GET /api/is/:isKimligi/arsiv`
+* `GET /api/is/:isKimligi/izle`
+
+### Yürütme
+
+* `POST /api/calistir`
 
 ### Teşhis
-- `POST /api/teshis`
-- `GET /api/teshis/:hizmetTuru`
-- `GET /api/saglayici/:hizmetTuru/:saglayici`
-- `GET /api/ispat/ozet`
+
+* `POST /api/teshis`
+* `GET /api/teshis/:hizmetTuru`
+* `GET /api/saglayici/:hizmetTuru/:saglayici`
+* `GET /api/ispat/ozet`
+
+### Preflight
+
+* `OPTIONS /*yol`
 
 ---
 
-## 7.6 AMH kök endpoint davranışı
-`GET /` ve `GET /tumu`:
-- sistemin AIAI sınıf özetini döndürür
-- dosya adı
-- sürüm
-- sınıf bazlı görev grupları
-- ortak görevler
-dahil olabilir
+## 7.3 AMH gövde parse davranışı
 
-Yani bu endpoint “ne yaparım?” özetidir; canlı iş çalıştırmaz.
+Fonksiyon: `govdeyiCozumle(request)`
 
----
+AMH şu içerik tiplerini parse eder:
 
-## 7.7 `POST /api/calistir`
-Bu, AMH’nin ana giriş kapısıdır.
+* `application/json`
+* `application/x-www-form-urlencoded`
+* `multipart/form-data`
 
-Amaç:
-- gelen girdiyi analiz edip
-- hizmet türünü çözmek
-- doğrulamak
-- ayar üretmek
-- gerekiyorsa sağlayıcı seçmek
-- işi yürütmek
-- iş kaydı oluşturmak
-- sonucu tek sözleşmede döndürmek
+Kurallar:
 
-### Kabul edilen temel istek biçimi
-Tek bir sabit body yoktur.
-AMH body’yi hizmet türüne göre yorumlar.
+* JSON parse hatası → `null`
+* form parse hatası → `null`
+* bilinmeyen içerik tipi → `{}`
 
-Örnek CHAT:
-{
-  "serviceType": "CHAT",
-  "mesajlar": [
-    { "role": "user", "content": "Merhaba" }
-  ],
-  "model": "gpt-5-nano",
-  "webArama": true
-}
+Önemli fark:
 
-Örnek IMG:
-{
-  "serviceType": "IMG",
-  "prompt": "bir dağ manzarası",
-  "adet": 1,
-  "oran": "1:1"
-}
-
-Örnek VIDEO:
-{
-  "serviceType": "VIDEO",
-  "prompt": "uçan bir şehir",
-  "sureSaniye": 8,
-  "oran": "16:9"
-}
-
-Örnek TTS:
-{
-  "serviceType": "TTS",
-  "metin": "Merhaba dünya",
-  "ses": "Joanna",
-  "dil": "tr-TR"
-}
-
-Örnek OCR:
-{
-  "serviceType": "OCR",
-  "gorselUrl": "https://..."
-}
-
-Örnek PDF:
-{
-  "serviceType": "PDF",
-  "dosyaUrl": "https://...",
-  "ozetIsteniyor": true
-}
-
-Örnek DEEPSEARCH:
-{
-  "serviceType": "DEEPSEARCH",
-  "sorgu": "Türkiye'de yapay zeka regülasyonları",
-  "altSorguSiniri": 4
-}
+* AMH, AMG’den farklı olarak form verisini de parse eder.
 
 ---
 
-## 7.8 Hizmet türü çözümleme kuralları
-Eğer `serviceType | hizmetTuru | tip` verilirse önce ona bakılır.
+## 7.4 AMH hizmet türleri
 
-Aksi halde sezgisel çözümleme:
+Desteklenen tipler:
 
-- `mesajlar` veya `systemPrompt` veya `webArama` varsa → `CHAT`
-- `gorselUrl`, `gorselVerisi`, `referansGorsel` veya `/gorsel` işareti varsa → `IMG`
-- `videoUrl`, `sureSaniye` veya `/video` varsa → `VIDEO`
-- `ses`, `voice`, `sesFormati` veya `/ses` varsa → `TTS`
-- `.pdf`, `pdfUrl`, `sayfalar`, `pdf` varsa → `PDF`
-- image mime veya `ocr` varsa → `OCR`
-- `sorgu`, `altSorgular`, `derinlik` veya `/deepsearch` varsa → `DEEPSEARCH`
-- aksi halde → `CHAT`
+* `CHAT`
+* `IMG`
+* `VIDEO`
+* `TTS`
+* `OCR`
+* `PDF`
+* `DEEPSEARCH`
 
 ---
 
-## 7.9 AMH doğrulama kuralları
+## 7.5 AMH hizmet türü çözümleme mantığı
+
+Fonksiyon: `hizmetTurunuCozumle(girdi)`
+
+Öncelik:
+
+1. `serviceType`
+2. `hizmetTuru`
+3. `tip`
+
+Sezgisel çözümleme:
+
+* `mesajlar` / `systemPrompt` / `webArama` → `CHAT`
+* `gorselUrl` / `gorselVerisi` / `referansGorsel` / `/gorsel` → `IMG`
+* `videoUrl` / `sureSaniye` / `/video` → `VIDEO`
+* `ses` / `voice` / `sesFormati` / `/ses` → `TTS`
+* `.pdf` / pdf mime / `sayfalar` / `pdf` → `PDF`
+* image mime / `ocr` / `/ocr` → `OCR`
+* `sorgu` / `altSorgular` / `derinlik` / `/ara` / `/deepsearch` → `DEEPSEARCH`
+* aksi halde → `CHAT`
+
+Ek:
+
+* geçersiz açık tip verilirse yine `CHAT`
+
+---
+
+## 7.6 AMH girdi doğrulama kuralları
+
+Fonksiyon: `guvenliGirdiDogrula(girdi, hizmetTuru)`
+
+### Ortak kurallar
+
+* geçerli JSON nesnesi olmalı
+* riskli URL şemaları engellenir:
+
+  * `javascript:`
+  * `data:`
+* yasak mime:
+
+  * `application/x-msdownload`
 
 ### CHAT
-- `mesajlar` veya `prompt` zorunlu
-- max `60` mesaj
-- toplam metin max `50000`
-- rol seti:
-  - `system`
-  - `assistant`
-  - `user`
-  - `tool`
+
+* `mesajlar` veya `prompt` zorunlu
+* `prompt` varsa tek user mesaja çevrilir
+* en fazla `60` mesaj
+* toplam metin max `50000`
+* roller:
+
+  * `system`
+  * `assistant`
+  * `user`
+  * `tool`
+* normalize:
+
+  * `mesajlar`
+  * `maxTokens` → `1–8000`, varsayılan `1200`
+  * `sicaklik` → `0–2`, varsayılan `0.7`
+  * `webArama`
+  * `model`
 
 ### IMG
-- `prompt` zorunlu
-- prompt max `2500`
-- `adet`: 1–4
+
+* `prompt` zorunlu
+* prompt max `2500`
+* `adet` → `1–4`
+* `oran` varsayılan `1:1`
+* `kalite` varsayılan `medium`
+* `stil`
+* `referansGorsel`
 
 ### VIDEO
-- `prompt` zorunlu
-- `sureSaniye`: 1–120
+
+* `prompt` zorunlu
+* `sureSaniye` → `1–120`, varsayılan `8`
+* `oran` varsayılan `16:9`
+* `kalite` varsayılan `medium`
+* `referansKareler`
+* `testModu`
 
 ### TTS
-- `metin` zorunlu
-- metin max `12000`
-- `hiz`: 0.5–2
+
+* `metin` zorunlu
+* metin max `12000`
+* `ses` varsayılan `Joanna`
+* `dil` varsayılan `tr-TR`
+* `hiz` → `0.5–2`
+* `format` varsayılan `mp3`
 
 ### OCR
-- `gorselUrl` veya `gorselListesi` zorunlu
-- `sayfaSayisi`: 1–500
+
+* `gorselUrl` veya `gorselListesi` zorunlu
+* `sayfaSayisi` → `1–500`
+* `dil` varsayılan `tr`
+* `kirpmaAlani`
 
 ### PDF
-- en az biri zorunlu:
-  - `dosyaUrl`
-  - `metin`
-  - `sayfalar`
-- `sayfaSayisi`: 1–1000 normalizasyon, fakat filtre katmanında 500 üstü reddedilebilir
+
+* en az biri zorunlu:
+
+  * `dosyaUrl`
+  * `metin`
+  * `sayfalar`
+* `sayfaSayisi` → `1–1000`
+* `ocrGereksinimi`
+* `ozetIsteniyor` varsayılan true
 
 ### DEEPSEARCH
-- `sorgu` zorunlu
-- sorgu max `3000`
-- `altSorguSiniri`: 1–20 normalizasyon, filtre katmanında bütçeye göre 12’ye indirilebilir
 
-### URL güvenliği
-- `javascript:` ve `data:` engellenir
-
-### MIME güvenliği
-- `application/x-msdownload` engellenir
+* `sorgu` zorunlu
+* sorgu max `3000`
+* `altSorguSiniri` → `1–20`, varsayılan `4`
+* `hizliMod` varsayılan true
+* `kaynakOnceligi` varsayılan `["web","yazi","rapor"]`
+* `ozetle` varsayılan true
 
 ---
 
-## 7.10 Hizmete özel filtre kuralları
+## 7.7 AMH etkin ayar üretme mantığı
+
+Fonksiyon: `etkinAyariOlustur(...)`
+
+Header override’ları:
+
+* `x-kalite-seviyesi`
+* `x-timeout-ms`
+* `x-saglayici`
+
+### Varsayılan modeller
+
+* CHAT → `gpt-5-nano`
+* IMG → `gpt-image-1-mini`
+* VIDEO → `runway`
+* TTS → `openai-tts`
+* OCR → `aws-textract`
+* PDF → `belge-orkestrasi`
+* DEEPSEARCH → `switchpoint/router`
+
+### Varsayılan sağlayıcılar
+
+* CHAT → `auto`
+* IMG → `openai-image-generation`
+* VIDEO → `auto`
+* TTS → `auto`
+* OCR → `auto`
+* PDF → `internal`
+* DEEPSEARCH → `auto`
+
+### Normalize edilen ayarlar
+
+* `hizmetTuru`
+* `model`
+* `saglayici`
+* `timeoutMs`
+* `kaliteSeviyesi`
+* `maliyetSiniri`
+* `fallbackZinciri`
+* `oncelik`
+* `kotaKoruma`
+* `denemeSiniri`
+* `gecikmeToleransiMs`
+* `guvenlikModu`
+
+### Varsayılan fallback zinciri
+
+Fallback boşsa:
+
+```json
+["auto", "yedek", "guvenli-donus"]
+```
+
+### Güvenlik etkileri
+
+* yasaklı sağlayıcı seçilmişse → `auto`
+* timeout `azamiTimeoutMs` üstündeyse kırpılır
+* kalite seviyesi izinli listede yoksa ilk izinli değere çekilir
+
+---
+
+## 7.8 AMH tahmini maliyet mantığı
+
+Fonksiyon: `tahminiMaliyetHesapla(hizmetTuru, girdi, etkinAyar)`
+
+Temel formüller:
+
+* CHAT → `0.000002 * max(uzunluk, 50)`
+* IMG → `0.01 * adet`
+* VIDEO → `0.02 * sureSaniye`
+* TTS → `0.000003 * max(uzunluk, 100)`
+* OCR → `0.002 * sayfaSayisi`
+* PDF → `0.003 * sayfaSayisi`
+* DEEPSEARCH → `0.004 * altSorguSiniri`
+
+Ek:
+
+* `kaliteSeviyesi === "high"` ise sonuç `1.35` ile çarpılır
+
+Çıktı:
+
+* `Number(...toFixed(6))`
+
+---
+
+## 7.9 AMH sağlayıcı skor mantığı
+
+Fonksiyon: `agirlikliSkorHesapla(veri)`
+
+Formül:
+
+* kalite → `%45`
+* hız → `%25`
+* maliyetin tersi → `%20`
+* hatanın tersi → `%10`
+
+Pratikte:
+
+```txt
+(kalite * 0.45) + (hiz * 0.25) + ((100 - maliyet) * 0.2) + ((100 - hata) * 0.1)
+```
+
+---
+
+## 7.10 AMH benzersiz imza ve olay kimliği
+
+### `benzersizImzaUret(metin)`
+
+* karakter kodu tabanlı modlu toplam üretir
+* çıktı biçimi:
+
+  * `imza_<sayi>`
+
+### `olayKimligiUret(onek, baglam)`
+
+Parçalar:
+
+* `onek`
+* zaman damgası
+* rastgele parça
+* baglam imzası
+
+Biçim:
+
+```txt
+<onek>_<time36>_<random>_<context>
+```
+
+---
+
+## 7.11 AMH bağlam hazırlama
+
+Fonksiyon: `istekBaglaminiHazirla(istek, girdi, hizmetTuru)`
+
+Çıkan alanlar:
+
+* `isKimligi`
+* `olayKimligi`
+* `kullaniciKimligi`
+* `hizmetTuru`
+* `baslangicZamani`
+* `zamanDamgasi`
+* `korelasyonAnahtari`
+* `islemDurumu`
+* `tanilama.userAgent`
+* `tanilama.kaynak`
+
+Korelasyon sırası:
+
+1. `x-korelasyon-anahtari`
+2. `x-request-id`
+3. yoksa otomatik üretilir
+
+Kullanıcı kimliği sırası:
+
+1. `girdi.kullaniciKimligi`
+2. `x-istemci-kimligi`
+3. fallback: `anonim`
+
+---
+
+## 7.12 AMH hata sınıfları
+
+Fonksiyon: `hataSinifiniBelirle(hata, ekBaglam)`
+
+Sınıflar:
+
+* `zaman_asimi_hatasi`
+* `kota_hatasi`
+* `yetki_hatasi`
+* `ag_hatasi`
+* `dogrulama_hatasi`
+* `veri_bicimi_hatasi`
+* `saglayici_hatasi`
+* `bilinmeyen_hata`
+
+Kritik sayılan:
+
+* `yetki_hatasi`
+
+---
+
+## 7.13 AMH güvenli hata özeti
+
+Fonksiyon: `guvenliHataOzetiUret(hata, gorunumDuzeyi)`
+
+### Düzeyler
+
+* `kullanici`
+* `panel`
+* `gelistirici`
+
+### Panel görünümü
+
+* mesaj: `İşlem tamamlanamadı.`
+* ayrıntı: max `180`
+
+### Geliştirici görünümü
+
+* mesaj: max `240`
+* ayrıntı:
+
+  * `sinif`
+  * `kritikMi`
+
+### Özel kullanıcı mesajları
+
+* doğrulama → ham mesajın kısaltılmış hali
+* zaman aşımı → `İşlem zaman aşımına uğradı.`
+* kota → `Kota veya oran sınırı nedeniyle işlem durdu.`
+
+---
+
+## 7.14 AMH yeniden deneme kuralları
+
+Fonksiyon: `yenidenDenemeKarariniVer(...)`
+
+### Yeniden deneme yapılabilir
+
+* `ag_hatasi`
+* `zaman_asimi_hatasi`
+* `saglayici_hatasi` ve hizmet PDF değilse
+* `kota_hatasi`
+
+### Yeniden deneme nedenleri
+
+* `gecici_hata`
+* `saglayici_kararsizligi`
+* `yedek_saglayici_icin_tekrar`
+
+### Durdurma nedenleri
+
+* `azami_denemeye_ulasti`
+* `yeniden_deneme_gereksiz`
+
+### Üst sınır
+
+* `denemeSiniri`
+
+---
+
+## 7.15 AMH işlem metaverisi
+
+Fonksiyon: `islemMetaverisiniHazirla(...)`
+
+Alanlar:
+
+* `isKimligi`
+* `korelasyonAnahtari`
+* `hizmetTuru`
+* `saglayici`
+* `model`
+* `retrySayisi`
+* `fallbackBilgisi`
+* `sureMs`
+* `maliyet`
+* `teshisIsaretleri`
+
+---
+
+## 7.16 AMH hizmet yetkinliği
+
+Fonksiyon: `hizmetYetkinliginiKontrolEt(me, etkinAyar, hizmetTuru)`
+
+Kural:
+
+* gerekli `me.puter` metotları tek tek aranır
+
+İstisna:
+
+* `PDF`
+* `DEEPSEARCH`
+
+Bu iki tipte eksik metot olsa bile sonuç:
+
+* `etkinMi: true`
+* açıklama: orkestrasyon / birleşik akış desteği
+
+---
+
+## 7.17 AMH kalite puanlama
+
+Fonksiyon: `sonucKalitesiniPuanla(hizmetTuru, sonuc, baglam)`
+
+Başlangıç puanı:
+
+* `55`
+
+Artış örnekleri:
+
+* CHAT → metin uzunluğuna göre +25’e kadar
+* CHAT içinde `kaynak` veya `özet` geçerse +8
+* IMG URL/görsel varsa +28
+* VIDEO jobId/url varsa +24
+* TTS url/veri varsa +22
+* OCR metin uzunluğuna göre +30’a kadar
+* PDF özet/metin uzunluğuna göre +28’e kadar
+* DEEPSEARCH kaynak sayısına göre +30’a kadar
+
+Ceza:
+
+* fallback kullanıldıysa `-5`
+* hata varsa `-20`
+
+Sonuç aralığı:
+
+* `0–100`
+
+---
+
+## 7.18 AMH hizmete özel filtreler
+
+Fonksiyon: `hizmeteOzelFiltreleriUygula(...)`
 
 ### IMG
-- `adet > 4` reddedilir
-- `oran = 9:16` ve katı güvenlik modunda → `1:1`’e çekilebilir
+
+* adet > 4 → ihlal
+* oran `9:16` ve güvenlik modu `katı` ise → `1:1`
 
 ### VIDEO
-- `sureSaniye > 60` ve bütçe düşükse reddedilebilir
+
+* süre > 60 ve maliyet sınırı düşükse → ihlal
 
 ### TTS
-- metin çok uzunsa kalite `medium`’a çekilebilir
+
+* metin > 6000 ve kalite `high` ise → `medium`
 
 ### OCR
-- tek işte max `100` sayfa
+
+* tek işte max `100` sayfa
 
 ### PDF
-- max `500` sayfa
+
+* max `500` sayfa
 
 ### DEEPSEARCH
-- alt sorgu limiti bütçeye göre `12`’ye indirilebilir
+
+* `altSorguSiniri > 12` ve bütçe düşükse → `12`
 
 ---
 
-## 7.11 AMH etkin ayar üretme mantığı
-AMH şu parametreleri birleştirerek etkin ayar üretir:
-- varsayılan ayarlar
-- kullanıcı tercihi
-- güvenlik kısıtları
-- request header’ları
+## 7.19 AMH sağlayıcı istek gövdesi
 
-Okuyabildiği header’lar:
-- `x-kalite-seviyesi`
-- `x-timeout-ms`
-- `x-saglayici`
-- `x-korelasyon-anahtari`
-- `x-request-id`
-- `x-istemci-kimligi`
+Fonksiyon: `saglayiciIstekGovdesiHazirla(...)`
 
-Etkin ayar alanları:
-- `hizmetTuru`
-- `model`
-- `saglayici`
-- `timeoutMs`
-- `kaliteSeviyesi`
-- `maliyetSiniri`
-- `fallbackZinciri`
-- `oncelik`
-- `kotaKoruma`
-- `denemeSiniri`
-- `gecikmeToleransiMs`
-- `guvenlikModu`
+### CHAT
 
----
+* `messages`
+* `stream: false`
+* `temperature`
+* `max_tokens`
+* `tools` (web search)
 
-## 7.12 Varsayılan model/saglayici yaklaşımı
+### IMG
 
-### Varsayılan model mantığı
-- CHAT → `gpt-5-nano`
-- IMG → `gpt-image-1-mini`
-- VIDEO → `runway`
-- TTS → `openai-tts`
-- OCR → `aws-textract`
-- PDF → `belge-orkestrasi`
-- DEEPSEARCH → `switchpoint/router`
+* `prompt`
+* `n`
+* `ratio`
+* `quality`
+* `reference_image`
 
-### Varsayılan sağlayıcı mantığı
-- CHAT → `auto`
-- IMG → `openai-image-generation`
-- VIDEO → `auto`
-- TTS → `auto`
-- OCR → `auto`
-- PDF → `internal`
-- DEEPSEARCH → `auto`
+### VIDEO
 
----
+* `prompt`
+* `testMode`
+* `options.duration`
+* `options.ratio`
+* `options.quality`
+* `options.referenceFrames`
 
-## 7.13 AMH orkestrasyon mantığı
+### TTS
 
-### Adım 1
-Hizmet türü çözülür.
+* `text`
+* `options.voice`
+* `options.language`
+* `options.speed`
+* `options.format`
 
-### Adım 2
-İstek bağlamı üretilir:
-- `isKimligi`
-- `olayKimligi`
-- `kullaniciKimligi`
-- `korelasyonAnahtari`
-- `baslangicZamani`
+### OCR
 
-### Adım 3
-Girdi doğrulanır.
+* `image`
+* `images`
+* `options.language`
+* `options.crop`
 
-### Adım 4
-Etkin ayar üretilir.
+### PDF
 
-### Adım 5
-Hizmet yetkinliği kontrol edilir.
+* `documentUrl`
+* `text`
+* `pages`
+* `options.pageCount`
+* `options.forceOcr`
+* `options.summarize`
 
-### Adım 6
-İş kaydı açılır.
+### DEEPSEARCH
 
-### Adım 7
-Sağlayıcı önceliği ve fallback zinciri belirlenir.
-
-### Adım 8
-Tahmini maliyet hesaplanır ve bütçe kontrol edilir.
-
-### Adım 9
-İlgili hizmet çalıştırılır.
-
-### Adım 10
-Hata olursa:
-- hata sınıfı çıkarılır
-- yeniden deneme kararı verilir
-- gerekirse fallback uygulanır
-
-### Adım 11
-Sonuçlar birleştirilir.
-
-### Adım 12
-İş tamamlanır, arşivlenir ve sonuç döner.
+* `query`
+* `options.depth`
+* `options.fastMode`
+* `options.sources`
 
 ---
 
-## 7.14 AMH hata sınıfları
-Hata sınıflandırma motoru şu sınıfları üretir:
+## 7.20 AMH sağlayıcı yanıtı çözümleme
 
-- `zaman_asimi_hatasi`
-- `kota_hatasi`
-- `yetki_hatasi`
-- `ag_hatasi`
-- `dogrulama_hatasi`
-- `veri_bicimi_hatasi`
-- `saglayici_hatasi`
-- `bilinmeyen_hata`
+Fonksiyon: `saglayiciYanitiCozumle(...)`
+
+### CHAT
+
+Kaynaklar:
+
+* string
+* `message.content`
+* `content`
+
+Çıkan alan:
+
+* `metin`
+
+### IMG
+
+Kaynaklar:
+
+* string
+* `url`
+* `src`
+* `images[]`
+
+Çıkan alanlar:
+
+* `url`
+* `gorseller`
+
+### VIDEO
+
+Kaynaklar:
+
+* `jobId + status`
+* `url`
+* string url
+* hiçbir şey gelmezse fallback queued job
+
+Çıkan alanlar:
+
+* `jobId`
+* `durum`
+* `url`
+* `senkronMu`
+
+### TTS
+
+* `url`
+* string
+* ham veri
+
+### OCR
+
+* string veya `text`
+
+### PDF
+
+* `metin`
+* `ozet`
+* `sayfalar`
+
+### DEEPSEARCH
+
+* `ozet`
+* `kaynaklar`
+* `altSorgular`
+
+Ek:
+
+* çözüm sonrası `maliyet = tahminiMaliyetHesapla(...)`
 
 ---
 
-## 7.15 Yeniden deneme kuralları
-Şu durumlarda retry düşünülebilir:
-- ağ hatası
-- zaman aşımı
-- sağlayıcı kararsızlığı
-- kota nedeniyle yedek sağlayıcıya geçiş
+## 7.21 AMH asıl servis çağrıları
 
-Retry üst sınırı:
-- `denemeSiniri`
+### `sohbetApiCagrisiniYurut`
+
+* `ai.chat`
+* `stream: false`
+* tools varsa geçirir
+
+### `gorselApiCagrisiniYurut`
+
+* `ai.txt2img`
+* `prompt / n / quality / ratio / reference_image`
+
+### `videoApiCagrisiniYurut`
+
+* `ai.txt2vid` varsa gerçek çağrı
+* yoksa queued job fallback
+
+### `seslendirmeApiCagrisiniYurut`
+
+* `ai.txt2speech` varsa gerçek çağrı
+* yoksa boş/plan çıktısı
+
+### `ocrApiCagrisiniYurut`
+
+* tek görsel ve çoklu görsel desteği
+* her görseli `ai.img2txt` ile işler
+* metinleri birleştirir
+
+### `pdfApiCagrisiniYurut`
+
+* sayfalar varsa OCR yapar
+* metin yok ama dosyaUrl varsa placeholder metin üretir
+* özet isteniyorsa `ai.chat` ile kısa özet çıkarır
+
+### `derinAramaApiCagrisiniYurut`
+
+* alt sorgu listesi üretir
+* `ai.chat + web_search` ile araştırma özeti ister
+* yapay kaynak özeti listesi üretir
 
 ---
 
-## 7.16 İş kaydı / geçmiş / arşiv
+## 7.22 AMH işçi seçimi
 
-### Depo anahtar ön eki
-- `aaoit`
+Fonksiyon: `uygunIsciyiSec(hizmetTuru, etkinAyar)`
 
-### Tipik anahtarlar
-- `aaoit:is:<isKimligi>`
-- `aaoit:gecmis:<isKimligi>`
-- `aaoit:arsiv:<isKimligi>`
-- `aaoit:saglayici-hata:<HIZMET>`
-- `aaoit:test:<...>`
+### Varsayılanlar
 
-### İş kaydı içeriği
-- `isKimligi`
-- `hizmetTuru`
-- `kullaniciKimligi`
-- `baslangicZamani`
-- `durum`
-- `saglayiciPlani`
-- `istekOzeti`
+* birincil = hizmetin kendisi
+* yedek = çoğu durumda `CHAT`
+* acil geri dönüş = çoğu durumda `CHAT`
 
-### Geçmiş kaydı
-- olay kimliği
-- olay adı
-- veri
-- zaman damgası
+### Özel eşlemeler
+
+* IMG → yedek `CHAT`
+* VIDEO → yedek `IMG`, acil `CHAT`
+* OCR → yedek `PDF`, acil `CHAT`
+* PDF → yedek `OCR`, acil `CHAT`
+* DEEPSEARCH → yedek `CHAT`, acil `CHAT`
+
+---
+
+## 7.23 AMH sağlayıcı önceliği
+
+Fonksiyon: `saglayiciOnceliginiBelirle(...)`
+
+### Temel aday setleri
+
+* CHAT / DEEPSEARCH → `[temel, openai, anthropic, google]`
+* IMG → `[temel, openai-image-generation, gemini, xai]`
+* VIDEO → `[temel, runway, google, openai]`
+* TTS → `[temel, openai, aws, elevenlabs]`
+* OCR → `[temel, aws, mistral]`
+* PDF → `[temel, internal, aws, openai]`
+
+### Ek davranış
+
+* tekrarlar temizlenir
+* geçmiş sağlayıcı hata sayısı depo üzerinden okunur
+* her sağlayıcı için skor üretilir
+* yüksek skordan düşüğe sıralanır
+
+Çıktı:
+
+* `siraliSaglayicilar`
+* `skorlar`
+
+---
+
+## 7.24 AMH fallback zinciri
+
+Fonksiyon: `fallbackZinciriniKur(...)`
+
+Zincir türleri:
+
+* `saglayici`
+* `isci`
+* `politika`
+
+### Sağlayıcı adımları
+
+Her aday için:
+
+```json
+{
+  "tur": "saglayici",
+  "hedef": "provider",
+  "strateji": "birincil | yedek"
+}
+```
+
+### Acil işçi fallback’i
+
+Şu tiplerde ekstra eklenir:
+
+* `VIDEO`
+* `PDF`
+* `DEEPSEARCH`
+
+Ek adım:
+
+```json
+{
+  "tur": "isci",
+  "hedef": "CHAT",
+  "strateji": "acil_geri_donus"
+}
+```
+
+### Politika fallback’i
+
+`etkinAyar.fallbackZinciri` içindeki her öğe:
+
+```json
+{
+  "tur": "politika",
+  "hedef": "<adim>",
+  "strateji": "ozel_tanim"
+}
+```
+
+---
+
+## 7.25 AMH maliyet bütçesi
+
+Fonksiyon: `maliyetButcesiniYonet(...)`
+
+Alanlar:
+
+* `tahminiMaliyet`
+* `toplamMaliyet`
+* `maliyetSiniri`
+* `devamEdebilirMi`
+* `isKimligi`
+
+Aşılırsa hata:
+
+```json
+{
+  "mesaj": "Maliyet bütçesi aşıldı.",
+  "kod": "MALIYET_BUTCESI"
+}
+```
+
+---
+
+## 7.26 AMH timeout politikası
+
+Fonksiyon: `zamanAsimiPolitikasiniUygula(...)`
+
+Uygulama:
+
+* `Promise.race`
+
+Timeout hatası biçimi:
+
+```txt
+timeout:<TIP>:<timeoutMs>
+```
+
+---
+
+## 7.27 AMH çok adımlı akışlar
+
+Fonksiyon: `cokAdimliAkisiYonet(...)`
+
+### PDF adımları
+
+* `PDF_HAZIRLA`
+* `OCR_GEREKIRSE`
+* `OZETLE`
+
+### DEEPSEARCH adımları
+
+* `ARASTIR`
+* `OZETLE`
+* `TTS_SECENEGI`
+
+### TTS seçeneği
+
+* `normalizeGirdi.seslendir` varsa tetiklenir
+
+---
+
+## 7.28 AMH sonuç birleştirici
+
+Fonksiyon: `sonucBirlestiriciyiCalistir(...)`
+
+Ortak alanlar:
+
+* `hizmetTuru`
+* `parcaliSonuclar`
+* `uyarilar`
+* `kalitePuani`
+* `toplamMaliyet`
+
+Özel:
+
+* CHAT → `birlesikMetin`
+* PDF / DEEPSEARCH → `birlesikOzet`
+
+---
+
+## 7.29 AMH iptal / duraklat kararı
+
+Fonksiyon: `iptalVeDuraklatmaKarariniVer(...)`
+
+Kurallar:
+
+* kullanıcı iptali → `iptal`
+* bütçe aşımı → `iptal`
+* yetki hatası → `iptal`
+* zaman aşımı → `duraklat`
+* aksi → `devam`
+
+---
+
+## 7.30 AMH iş yaşam döngüsü
+
+### Başlat
+
+Fonksiyon: `isKaydiBaslat`
+
+Kayıt alanları:
+
+* `isKimligi`
+* `hizmetTuru`
+* `kullaniciKimligi`
+* `baslangicZamani`
+* `durum: basladi`
+* `saglayiciPlani`
+* `istekOzeti.imza`
+* `istekOzeti.kisa`
+
+### Güncelle
+
+Fonksiyon: `isDurumunuGuncelle`
+
+Alanlar:
+
+* `durum`
+* `sonGuncelleme`
+* `yuzde`
+* `aktifAdim`
+* `sonMesaj`
+* `saglayici`
+* `hataOzeti`
+
+### Geçmiş
+
+Fonksiyon: `isGecmisineKaydet`
+
+Alanlar:
+
+* `olayKimligi`
+* `olay`
+* `veri`
+* `zamanDamgasi`
+
+Sınır:
+
+* son `200` kayıt tutulur
+
+### Özet
+
+Fonksiyon: `isDurumuOzetiUret`
+
+Alanlar:
+
+* `isKimligi`
+* `durum`
+* `yuzde`
+* `aktifAdim`
+* `sonHata`
+* `tahminiBitis`
+* `sonGuncelleme`
+
+Panel modunda:
+
+* `kisaMetin`
+
+### Kuyruktaki iş izleme
+
+Fonksiyon: `kuyruktaBekleyenIsiIzle`
+
+Kurallar:
+
+* durum `queued` veya `kuyrukta` ise
+* `isleniyor` yapılır
+* yüzde en az `10`
+* aktif adım varsayılan `sağlayıcı durum sorgusu`
 
 ### Arşiv
-- iş özeti
-- sonuç
-- son mesaj
-- geçmişin son bölümü
+
+Fonksiyon: `gecmisVeSonucArsiviniHazirla`
+
+Alanlar:
+
+* `isKimligi`
+* `durum`
+* `baslangicZamani`
+* `bitisZamani`
+* `hizmetTuru`
+* `sonMesaj`
+* `sonuc`
+* `gecmis` → son `50` kayıt
 
 ---
 
-## 7.17 `GET /api/is/:isKimligi`
+## 7.31 AMH sağlık ve teşhis
+
+### `sistemSaglikTaramasiYap`
+
+Başlangıç puanı:
+
+* `100`
+
+Kesintiler:
+
+* router yoksa `-25`
+* me.puter yoksa `-35`
+* her eksik kritik AI metodunda `-6`
+* KV testi başarısızsa `-20`
+
+Kontrol edilen AI yolları:
+
+* `ai.chat`
+* `ai.txt2img`
+* `ai.txt2vid`
+* `ai.txt2speech`
+* `ai.img2txt`
+
+### `hizmetBazliTeshisYap`
+
+Örnek testler:
+
+* `chat_yetkinlik`
+* `img_yetkinlik`
+* `video_yetkinlik`
+* `pdf_orkestra`
+* `genel`
+
+### `saglayiciErisimTestiYap`
+
+Belirli hizmet için gerekli me.puter metodunu doğrular.
+
+### `kvVeDurumDeposuTestiYap`
+
+* yaz
+* oku
+* sil
+  zinciri
+
+### `fallbackMekanizmasiniSinamaYap`
+
+* zincir üretir
+* yeniden deneme kararı örnekler
+
+### `gecikmeVeSureAnaliziYap`
+
+* adım sürelerini hesaplar
+* ortalama süre
+* timeout riski:
+
+  * `dusuk`
+  * `orta`
+  * `yuksek`
+
+### `maliyetSapmasiniAnalizEt`
+
+* tahmini maliyet
+* gerçek maliyet
+* sapma
+* sapma oranı
+* risk
+
+### `tanisalRaporUret`
+
+* `sorunlar`
+* `oneriler`
+* `ozet`
+* `saglikPuani`
+
+Panel modunda:
+
+* kartlar:
+
+  * Sağlık
+  * Sorun
+  * Öneri
+
+### `panelIcinKisaDurumHazirla`
+
+Alanlar:
+
+* `aktifIsSayisi`
+* `sonHata`
+* `genelSaglikPuani`
+* `durum`
+
+  * `iyi`
+  * `izlenmeli`
+  * `kritik`
+
+---
+
+## 7.32 AMH ana orkestrasyon akışı
+
+Fonksiyon: `tumSistemiKoordineEt(me, request, girdi)`
+
+Sıra:
+
+1. hizmet türünü çöz
+2. bağlam hazırla
+3. varsayılan ayarları belirle
+4. girdi doğrula
+5. etkin ayarı üret
+6. hizmet yetkinliğini kontrol et
+7. iş kaydı başlat
+8. geçmişe `is_basladi` yaz
+9. durumu `hazirlaniyor` yap
+10. orkestra planı üret
+11. durumu `isleniyor` yap
+12. ana işlemi başlat
+13. timeout uygula
+14. hata olursa sınıflandır + yeniden deneme kararı ver
+15. geçmişe hata yaz
+16. gerekirse `yeniden_denemede`
+17. son başarıda `tamamlandi`
+18. geçmişe kalite kaydı yaz
+19. sonuçları birleştir
+20. arşive yaz
+21. nihai cevap döndür
+
+### İlk durum güncellemesi
+
+* `%5`
+* aktif adım: `doğrulama`
+
+### İşçi seçimi sonrası
+
+* `%20`
+* aktif adım: `işçi seçimi`
+
+### Yeniden deneme
+
+* `%20 + deneme*10`, max `60`
+
+### Tamamlanma
+
+* `%100`
+* aktif adım: `tamamlandı`
+
+---
+
+## 7.33 AMH root endpointleri
+
+### `GET /`
+
+### `GET /tumu`
+
 Amaç:
-- iş özeti döndürmek
 
-Özet alanları:
-- `isKimligi`
-- `durum`
-- `yuzde`
-- `aktifAdim`
-- `sonHata`
-- `tahminiBitis`
-- `sonGuncelleme`
+* AIAI sınıf özeti vermek
+* gerçek iş çalıştırmak değil
 
----
+Alanlar:
 
-## 7.18 `GET /api/is/:isKimligi/gecmis`
-Amaç:
-- olay geçmişini döndürmek
+* `dosya`
+* `mesaj`
+* `format: AIAI`
+* `sinifSayisi: 4`
+* `siniflar`
+* `sinifDisiOrtaklar`
+* `zamanDamgasi`
 
----
+### AIAI sınıfları
 
-## 7.19 `GET /api/is/:isKimligi/arsiv`
-Amaç:
-- tamamlanan iş arşivini döndürmek
+1. `SINIF-1` → API ÇAĞIRAN İŞÇİLER
+2. `SINIF-3` → ORKESTRA ŞEFİ
+3. `SINIF-4` → İŞ TAKİP UZMANI
+4. `SINIF-5` → TEST DEDEKTİFİ
 
 ---
 
-## 7.20 `GET /api/is/:isKimligi/izle`
-Amaç:
-- kuyruktaki işi izlemek
+## 7.34 AMH route sözleşmeleri
 
-Özel davranış:
-- `queued | kuyrukta` ise
-- worker bunu `isleniyor` durumuna çekebilir
-- yüzdeyi en az `10` yapabilir
-- aktif adımı “sağlayıcı durum sorgusu” olarak işaretleyebilir
+### `GET /api/durum`
 
----
+Alanlar:
 
-## 7.21 `POST /api/teshis`
-Amaç:
-- toplu teşhis raporu üretmek
+* `worker: DOSYA_ADI`
+* `surum: SURUM`
+* `durum: hazir | uyari`
+* `saglik`
 
-İçerebilir:
-- genel sağlık
-- hizmet bazlı teşhis
-- sağlayıcı erişim testi
-- KV testi
-- fallback testi
-- rapor özeti
+### `GET /api/panel`
 
----
+Alanlar:
 
-## 7.22 `GET /api/teshis/:hizmetTuru`
-Amaç:
-- tek hizmet için teşhis
+* `aktifIsSayisi`
+* `sonHata`
+* `genelSaglikPuani`
+* `durum`
 
----
+### `GET /api/is/:isKimligi`
 
-## 7.23 `GET /api/saglayici/:hizmetTuru/:saglayici`
-Amaç:
-- belirli sağlayıcının belirli hizmette erişilebilir olup olmadığını kontrol etmek
+Alanlar:
 
----
+* iş özeti
 
-## 7.24 `GET /api/ispat/ozet`
-Amaç:
-- sistem sağlık + panel özetini birlikte vermek
+### `GET /api/is/:isKimligi/gecmis`
 
----
+Alanlar:
 
-# 8) AMH HİZMET BAZLI ÇIKTI DAVRANIŞLARI
+* `isKimligi`
+* `gecmis`
 
-## 8.1 CHAT
-- `ai.chat` çağrılır
-- string / message.content / content normalize edilir
-- metin döner
+### `GET /api/is/:isKimligi/arsiv`
 
-## 8.2 IMG
-- `ai.txt2img` çağrılır
-- url / src / images[0] normalize edilir
+Alanlar:
 
-## 8.3 VIDEO
-- `ai.txt2vid` varsa çağrılır
-- yoksa queued job benzeri fallback üretilir
-- `jobId`, `status`, `url` normalize edilir
+* `isKimligi`
+* `arsiv`
 
-## 8.4 TTS
-- `ai.txt2speech` varsa çağrılır
-- yoksa plan/fallback benzeri boş çıktı oluşturulabilir
+### `GET /api/is/:isKimligi/izle`
 
-## 8.5 OCR
-- `ai.img2txt` tekil veya çoklu görseller için çağrılır
-- metinler birleştirilir
+* kuyrukta iş varsa canlı güncelleyebilir
 
-## 8.6 PDF
-- doğrudan parse motoru yoksa:
-  - sayfa görselleri varsa OCR yolu izlenir
-  - sadece URL varsa placeholder metin oluşabilir
-- özet gerekiyorsa `ai.chat` ile özetlenir
+### `POST /api/calistir`
 
-## 8.7 DEEPSEARCH
-- alt sorgular üretilir
-- `ai.chat + web_search` ile araştırma özeti alınabilir
-- kaynak özeti listesi üretilir
+Geçersiz JSON:
 
----
+* `400`
+* `teshis: json`
 
-# 9) KOD YAZARKEN KORUNMASI GEREKEN ÖZEL DAVRANIŞLAR
+Başarılı koordinasyon:
 
-1. AMG ve AMH response şekillerini ayır.
-2. AMG’de `meta` alanı zorunlu değildir; AMH’de vardır.
-3. AMG’de admin koruması body içindeki `yoneticiAnahtari` ile işler.
-4. AMG’de ilk kurulum için `yeniYoneticiAnahtari` min 16 karakterdir.
-5. AMG sohbet akışında SSE event adları değiştirilmeyecek.
-6. AMG cache prefix’i `onbellek:` korunacak.
-7. AMG ortak durum KV anahtarı `ortakveri:durum` korunacak.
-8. AMG ayar KV anahtarı `uygulama:ayarlar` korunacak.
-9. AMH depo prefix’i `aaoit` korunacak.
-10. AMH hizmet türü isimleri büyük harfli set olarak korunacak.
-11. AMH timeout mantığı Promise.race benzeri olmalı.
-12. AMH retry kararı hata sınıfına göre verilmeli.
-13. AMH fallback zinciri provider + policy mantığı içermeli.
-14. AMH kalite / maliyet / süre meta alanları korunmalı.
-15. AMH PDF ve DEEPSEARCH için “çok adımlı akış” ayrı mantık olarak kalmalı.
+* `200`
+
+Koordinasyon hatası:
+
+* `400`
+
+Beklenmeyen runtime hatası:
+
+* `500`
+* `teshis: api/calistir`
+
+### `POST /api/teshis`
+
+Üretilen bloklar:
+
+* `saglik`
+* `hizmet`
+* `saglayici`
+* `kv`
+* `fallback`
+* `rapor`
+
+### `GET /api/teshis/:hizmetTuru`
+
+* tek hizmet teşhisi
+
+### `GET /api/saglayici/:hizmetTuru/:saglayici`
+
+* erişim başarısızsa `503`
+
+### `GET /api/ispat/ozet`
+
+* sağlık + panel özeti
 
 ---
 
-# 10) BİREBİR KOPYALANMASI GEREKMEYEN AMA DAVRANIŞI KORUNMASI GEREKEN YERLER
+## 7.35 AMH tam fonksiyon envanteri
 
-Şunlar birebir aynı isimde olmak zorunda değildir:
-- iç yardımcı fonksiyon adları
-- kodun satır sırası
-- log başlık metinleri
-- küçük iç refactor kararları
+### HTTP / cevap çekirdeği
 
-Ama şunlar korunmalıdır:
-- route path’leri
-- request alanları
-- response alanları
-- auth kuralları
-- limitler
-- KV anahtar formatları
-- event isimleri
-- hata sınıfları
-- timeout / maliyet / retry / fallback karar modeli
+* `corsBasliklariniHazirla`
+* `jsonBasliklariniHazirla`
+* `yanitDondur`
+* `basariCevabiUret`
+* `hataCevabiUret`
+* `secenekIsteginiYanitla`
+* `standartCevapGovdesiOlustur`
+
+### Parse / tip / yardımcılar
+
+* `govdeyiCozumle`
+* `nesneMi`
+* `diziMi`
+* `metniKirp`
+* `sayiDonustur`
+* `metniDiziyeCevir`
+* `kopyaOlustur`
+* `simdiIso`
+* `sayiDamgasiAl`
+* `anahtarBirlestir`
+* `dakikaPenceresiDamgasiAl`
+* `saniyeDamgasiAl`
+
+### Runtime / KV / metod erişimi
+
+* `calisanMePuteriniAl`
+* `guvenliLogYaz`
+* `depoAnahtariUret`
+* `depodanOku`
+* `depoyaYaz`
+* `depodanSil`
+* `mePuterMetodunuAl`
+* `mePuterMetodunuCalistir`
+
+### Maliyet / skor / kimlik
+
+* `tahminiMaliyetHesapla`
+* `agirlikliSkorHesapla`
+* `benzersizImzaUret`
+* `olayKimligiUret`
+
+### Bağlam / çözümleme / doğrulama
+
+* `istekBaglaminiHazirla`
+* `hizmetTurunuCozumle`
+* `guvenliGirdiDogrula`
+* `etkinAyariOlustur`
+* `hataSinifiniBelirle`
+* `guvenliHataOzetiUret`
+* `yenidenDenemeKarariniVer`
+* `islemMetaverisiniHazirla`
+* `hizmetYetkinliginiKontrolEt`
+* `sonucKalitesiniPuanla`
+* `hizmeteOzelFiltreleriUygula`
+
+### Sağlayıcı sözleşmesi
+
+* `saglayiciIstekGovdesiHazirla`
+* `saglayiciYanitiCozumle`
+
+### Hizmet çağrıları
+
+* `sohbetApiCagrisiniYurut`
+* `gorselApiCagrisiniYurut`
+* `videoApiCagrisiniYurut`
+* `seslendirmeApiCagrisiniYurut`
+* `ocrApiCagrisiniYurut`
+* `pdfApiCagrisiniYurut`
+* `derinAramaApiCagrisiniYurut`
+
+### Orkestrasyon
+
+* `uygunIsciyiSec`
+* `saglayiciOnceliginiBelirle`
+* `fallbackZinciriniKur`
+* `maliyetButcesiniYonet`
+* `zamanAsimiPolitikasiniUygula`
+* `cokAdimliAkisiYonet`
+* `sonucBirlestiriciyiCalistir`
+* `iptalVeDuraklatmaKarariniVer`
+* `orkestrayiBaslat`
+* `tumSistemiKoordineEt`
+
+### İş takibi
+
+* `isKaydiBaslat`
+* `isDurumunuGuncelle`
+* `isGecmisineKaydet`
+* `isDurumuOzetiUret`
+* `kuyruktaBekleyenIsiIzle`
+* `gecmisVeSonucArsiviniHazirla`
+
+### Teşhis / panel
+
+* `sistemSaglikTaramasiYap`
+* `hizmetBazliTeshisYap`
+* `saglayiciErisimTestiYap`
+* `kvVeDurumDeposuTestiYap`
+* `fallbackMekanizmasiniSinamaYap`
+* `gecikmeVeSureAnaliziYap`
+* `maliyetSapmasiniAnalizEt`
+* `tanisalRaporUret`
+* `panelIcinKisaDurumHazirla`
+
+### AIAI kök özet
+
+* `aiaiSinifGorevOzetiniOlustur`
+* `kokEndpointAiaiTumuCevabiniUret`
+* `kokEndpointiTumuGibiCalistir`
+* `ispatOzetiHazirla`
 
 ---
 
-# 11) BİLİNEN TUTARSIZLIKLAR / LEGACY NOTLARI
+# 8) AMG + AMH ARASINDAKİ ORTAK VE FARKLI YERLER
 
-1. AMG canlı worker adı `amg` olsa da bazı iç özet alanlarında `ams` metni geçebilir.
-2. Bu metin farkı davranış kırığı değil; metinsel/legacy etiket gibi ele alınmalıdır.
-3. AI bunu “bug” sanıp route veya worker adını değiştirmemelidir.
+## 8.1 Ortaklar
 
----
+* CORS
+* JSON response altyapısı
+* güvenli log mantığı
+* body parse
+* sayı ve metin yardımcıları
+* `diziMi`
+* `nesneMi`
+* `saniyeDamgasiAl`
 
-# 12) KAYNAK KOD GÖRMEDEN YENİDEN UYGULAMA STRATEJİSİ
+## 8.2 Farklılıklar
 
-Bir AI şu sırayla ilerlemelidir:
-
-## Aşama 1 — Sözleşme iskeleti
-Önce tüm endpointleri aynen aç:
-- AMG rotaları
-- AMH rotaları
-
-## Aşama 2 — Response uyumu
-Sonra success/error şemalarını tam oturt:
-- AMG düz şema
-- AMH meta’lı şema
-
-## Aşama 3 — Güvenlik
-Sonra:
-- admin koruması
-- URL güvenliği
-- mime güvenliği
-- rate limit
-eklenir
-
-## Aşama 4 — KV
-Sonra:
-- ayarlar
-- ortak durum
-- cache
-- iş kaydı
-- geçmiş
-- arşiv
-eklenir
-
-## Aşama 5 — AI entegrasyonu
-Sonra:
-- chat
-- img
-- video
-- tts
-- ocr
-- pdf
-- deepsearch
-adım adım bağlanır
-
-## Aşama 6 — Teşhis
-Sonra:
-- sağlık
-- KV testi
-- sağlayıcı testi
-- fallback testi
-eklenir
+* AMG sade API worker’dır
+* AMH meta’lı orkestratördür
+* AMG admin korumalı ayar / durum / cache işlemleri yapar
+* AMH iş kaydı / teşhis / maliyet / fallback yönetir
+* AMG SSE kullanır
+* AMH job-tracking kullanır
+* AMG yalnız JSON parse eder
+* AMH form-data da parse eder
 
 ---
 
-# 13) CONTRACT TEST LİSTESİ
-Kaynak kodu görmeden yazılan klon şu testleri geçmeden “uyumlu” sayılmamalıdır:
+# 9) BİREBİR KOPYALANMASI GEREKMEYEN YERLER
 
-## AMG testleri
-1. `GET /api/durum` → 200 ve `ok=true`
-2. `POST /api/sohbet` geçerli body → 200
-3. `POST /api/sohbet` bozuk JSON → 400
-4. `POST /api/sohbet/akis` → SSE event akışı
-5. `POST /api/gorsel` prompt yok → 400
-6. `GET /api/ayarlar/getir` → `gizliYoneticiAnahtari` dönmez
-7. ilk kurulumda kısa admin anahtarı → 400
-8. `/api/ortak-durum/yaz` yanlış admin → 403
-9. `/api/onbellek/sil` prefix yanlış → 400
-10. `/api/test/me-puter` → gerçek KV roundtrip
+Aşağıdakiler birebir aynı olmak zorunda değildir:
 
-## AMH testleri
-1. `POST /api/calistir` CHAT → 200
-2. `POST /api/calistir` geçersiz body → 400
-3. `POST /api/calistir` serviceType yok ama prompt var → uygun tür seçimi
-4. `POST /api/calistir` riskli URL → doğrulama hatası
-5. timeout simülasyonu → `zaman_asimi_hatasi`
-6. kota simülasyonu → `kota_hatasi`
-7. `GET /api/is/:id` → iş özeti
-8. `GET /api/is/:id/gecmis` → olay listesi
-9. `GET /api/is/:id/arsiv` → arşiv nesnesi
-10. `POST /api/teshis` → rapor gövdesi
+* iç kod sırası
+* yardımcı fonksiyonların iç implementasyon stili
+* log metinlerinin birebir yazımı
+* küçük refactor kararları
+
+Ama aşağıdakiler korunmalıdır:
+
+* tüm route path’leri
+* request alanları
+* response gövdeleri
+* AMG admin kuralları
+* AMG cache prefix’leri
+* AMG rate limit sayıları
+* AMG SSE event adları
+* AMH meta alanları
+* AMH timeout değerleri
+* AMH hizmet tipleri
+* AMH provider / fallback / retry / maliyet kararları
+* AMH depo anahtar biçimleri
+* AMH iş yaşam döngüsü
 
 ---
 
-# 14) AI İÇİN DOĞRUDAN GÖREV TALİMATI
+# 10) LEGACY VE TUTARSIZLIK NOTLARI
+
+1. AMG’nin canlı worker adı `amg`’dir.
+2. Buna rağmen kök özet ve bazı test yanıtlarında worker kimliği `ams` olarak döner.
+3. Bu davranış bug kabul edilip düzeltilmemelidir; sözleşmenin bir parçası olarak korunmalıdır.
+4. AMG `/api/amac` içinde de `AMS Puter Worker amaci` metni kullanır.
+5. AMH dosya adı dışarıya `amh.js` olarak görünür; bu response sözleşmesinin parçasıdır.
+
+---
+
+# 11) CONTRACT TEST LİSTESİ
+
+## 11.1 AMG testleri
+
+1. `GET /api/durum` → `200`
+2. `GET /api/modeller` → filtreleme ve `sinir`
+3. `POST /api/sohbet` geçerli body → `200`
+4. `POST /api/sohbet` bozuk JSON → `400`
+5. `POST /api/sohbet` eksik model → `400`
+6. `POST /api/sohbet/akis` → `hazir/parca/bitti`
+7. SSE yoksa → `akisaUygunOrtam: false`
+8. `POST /api/gorsel` eksik prompt → `400`
+9. `GET /api/ayarlar/getir` → `gizliYoneticiAnahtari` görünmez
+10. ilk kurulum kısa admin anahtarı → `400`
+11. yanlış admin ile ayar kaydetme → `403`
+12. `POST /api/ortak-durum/yaz` yanlış admin → `403`
+13. `POST /api/onbellek/sil` yanlış prefix → `400`
+14. `GET /api/test/saglik` → KV metot alanları görünür
+15. `GET /api/test/me-puter` → gerçek KV set/get/del
+
+## 11.2 AMH testleri
+
+1. `POST /api/calistir` CHAT → `200`
+2. `POST /api/calistir` JSON bozuk → `400`
+3. `POST /api/calistir` form-data parse → çalışmalı
+4. serviceType yok ama prompt var → doğru tip çözülmeli
+5. riskli URL → `DOGRULAMA_HATASI`
+6. yasak mime → hata
+7. timeout simülasyonu → `zaman_asimi_hatasi`
+8. quota simülasyonu → retry/fallback kararı
+9. `GET /api/is/:id` → iş özeti
+10. `GET /api/is/:id/gecmis` → olay listesi
+11. `GET /api/is/:id/arsiv` → arşiv
+12. `GET /api/is/:id/izle` → queued → isleniyor dönüşümü
+13. `POST /api/teshis` → çoklu rapor
+14. `GET /api/saglayici/:hizmetTuru/:saglayici` başarısız erişim → `503`
+15. `GET /api/ispat/ozet` → sağlık + panel
+
+---
+
+# 12) BAŞKA BİR AI’A DOĞRUDAN VERİLECEK TALİMAT
+
 Aşağıdaki metin, başka bir yapay zekâya doğrudan verilebilir:
 
-“AMG ve AMH isminde iki Puter Worker yeniden uygula. Route adlarını, request/response sözleşmelerini, rate-limit kurallarını, admin korumasını, KV anahtar biçimlerini, AMH meta yapısını, hizmet türü çözümleme mantığını, timeout–retry–fallback–maliyet–iş kaydı–teşhis akışlarını bu README’ye birebir uyumlu koru. İç kod birebir olmak zorunda değil; dış davranış birebir uyumlu olmalı. Önce route iskeletini kur, sonra response sözleşmesini oturt, ardından doğrulama/güvenlik/KV/AI entegrasyonu/teşhis katmanlarını sırayla ekle. Son aşamada contract test yaz ve her endpointi doğrula.”
+> AMG ve AMH isminde iki Puter Worker yeniden uygula. Route adlarını, request/response sözleşmelerini, AMG admin korumasını, AMG rate-limit sayılarını, AMG cache/KV anahtarlarını, AMG SSE event adlarını, AMH meta yapısını, AMH hizmet türü çözümleme mantığını, AMH timeout/retry/fallback/maliyet/job-tracking/diagnostic akışını bu README ile birebir uyumlu koru. İç kod aynı olmak zorunda değil; dış davranış aynı olmalı. Önce route iskeletini kur, sonra response sözleşmesini oturt, sonra doğrulama/güvenlik/KV/AI entegrasyonu/iş kaydı/teşhis katmanlarını ekle. Son aşamada contract test ile doğrula.
 
 ---
 
-# 15) SON KARAR
+# 13) SON KARAR
 
-## Soru:
-Bu bilgileri okuyan herhangi bir AI, kaynak kodları görmeden kodlama yapabilir mi?
+Bu README ile:
 
-## Net cevap:
-- Senin önceki kısa özetinle: **TAM OLARAK HAYIR**
-- Bu README ile: **EVET, büyük ölçüde EVET**
-- Ama:
-  - birebir davranış garantisi için
-  - canlı endpoint karşılaştırması
-  - contract test
-  yine gereklidir
+* kaynak kod görülmeden bile
+* AMG ve AMH davranışı
+* route, response, KV, admin, SSE, timeout, fallback, maliyet, iş takibi ve teşhis düzeyinde
+* **%95 doğrulukta** yeniden kodlanabilir.
 
-## En doğru ifade:
-Bu README, kaynak kodu görmeden **uyumlu yeniden uygulama geliştirmek için yeterli teknik sözleşmeyi** sağlar.
+Kalan son yüzde için:
+
+* canlı endpoint doğrulaması
+* contract test
+* response karşılaştırması
+  önerilir.
 
 ---
-# 16) KISA ÖZET
 
-- **AMG** = uygulama tarafı ortak servis worker’ı
-- **AMH** = çok hizmetli AI orkestrasyon worker’ı
-- **AMG** düz JSON şeması kullanır
-- **AMH** meta’lı standart cevap şeması kullanır
-- **AMG** rate limit + cache + admin ayar + ortak durum yapar
-- **AMH** service resolution + timeout + retry + fallback + job tracking + diagnosis yapar
-- Bu README olmadan AI eksik kalır
-- Bu README ile AI kaynak kod görmeden ciddi ölçüde kod yazabilir
+# 14) TEK CÜMLELİK ÖZET
 
+Bu README, AMG’yi uygulama servis worker’ı, AMH’yi AI orkestrasyon worker’ı olarak tanımlayan; gerçek route, response, güvenlik, KV, SSE, timeout, retry, fallback, maliyet, iş takibi ve teşhis davranışlarını eksiksiz sözleşmeye döken ana teknik belgedir.
 
-HEM AMG HEM AMH İÇİN 
-EK BİLGİ — README.md İÇİN KALAN FONKSİYONLAR
-
-madde ( 1 )
-fonksiyon adı : basariCevabiUret
-amacı : ✅ Başarılı işlemler için standart JSON başarı cevabı üretir.
-→ Rota: /api/durum, /api/modeller, /api/sohbet, /api/sohbet/akis, /api/gorsel, /api/ayarlar/getir, /api/ayarlar/kaydet, /api/ortak-durum/oku, /api/ortak-durum/yaz, /api/onbellek/sil, /, /tumu, /api, /api/test/calisiyor, /api/test/saglik, /api/test/me-puter, /api/amac
-→ Fonksiyon: basariCevabiUret
-→ Görev zinciri: ✅ işlem sonucu oluşur → standart başarı gövdesi hazırlanır → JSON response olarak istemciye döner
-
-madde ( 2 )
-fonksiyon adı : hataCevabiUret
-amacı : 🚨 Hatalı işlemler için standart JSON hata cevabı üretir.
-→ Rota: /api/durum, /api/modeller, /api/sohbet, /api/sohbet/akis, /api/gorsel, /api/ayarlar/getir, /api/ayarlar/kaydet, /api/ortak-durum/oku, /api/ortak-durum/yaz, /api/onbellek/sil, /, /tumu, /api, /api/test/calisiyor, /api/test/saglik, /api/test/me-puter, /api/amac
-→ Fonksiyon: hataCevabiUret
-→ Görev zinciri: 🚨 hata yakalanır → güvenli hata mesajı ve ek veri gövdeye yerleştirilir → standart JSON hata response’u döner
+```
+::contentReference[oaicite:3]{index=3}
+```
