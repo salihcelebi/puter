@@ -1,1491 +1,974 @@
-/* AIAI-OZET
-KONU=CHATALL_JS_TEK_DOSYA_TUM_FILTRE_VE_MODEL_MIMARISI
-DURUM=KOD_VAR
-ANA_KARAR=TEK_JS_DOSYA_ICINDE_TUM_AKIS_TOPLANDI
-AKIS=canli_model_cekimi -> normalize_etme -> fiyati_tam_olmayanlari_ele -> sayfa_uygunlugu_filtreleme -> admin_filtre_ayarlari_uygulama -> saglayiciya_gore_gruplama -> siralama -> UIya_hazir_veri
-KAPSAM=chat + resim + video + ses + tts
-FILTRELER=saglayici + model_adi + takma_ad + metin_girdisi + gorsel_girdisi + pdf_girdisi + ses_girdisi + arac_cagirma + akis_yanit + coklu_modlu + baglam_kapasitesi + maksimum_cikti_tokeni + hiz + giris_fiyati + cikis_fiyati + ucretsiz_mi + bilgi_tarihi + yayin_tarihi + acik_agirlik + onerilen + kalite_seviyesi
-FIYAT_KARARI=giris_ve_cikis_fiyati_olmayanlar_katalogdan_elensin
-YONETIM_KARARI=admin_ayarlari_ile_filtre_kullanimi_gorunurluk_oncelik_zorunluluk_ve_sira_yonetilsin
-FONKSIYON_KURALI=tum_fonksiyon_adlari_turkce
-*/
+function corsBasliklariniHazirla(request) {
+  var origin = '';
 
-const CHATALL_DEPO_ANAHTARI = "chatall_sayfa_filtre_ayarlari";
-const VARSAYILAN_SAYFA_TURU = "chat";
-const TUM_SAYFA_TURLERI = ["chat", "resim", "video", "ses", "tts"];
-
-const SAYFA_ADLARI = {
-  chat: "Chat",
-  resim: "Resim",
-  video: "Video",
-  ses: "Ses",
-  tts: "TTS",
-};
-
-const GRUP_ADLARI = {
-  kimlik: "Kimlik",
-  yetkinlik: "Yetkinlik",
-  girdi: "Girdi",
-  maliyet: "Maliyet",
-  performans: "Performans",
-  zaman: "Zaman",
-  davranis: "Davranis",
-  gelismis: "Gelismis",
-};
-
-const HIZ_ONCELIK_HARITASI = {
-  fastest: 5,
-  ultra_fast: 5,
-  fast: 4,
-  medium: 3,
-  normal: 3,
-  balanced: 3,
-  slow: 2,
-  slower: 1,
-};
-
-function filtreTanimlariniGetir() {
-  return [
-    {
-      anahtar: "saglayici",
-      ad: "Saglayici",
-      aciklama: "Modeli veya ureticiyi saglayan kaynak.",
-      grup: "kimlik",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "secim",
-    },
-    {
-      anahtar: "model_adi",
-      ad: "Model Adi",
-      aciklama: "Model adinda metin aramasi yapar.",
-      grup: "kimlik",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "metin",
-    },
-    {
-      anahtar: "takma_ad",
-      ad: "Takma Ad",
-      aciklama: "Takma adlar ve kisa isimler icinde arama yapar.",
-      grup: "kimlik",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "metin",
-    },
-    {
-      anahtar: "metin_girdisi",
-      ad: "Metin Girdisi",
-      aciklama: "Metin girisini destekleyen modelleri secer.",
-      grup: "girdi",
-      desteklenenSayfalar: ["chat", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "gorsel_girdisi",
-      ad: "Gorsel Girdisi",
-      aciklama: "Gorsel girisini destekleyen modelleri secer.",
-      grup: "girdi",
-      desteklenenSayfalar: ["chat", "resim", "video"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "pdf_girdisi",
-      ad: "PDF Girdisi",
-      aciklama: "PDF girisini destekleyen modelleri secer.",
-      grup: "girdi",
-      desteklenenSayfalar: ["chat"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "ses_girdisi",
-      ad: "Ses Girdisi",
-      aciklama: "Ses girisini destekleyen modelleri secer.",
-      grup: "girdi",
-      desteklenenSayfalar: ["ses", "video"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "arac_cagirma",
-      ad: "Arac Cagirma",
-      aciklama: "Arac cagirmayi destekleyen modelleri secer.",
-      grup: "yetkinlik",
-      desteklenenSayfalar: ["chat"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "akis_yanit",
-      ad: "Akis Yaniti",
-      aciklama: "Akis halinde yanit verebilen modelleri secer.",
-      grup: "yetkinlik",
-      desteklenenSayfalar: ["chat", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "coklu_modlu",
-      ad: "Coklu Modlu",
-      aciklama: "Birden fazla girdi turu destekleyen modelleri secer.",
-      grup: "yetkinlik",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      bagimliliklar: ["gorsel_girdisi"],
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "baglam_kapasitesi",
-      ad: "Baglam Kapasitesi",
-      aciklama: "Baglam kapasitesi araligina gore secim yapar.",
-      grup: "performans",
-      desteklenenSayfalar: ["chat", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "sayisal_aralik",
-    },
-    {
-      anahtar: "maksimum_cikti_tokeni",
-      ad: "Maksimum Cikti Tokeni",
-      aciklama: "Maksimum cikti uzunluguna gore secim yapar.",
-      grup: "performans",
-      desteklenenSayfalar: ["chat", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "sayisal_aralik",
-    },
-    {
-      anahtar: "hiz",
-      ad: "Hiz",
-      aciklama: "Hiz etiketine gore modelleri filtreler.",
-      grup: "performans",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "secim",
-    },
-    {
-      anahtar: "giris_fiyati",
-      ad: "Giris Fiyati",
-      aciklama: "Giris fiyat araligina gore secim yapar.",
-      grup: "maliyet",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: true,
-      varsayilanGelismis: false,
-      tur: "sayisal_aralik",
-    },
-    {
-      anahtar: "cikis_fiyati",
-      ad: "Cikis Fiyati",
-      aciklama: "Cikis fiyat araligina gore secim yapar.",
-      grup: "maliyet",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: true,
-      varsayilanGelismis: false,
-      tur: "sayisal_aralik",
-    },
-    {
-      anahtar: "ucretsiz_mi",
-      ad: "Ucretsiz Mi",
-      aciklama: "Ucretsiz veya sifir maliyetli modelleri secer.",
-      grup: "maliyet",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      bagimliliklar: ["giris_fiyati", "cikis_fiyati"],
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "bilgi_tarihi",
-      ad: "Bilgi Tarihi",
-      aciklama: "Bilgi tarih araligina gore secim yapar.",
-      grup: "zaman",
-      desteklenenSayfalar: ["chat", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "tarih_aralik",
-    },
-    {
-      anahtar: "yayin_tarihi",
-      ad: "Yayin Tarihi",
-      aciklama: "Yayin tarih araligina gore secim yapar.",
-      grup: "zaman",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: true,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: false,
-      tur: "tarih_aralik",
-    },
-    {
-      anahtar: "acik_agirlik",
-      ad: "Acik Agirlik",
-      aciklama: "Acik agirlik durumuna gore secim yapar.",
-      grup: "davranis",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "onerilen",
-      ad: "Onerilen",
-      aciklama: "Onerilen etiketli modelleri secer.",
-      grup: "davranis",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: true,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "mantiksal",
-    },
-    {
-      anahtar: "kalite_seviyesi",
-      ad: "Kalite Seviyesi",
-      aciklama: "Kalite etiketi veya seviyesine gore secim yapar.",
-      grup: "performans",
-      desteklenenSayfalar: ["chat", "resim", "video", "ses", "tts"],
-      varsayilanEtkin: true,
-      varsayilanGorunur: false,
-      varsayilanOneCikar: false,
-      varsayilanZorunlu: false,
-      varsayilanGelismis: true,
-      tur: "secim",
-    },
-  ];
-}
-
-function sayfayaGoreFiltreleriGetir(sayfaTuru) {
-  return filtreTanimlariniGetir().filter((filtre) =>
-    filtre.desteklenenSayfalar.includes(sayfaTuru)
-  );
-}
-
-function varsayilanFiltreAyarlariGetir() {
-  const tumAyarlar = {};
-  for (const sayfaTuru of TUM_SAYFA_TURLERI) {
-    const filtreler = sayfayaGoreFiltreleriGetir(sayfaTuru);
-    tumAyarlar[sayfaTuru] = {};
-    filtreler.forEach((filtre, sira) => {
-      tumAyarlar[sayfaTuru][filtre.anahtar] = {
-        etkin: filtre.varsayilanEtkin,
-        gorunur: filtre.varsayilanGorunur,
-        oneCikar: filtre.varsayilanOneCikar,
-        zorunlu: filtre.varsayilanZorunlu,
-        gelismis: filtre.varsayilanGelismis,
-        sira: sira + 1,
-      };
-    });
+  try {
+    origin = request && request.headers ? request.headers.get('origin') || '' : '';
+  } catch (hata) {
+    origin = '';
   }
-  return tumAyarlar;
+
+  return {
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Istemci-Kimligi, X-Yonetici-Anahtari',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Credentials': origin ? 'true' : 'false',
+    'Vary': 'Origin'
+  };
 }
 
-function hamModelVerisiniGetir() {
-  if (!globalThis.puter?.ai?.listModels) {
-    throw new Error("puter.ai.listModels() bulunamadi.");
+function jsonBasliklariniHazirla(request, ekBasliklar) {
+  var basliklar = Object.assign({}, corsBasliklariniHazirla(request), {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store'
+  });
+
+  if (ekBasliklar && typeof ekBasliklar === 'object') {
+    Object.assign(basliklar, ekBasliklar);
   }
-  return globalThis.puter.ai.listModels();
+
+  return basliklar;
 }
 
-function hamSaglayiciVerisiniGetir() {
-  if (!globalThis.puter?.ai?.listModelProviders) {
-    throw new Error("puter.ai.listModelProviders() bulunamadi.");
+function basariCevabiUret(request, veri, durumKodu) {
+  return new Response(JSON.stringify({ ok: true, veri: veri, hata: null }), {
+    status: durumKodu || 200,
+    headers: jsonBasliklariniHazirla(request)
+  });
+}
+
+function hataCevabiUret(request, durumKodu, hataMesaji, ekVeri) {
+  return new Response(JSON.stringify({
+    ok: false,
+    veri: ekVeri || null,
+    hata: hataMesaji || 'Beklenmeyen bir hata oluştu.'
+  }), {
+    status: durumKodu || 500,
+    headers: jsonBasliklariniHazirla(request)
+  });
+}
+
+function secenekIsteginiYanitla(request) {
+  return new Response(null, {
+    status: 204,
+    headers: corsBasliklariniHazirla(request)
+  });
+}
+
+async function govdeyiCozumle(request) {
+  var icerikTuru = '';
+
+  try {
+    icerikTuru = request.headers.get('content-type') || '';
+  } catch (hata) {
+    icerikTuru = '';
   }
-  return globalThis.puter.ai.listModelProviders();
-}
 
-async function modelleriGetir() {
-  return hamModelVerisiniGetir();
-}
-
-async function saglayicilariGetir() {
-  return hamSaglayiciVerisiniGetir();
-}
-
-function guvenliDizi(deger) {
-  return Array.isArray(deger) ? deger : [];
-}
-
-function guvenliMetin(deger, varsayilan = "") {
-  return typeof deger === "string" ? deger : varsayilan;
-}
-
-function guvenliSayi(deger, varsayilan = null) {
-  if (typeof deger === "number" && Number.isFinite(deger)) return deger;
-  if (typeof deger === "string" && deger.trim() !== "") {
-    const sayi = Number(deger);
-    return Number.isFinite(sayi) ? sayi : varsayilan;
+  if (icerikTuru.toLowerCase().indexOf('application/json') === -1) {
+    return {};
   }
-  return varsayilan;
+
+  try {
+    return await request.json();
+  } catch (hata) {
+    return null;
+  }
 }
 
-function guvenliMantik(deger, varsayilan = false) {
-  if (typeof deger === "boolean") return deger;
-  if (deger === "true") return true;
-  if (deger === "false") return false;
-  return varsayilan;
+function metniKirp(metin, azamiUzunluk) {
+  var duzMetin = String(metin == null ? '' : metin);
+  if (duzMetin.length <= azamiUzunluk) {
+    return duzMetin;
+  }
+  return duzMetin.slice(0, azamiUzunluk);
 }
 
-function guvenliTarih(deger) {
-  const metin = guvenliMetin(deger, "");
-  if (!metin) return null;
-  const zaman = Date.parse(metin);
-  return Number.isNaN(zaman) ? null : new Date(zaman).toISOString().slice(0, 10);
+function sayiDonustur(deger, varsayilanDeger, altSinir, ustSinir) {
+  var sayi = Number(deger);
+
+  if (!isFinite(sayi)) {
+    sayi = varsayilanDeger;
+  }
+
+  if (typeof altSinir === 'number' && sayi < altSinir) {
+    sayi = altSinir;
+  }
+
+  if (typeof ustSinir === 'number' && sayi > ustSinir) {
+    sayi = ustSinir;
+  }
+
+  return sayi;
 }
 
-function modelKimliginiHazirla(hamModel) {
-  const hamId = guvenliMetin(hamModel.id, "");
-  const hamPuterId = guvenliMetin(hamModel.puterId, "");
-  const saglayici = guvenliMetin(hamModel.provider, "") || puterKimligindenSaglayiciCikar(hamPuterId);
-  const modelKimligi = hamId || puterKimligindenModelAdiCikar(hamPuterId);
-  return {
-    modelKimligi,
-    puterKimligi: hamPuterId,
-    saglayici,
-    gorunenAd:
-      guvenliMetin(hamModel.name, "") ||
-      modelKimligi ||
-      hamPuterId ||
-      "Bilinmeyen Model",
-  };
+function dakikayiDamgala() {
+  return Math.floor(Date.now() / 60000);
 }
 
-function puterKimligindenSaglayiciCikar(puterKimligi) {
-  if (!puterKimligi) return "";
-  const ilkParca = String(puterKimligi).split(":")[0] || "";
-  return ilkParca.trim();
+function saniyeDamgasiAl() {
+  return Math.floor(Date.now() / 1000);
 }
 
-function puterKimligindenModelAdiCikar(puterKimligi) {
-  if (!puterKimligi) return "";
-  const ikiNoktaSonrasi = String(puterKimligi).split(":")[1] || "";
-  const parcalar = ikiNoktaSonrasi.split("/");
-  return parcalar[parcalar.length - 1] || "";
+function anahtariOlustur(alan, kimlik) {
+  var sol = String(alan || '').trim();
+  var sag = String(kimlik || '').trim();
+  return sol + ':' + sag;
 }
 
-function takmaAdlariHazirla(hamModel) {
-  const takmaAdlar = guvenliDizi(hamModel.aliases)
-    .filter((deger) => typeof deger === "string" && deger.trim() !== "")
-    .map((deger) => deger.trim());
-  return [...new Set(takmaAdlar)];
+async function ayarlariGetir(me) {
+  var ayarlar = await me.puter.kv.get('uygulama:ayarlar');
+  if (!ayarlar || typeof ayarlar !== 'object') {
+    return {};
+  }
+  return ayarlar;
 }
 
-function modaliteleriHazirla(hamModel) {
-  const girisler = guvenliDizi(hamModel?.modalities?.input).map((x) =>
-    String(x).toLowerCase()
-  );
-  const cikislar = guvenliDizi(hamModel?.modalities?.output).map((x) =>
-    String(x).toLowerCase()
-  );
-  return {
-    girisler,
-    cikislar,
-    metinGirdisiVar: girisler.includes("text"),
-    gorselGirdisiVar: girisler.includes("image"),
-    pdfGirdisiVar: girisler.includes("pdf"),
-    sesGirdisiVar:
-      girisler.includes("audio") ||
-      girisler.includes("speech") ||
-      girisler.includes("voice"),
-    metinCikisiVar: cikislar.includes("text"),
-    gorselCikisiVar: cikislar.includes("image"),
-    videoCikisiVar: cikislar.includes("video"),
-    sesCikisiVar:
-      cikislar.includes("audio") ||
-      cikislar.includes("speech") ||
-      cikislar.includes("voice"),
-    cokluModluMu: girisler.length > 1,
-  };
+async function ayarlariKaydet(me, ayarlar) {
+  await me.puter.kv.set('uygulama:ayarlar', ayarlar || {});
+  return true;
 }
 
-function fiyatBilgisiniHazirla(hamModel) {
-  const maliyetler = hamModel?.costs || {};
-  const paraBirimi = guvenliMetin(hamModel.costs_currency, "");
-  const girisAnahtari = guvenliMetin(hamModel.input_cost_key, "input_tokens");
-  const cikisAnahtari = guvenliMetin(hamModel.output_cost_key, "output_tokens");
-  const girisFiyati = guvenliSayi(maliyetler[girisAnahtari], null);
-  const cikisFiyati = guvenliSayi(maliyetler[cikisAnahtari], null);
-  const tabanTokenMiktari = guvenliSayi(maliyetler.tokens, null);
-
-  return {
-    paraBirimi,
-    tabanTokenMiktari,
-    girisFiyati,
-    cikisFiyati,
-    girisAnahtari,
-    cikisAnahtari,
-    ucretsizMi:
-      (girisFiyati === 0 || girisFiyati === null) &&
-      (cikisFiyati === 0 || cikisFiyati === null)
-        ? girisFiyati === 0 && cikisFiyati === 0
-        : false,
-    hamMaliyetler: maliyetler,
-  };
+function ayarlariDisariHazirla(ayarlar) {
+  var kopya = Object.assign({}, ayarlar || {});
+  delete kopya.gizliYoneticiAnahtari;
+  return kopya;
 }
 
-function tarihBilgisiniHazirla(hamModel) {
-  return {
-    bilgiTarihi:
-      guvenliTarih(hamModel.knowledge) ||
-      guvenliTarih(hamModel.training_cutoff) ||
-      null,
-    yayinTarihi: guvenliTarih(hamModel.release_date),
-    sonrakisi: guvenliMetin(hamModel.succeeded_by, ""),
-  };
+function istemciKimliginiCikar(request, user) {
+  var kimlik = '';
+
+  try {
+    kimlik = request.headers.get('x-istemci-kimligi') || '';
+  } catch (hata) {
+    kimlik = '';
+  }
+
+  if (!kimlik) {
+    try {
+      kimlik = request.headers.get('origin') || '';
+    } catch (hata2) {
+      kimlik = '';
+    }
+  }
+
+  if (!kimlik && user && typeof user === 'object') {
+    kimlik = user.id || user.uuid || user.username || user.email || '';
+  }
+
+  if (!kimlik) {
+    kimlik = 'genel';
+  }
+
+  return String(kimlik).slice(0, 160);
 }
 
-function baglamBilgisiniHazirla(hamModel) {
-  return {
-    baglamKapasitesi: guvenliSayi(hamModel.context, null),
-    maksimumCiktiTokeni: guvenliSayi(hamModel.max_tokens, null),
-  };
-}
+async function istekSiniriniKontrolEt(me, istemciKimligi, dakikaBasinaSinir) {
+  var zamanDamgasi = dakikayiDamgala();
+  var anahtar = anahtariOlustur('oran', istemciKimligi + ':' + zamanDamgasi);
+  var mevcut = await me.puter.kv.get(anahtar);
+  var yeniDeger = sayiDonustur(mevcut, 0, 0, 100000) + 1;
 
-function hizBilgisiniHazirla(hamModel) {
-  const hiz = guvenliMetin(hamModel.qualitative_speed, "").toLowerCase();
-  return {
-    hiz,
-    hizPuani: HIZ_ONCELIK_HARITASI[hiz] || 0,
-  };
-}
+  await me.puter.kv.set(anahtar, yeniDeger, saniyeDamgasiAl() + 120);
 
-function kaliteBilgisiniHazirla(hamModel) {
-  const gorunenAd = guvenliMetin(hamModel.name, "").toLowerCase();
-  const modelAdi = guvenliMetin(hamModel.id, "").toLowerCase();
-  const tamAd = `${gorunenAd} ${modelAdi}`;
-  if (tamAd.includes("opus")) return "ust";
-  if (tamAd.includes("sonnet")) return "yuksek";
-  if (tamAd.includes("pro")) return "yuksek";
-  if (tamAd.includes("haiku")) return "hiz_odakli";
-  if (tamAd.includes("mini") || tamAd.includes("nano")) return "ekonomik";
-  return "standart";
-}
-
-function onerilenMiBelirle(hamModel, normalizeModel) {
-  const takmaAdlar = guvenliDizi(hamModel.aliases).join(" ").toLowerCase();
-  const ad = `${normalizeModel.gorunenAd} ${normalizeModel.modelKimligi}`.toLowerCase();
-  return (
-    takmaAdlar.includes("latest") ||
-    ad.includes("latest") ||
-    ad.includes("sonnet") ||
-    ad.includes("pro")
-  );
-}
-
-function modeliNormalizeEt(hamModel) {
-  const kimlik = modelKimliginiHazirla(hamModel);
-  const modaliteler = modaliteleriHazirla(hamModel);
-  const fiyat = fiyatBilgisiniHazirla(hamModel);
-  const tarihler = tarihBilgisiniHazirla(hamModel);
-  const baglam = baglamBilgisiniHazirla(hamModel);
-  const hiz = hizBilgisiniHazirla(hamModel);
-
-  const normalizeModel = {
-    modelKimligi: kimlik.modelKimligi,
-    puterKimligi: kimlik.puterKimligi,
-    gorunenAd: kimlik.gorunenAd,
-    saglayici: kimlik.saglayici,
-    takmaAdlar: takmaAdlariHazirla(hamModel),
-    acikAgirlik: guvenliMantik(hamModel.open_weights, false),
-    aracCagirma: guvenliMantik(hamModel.tool_call, false),
-    akisYanit: guvenliMantik(
-      hamModel.stream ?? hamModel.streaming ?? false,
-      false
-    ),
-    modaliteler,
-    fiyat,
-    tarihler,
-    baglam,
-    hiz,
-    bilgiTarihi: tarihler.bilgiTarihi,
-    yayinTarihi: tarihler.yayinTarihi,
-    baglamKapasitesi: baglam.baglamKapasitesi,
-    maksimumCiktiTokeni: baglam.maksimumCiktiTokeni,
-    girisFiyati: fiyat.girisFiyati,
-    cikisFiyati: fiyat.cikisFiyati,
-    ucretsizMi: fiyat.ucretsizMi,
-    kaliteSeviyesi: kaliteBilgisiniHazirla(hamModel),
-    onerilen: false,
-    hamModel,
-  };
-
-  normalizeModel.onerilen = onerilenMiBelirle(hamModel, normalizeModel);
-  return normalizeModel;
-}
-
-function modelleriNormalizeEt(hamModeller) {
-  return guvenliDizi(hamModeller).map(modeliNormalizeEt);
-}
-
-function saglayiciyiNormalizeEt(hamSaglayici) {
-  if (typeof hamSaglayici === "string") {
+  if (yeniDeger > dakikaBasinaSinir) {
     return {
-      kimlik: hamSaglayici,
-      gorunenAd: hamSaglayici,
-      izinliSecenekler: [],
-      engelliSecenekler: [],
-      zorunluSecenekler: [],
-      cokluModlu: null,
-      araclar: null,
-      akis: null,
-      hamSaglayici,
+      uygun: false,
+      hata: 'İstek sınırı aşıldı. Lütfen kısa süre sonra tekrar dene.'
     };
   }
 
   return {
-    kimlik:
-      guvenliMetin(hamSaglayici.provider, "") ||
-      guvenliMetin(hamSaglayici.id, "") ||
-      guvenliMetin(hamSaglayici.name, ""),
-    gorunenAd:
-      guvenliMetin(hamSaglayici.name, "") ||
-      guvenliMetin(hamSaglayici.provider, "") ||
-      guvenliMetin(hamSaglayici.id, "") ||
-      "Bilinmeyen Saglayici",
-    izinliSecenekler: guvenliDizi(hamSaglayici.allowedOptions),
-    engelliSecenekler: guvenliDizi(hamSaglayici.blockedOptions),
-    zorunluSecenekler: guvenliDizi(hamSaglayici.requiredOptions),
-    cokluModlu: typeof hamSaglayici.multimodal === "boolean" ? hamSaglayici.multimodal : null,
-    araclar: typeof hamSaglayici.tools === "boolean" ? hamSaglayici.tools : null,
-    akis: typeof hamSaglayici.stream === "boolean" ? hamSaglayici.stream : null,
-    hamSaglayici,
+    uygun: true,
+    sayi: yeniDeger
   };
 }
 
-function saglayicilariNormalizeEt(hamSaglayicilar) {
-  return guvenliDizi(hamSaglayicilar).map(saglayiciyiNormalizeEt);
+function diziMi(deger) {
+  return Array.isArray(deger);
 }
 
-function modelGecerliMi(model) {
-  return Boolean(model && model.modelKimligi && model.saglayici);
+function nesneMi(deger) {
+  return !!deger && typeof deger === 'object' && !Array.isArray(deger);
 }
 
-function saglayiciGecerliMi(saglayici) {
-  return Boolean(saglayici && saglayici.kimlik);
+function bosMu(deger) {
+  return String(deger == null ? '' : deger).trim() === '';
 }
 
-function metinGirdisiVarMi(model) {
-  return Boolean(model?.modaliteler?.metinGirdisiVar);
+function rolGecerliMi(rol) {
+  return rol === 'system' || rol === 'assistant' || rol === 'user' || rol === 'tool';
 }
 
-function gorselGirdisiVarMi(model) {
-  return Boolean(model?.modaliteler?.gorselGirdisiVar);
+function yaziIceriginiTopla(icerik) {
+  if (typeof icerik === 'string') {
+    return icerik;
+  }
+
+  if (!Array.isArray(icerik)) {
+    return '';
+  }
+
+  var birlesik = [];
+  var i = 0;
+
+  for (i = 0; i < icerik.length; i += 1) {
+    var oge = icerik[i] || {};
+    if (oge.type === 'text' && typeof oge.text === 'string') {
+      birlesik.push(oge.text);
+    }
+  }
+
+  return birlesik.join('\n');
 }
 
-function pdfGirdisiVarMi(model) {
-  return Boolean(model?.modaliteler?.pdfGirdisiVar);
+function mesajIceriginiDogrula(icerik) {
+  if (typeof icerik === 'string') {
+    if (bosMu(icerik)) {
+      return { uygun: false, hata: 'Mesaj içeriği boş olamaz.' };
+    }
+
+    if (icerik.length > 12000) {
+      return { uygun: false, hata: 'Tek bir mesaj 12.000 karakteri aşamaz.' };
+    }
+
+    return { uygun: true, deger: icerik, metinUzunlugu: icerik.length };
+  }
+
+  if (!Array.isArray(icerik)) {
+    return { uygun: false, hata: 'Mesaj içeriği string veya içerik dizisi olmalıdır.' };
+  }
+
+  if (!icerik.length) {
+    return { uygun: false, hata: 'Mesaj içerik dizisi boş olamaz.' };
+  }
+
+  var duzeltilmis = [];
+  var metinUzunlugu = 0;
+  var i = 0;
+
+  for (i = 0; i < icerik.length; i += 1) {
+    var oge = icerik[i];
+
+    if (!nesneMi(oge)) {
+      return { uygun: false, hata: 'Mesaj içerik öğeleri nesne olmalıdır.' };
+    }
+
+    if (oge.type === 'text') {
+      if (bosMu(oge.text)) {
+        return { uygun: false, hata: 'Metin içerik öğesi boş olamaz.' };
+      }
+
+      if (String(oge.text).length > 12000) {
+        return { uygun: false, hata: 'Tek bir metin içerik öğesi 12.000 karakteri aşamaz.' };
+      }
+
+      metinUzunlugu += String(oge.text).length;
+      duzeltilmis.push({ type: 'text', text: String(oge.text) });
+      continue;
+    }
+
+    if (oge.type === 'file') {
+      if (bosMu(oge.puter_path)) {
+        return { uygun: false, hata: 'Dosya içerik öğesinde puter_path zorunludur.' };
+      }
+
+      duzeltilmis.push({ type: 'file', puter_path: String(oge.puter_path) });
+      continue;
+    }
+
+    return { uygun: false, hata: 'Yalnızca text ve file içerik tipleri desteklenir.' };
+  }
+
+  if (metinUzunlugu > 16000) {
+    return { uygun: false, hata: 'Bir mesajdaki toplam metin uzunluğu 16.000 karakteri aşamaz.' };
+  }
+
+  return { uygun: true, deger: duzeltilmis, metinUzunlugu: metinUzunlugu };
 }
 
-function sesGirdisiVarMi(model) {
-  return Boolean(model?.modaliteler?.sesGirdisiVar);
+function sohbetGovdesiniDogrula(govde) {
+  if (!nesneMi(govde)) {
+    return { uygun: false, hata: 'İstek gövdesi geçerli JSON nesnesi olmalıdır.' };
+  }
+
+  var model = String(govde.model || '').trim();
+  var mesajlar = govde.mesajlar;
+  var prompt = typeof govde.prompt === 'string' ? govde.prompt.trim() : '';
+  var duzeltilmisMesajlar = [];
+  var toplamUzunluk = 0;
+  var i = 0;
+
+  if (!model) {
+    return { uygun: false, hata: 'model alanı zorunludur.' };
+  }
+
+  if (!diziMi(mesajlar)) {
+    if (!prompt) {
+      return { uygun: false, hata: 'mesajlar dizisi veya prompt zorunludur.' };
+    }
+    mesajlar = [{ role: 'user', content: prompt }];
+  }
+
+  if (!mesajlar.length) {
+    return { uygun: false, hata: 'mesajlar boş olamaz.' };
+  }
+
+  if (mesajlar.length > 40) {
+    return { uygun: false, hata: 'En fazla 40 mesaj gönderilebilir.' };
+  }
+
+  for (i = 0; i < mesajlar.length; i += 1) {
+    var mesaj = mesajlar[i];
+
+    if (!nesneMi(mesaj)) {
+      return { uygun: false, hata: 'Her mesaj bir nesne olmalıdır.' };
+    }
+
+    var rol = String(mesaj.role || '').trim();
+    if (!rolGecerliMi(rol)) {
+      return { uygun: false, hata: 'Geçersiz mesaj rolü kullanıldı.' };
+    }
+
+    var icerikDogrulama = mesajIceriginiDogrula(mesaj.content);
+    if (!icerikDogrulama.uygun) {
+      return icerikDogrulama;
+    }
+
+    toplamUzunluk += icerikDogrulama.metinUzunlugu;
+    duzeltilmisMesajlar.push({ role: rol, content: icerikDogrulama.deger });
+  }
+
+  if (toplamUzunluk > 30000) {
+    return { uygun: false, hata: 'Toplam mesaj uzunluğu 30.000 karakteri aşamaz.' };
+  }
+
+  return {
+    uygun: true,
+    veri: {
+      model: model,
+      mesajlar: duzeltilmisMesajlar,
+      sicaklik: sayiDonustur(govde.sicaklik, 0.7, 0, 2),
+      azamiToken: sayiDonustur(govde.azamiToken || govde.max_tokens, 1200, 1, 4000),
+      dusunmeSeviyesi: String(govde.dusunmeSeviyesi || '').trim(),
+      metinKisalikSeviyesi: String(govde.metinKisalikSeviyesi || '').trim(),
+      webArama: Boolean(govde.webArama),
+      istemciKimligi: String(govde.istemciKimligi || '').trim(),
+      toplamUzunluk: toplamUzunluk
+    }
+  };
 }
 
-function aracCagirmaVarMi(model) {
-  return Boolean(model?.aracCagirma);
+function gorselGovdesiniDogrula(govde) {
+  if (!nesneMi(govde)) {
+    return { uygun: false, hata: 'İstek gövdesi geçerli JSON nesnesi olmalıdır.' };
+  }
+
+  var prompt = String(govde.prompt || '').trim();
+  var model = String(govde.model || govde.modelId || '').trim();
+
+  if (!prompt) {
+    return { uygun: false, hata: 'prompt zorunludur.' };
+  }
+
+  if (prompt.length > 2000) {
+    return { uygun: false, hata: 'Görsel promptu 2.000 karakteri aşamaz.' };
+  }
+
+  return {
+    uygun: true,
+    veri: {
+      prompt: prompt,
+      model: model,
+      kalite: String(govde.kalite || 'low').trim(),
+      genislik: sayiDonustur(govde.genislik, 1024, 256, 2048),
+      yukseklik: sayiDonustur(govde.yukseklik, 1024, 256, 2048),
+      adet: sayiDonustur(govde.adet || govde.n, 1, 1, 4),
+      testModu: Boolean(govde.testModu || govde.test_mode),
+      istemciKimligi: String(govde.istemciKimligi || '').trim()
+    }
+  };
 }
 
-function akisYanitVarMi(model) {
-  return Boolean(model?.akisYanit);
+function ayarGirdisiniDogrula(govde) {
+  if (!nesneMi(govde)) {
+    return { uygun: false, hata: 'İstek gövdesi geçerli JSON nesnesi olmalıdır.' };
+  }
+
+  var ayarlar = nesneMi(govde.ayarlar) ? govde.ayarlar : {};
+  var yeniYoneticiAnahtari = String(govde.yeniYoneticiAnahtari || '').trim();
+  var yoneticiAnahtari = String(govde.yoneticiAnahtari || '').trim();
+
+  if (Object.keys(ayarlar).length === 0 && !yeniYoneticiAnahtari) {
+    return { uygun: false, hata: 'Kaydedilecek bir ayar veya yeni yönetici anahtarı gönderilmelidir.' };
+  }
+
+  return {
+    uygun: true,
+    veri: {
+      ayarlar: ayarlar,
+      yoneticiAnahtari: yoneticiAnahtari,
+      yeniYoneticiAnahtari: yeniYoneticiAnahtari
+    }
+  };
 }
 
-function baglamBilgisiVarMi(model) {
-  return model?.baglamKapasitesi !== null && model?.baglamKapasitesi !== undefined;
+function ortakDurumGovdesiniDogrula(govde) {
+  if (!nesneMi(govde)) {
+    return { uygun: false, hata: 'İstek gövdesi geçerli JSON nesnesi olmalıdır.' };
+  }
+
+  if (!nesneMi(govde.durum) && !diziMi(govde.durum) && typeof govde.durum !== 'string' && typeof govde.durum !== 'number' && typeof govde.durum !== 'boolean') {
+    return { uygun: false, hata: 'durum alanı zorunludur.' };
+  }
+
+  return {
+    uygun: true,
+    veri: {
+      durum: govde.durum,
+      yoneticiAnahtari: String(govde.yoneticiAnahtari || '').trim()
+    }
+  };
 }
 
-function maksimumCiktiBilgisiVarMi(model) {
-  return model?.maksimumCiktiTokeni !== null && model?.maksimumCiktiTokeni !== undefined;
+function onbellekSilGovdesiniDogrula(govde) {
+  if (!nesneMi(govde)) {
+    return { uygun: false, hata: 'İstek gövdesi geçerli JSON nesnesi olmalıdır.' };
+  }
+
+  var anahtar = String(govde.anahtar || '').trim();
+  if (!anahtar) {
+    return { uygun: false, hata: 'anahtar zorunludur.' };
+  }
+
+  if (anahtar.indexOf('onbellek:') !== 0) {
+    return { uygun: false, hata: 'Yalnızca onbellek: önekiyle başlayan anahtarlar silinebilir.' };
+  }
+
+  return {
+    uygun: true,
+    veri: {
+      anahtar: anahtar,
+      yoneticiAnahtari: String(govde.yoneticiAnahtari || '').trim()
+    }
+  };
 }
 
-function girisFiyatiVarMi(model) {
-  return model?.girisFiyati !== null && model?.girisFiyati !== undefined;
+function yoneticiAnahtariVarMi(ayarlar) {
+  return !!String((ayarlar || {}).gizliYoneticiAnahtari || '').trim();
 }
 
-function cikisFiyatiVarMi(model) {
-  return model?.cikisFiyati !== null && model?.cikisFiyati !== undefined;
+async function yoneticiYetkisiniDogrula(me, verilenAnahtar) {
+  var ayarlar = await ayarlariGetir(me);
+  var beklenen = String(ayarlar.gizliYoneticiAnahtari || '').trim();
+  var gelen = String(verilenAnahtar || '').trim();
+
+  if (!beklenen) {
+    return { uygun: false, hata: 'Yönetici anahtarı henüz kurulmamış.' };
+  }
+
+  if (!gelen || gelen !== beklenen) {
+    return { uygun: false, hata: 'Yönetici anahtarı doğrulanamadı.' };
+  }
+
+  return { uygun: true, ayarlar: ayarlar };
 }
 
-function fiyatiTamMi(model) {
-  return girisFiyatiVarMi(model) && cikisFiyatiVarMi(model);
+async function ortakDurumuOku(me) {
+  var durum = await me.puter.kv.get('ortakveri:durum');
+  if (durum == null) {
+    return null;
+  }
+  return durum;
 }
 
-function ucretsizMi(model) {
-  return Boolean(model?.ucretsizMi);
+async function ortakDurumuYaz(me, durum) {
+  await me.puter.kv.set('ortakveri:durum', durum);
+  return true;
 }
 
-function chatIcinUygunMu(model) {
-  return (
-    modelGecerliMi(model) &&
-    metinGirdisiVarMi(model) &&
-    Boolean(model?.modaliteler?.metinCikisiVar)
-  );
+function sohbetSecenekleriniHazirla(sohbetVerisi, akisModu) {
+  var secenekler = {
+    model: sohbetVerisi.model,
+    stream: Boolean(akisModu),
+    max_tokens: sohbetVerisi.azamiToken,
+    temperature: sohbetVerisi.sicaklik
+  };
+
+  if (sohbetVerisi.dusunmeSeviyesi) {
+    secenekler.reasoning_effort = sohbetVerisi.dusunmeSeviyesi;
+  }
+
+  if (sohbetVerisi.metinKisalikSeviyesi) {
+    secenekler.text_verbosity = sohbetVerisi.metinKisalikSeviyesi;
+  }
+
+  if (sohbetVerisi.webArama) {
+    secenekler.tools = [{ type: 'web_search' }];
+  }
+
+  return secenekler;
 }
 
-function resimIcinUygunMu(model) {
-  return (
-    modelGecerliMi(model) &&
-    (gorselGirdisiVarMi(model) || Boolean(model?.modaliteler?.gorselCikisiVar))
-  );
+function sohbetYanitiniMetneDonustur(yanit) {
+  if (typeof yanit === 'string') {
+    return yanit;
+  }
+
+  if (yanit && yanit.message && typeof yanit.message.content === 'string') {
+    return yanit.message.content;
+  }
+
+  if (yanit && typeof yanit.content === 'string') {
+    return yanit.content;
+  }
+
+  return '';
 }
 
-function videoIcinUygunMu(model) {
-  return (
-    modelGecerliMi(model) &&
-    (Boolean(model?.modaliteler?.videoCikisiVar) ||
-      sesGirdisiVarMi(model) ||
-      gorselGirdisiVarMi(model) ||
-      metinGirdisiVarMi(model))
-  );
+function gorselCiktisiniCozumle(cikti) {
+  if (typeof cikti === 'string') {
+    return { url: cikti, ham: cikti };
+  }
+
+  if (cikti && typeof cikti === 'object') {
+    if (typeof cikti.url === 'string') {
+      return { url: cikti.url, ham: cikti };
+    }
+    if (typeof cikti.src === 'string') {
+      return { url: cikti.src, ham: cikti };
+    }
+    if (typeof cikti.image_url === 'string') {
+      return { url: cikti.image_url, ham: cikti };
+    }
+  }
+
+  return { url: '', ham: cikti };
 }
 
-function sesIcinUygunMu(model) {
-  return (
-    modelGecerliMi(model) &&
-    (sesGirdisiVarMi(model) || Boolean(model?.modaliteler?.sesCikisiVar))
-  );
+function guvenliHataMesajiAl(hata) {
+  if (!hata) {
+    return 'Beklenmeyen bir hata oluştu.';
+  }
+
+  if (typeof hata === 'string') {
+    return metniKirp(hata, 500);
+  }
+
+  if (typeof hata.message === 'string') {
+    return metniKirp(hata.message, 500);
+  }
+
+  return 'Beklenmeyen bir hata oluştu.';
 }
 
-function ttsIcinUygunMu(model) {
-  return (
-    modelGecerliMi(model) &&
-    metinGirdisiVarMi(model) &&
-    Boolean(model?.modaliteler?.sesCikisiVar)
-  );
-}
-
-function sayfaTuruneGoreUygunMu(model, sayfaTuru) {
-  if (sayfaTuru === "chat") return chatIcinUygunMu(model);
-  if (sayfaTuru === "resim") return resimIcinUygunMu(model);
-  if (sayfaTuru === "video") return videoIcinUygunMu(model);
-  if (sayfaTuru === "ses") return sesIcinUygunMu(model);
-  if (sayfaTuru === "tts") return ttsIcinUygunMu(model);
-  return false;
-}
-
-function filtreAyarlariniGetir() {
-  const varsayilan = varsayilanFiltreAyarlariGetir();
+function guvenliLogYaz(baslik, veri) {
   try {
-    const kayit = globalThis.localStorage?.getItem(CHATALL_DEPO_ANAHTARI);
-    if (!kayit) return varsayilan;
-    const cozulmus = JSON.parse(kayit);
-    return derinAyarBirlestir(varsayilan, cozulmus);
-  } catch {
-    return varsayilan;
+    console.log('[AMG]', baslik, veri);
+  } catch (hata) {
   }
 }
 
-function filtreAyarlariniKaydet(ayarlar) {
-  if (!globalThis.localStorage) return ayarlar;
-  globalThis.localStorage.setItem(CHATALL_DEPO_ANAHTARI, JSON.stringify(ayarlar));
-  return ayarlar;
+function sseSatiriUret(olay, veri) {
+  return 'event: ' + olay + '\n' + 'data: ' + JSON.stringify(veri) + '\n\n';
 }
 
-function filtreAyarlariniSifirla() {
-  const varsayilan = varsayilanFiltreAyarlariGetir();
-  filtreAyarlariniKaydet(varsayilan);
-  return varsayilan;
+function akisDestegiVarMi() {
+  return typeof ReadableStream !== 'undefined' && typeof TextEncoder !== 'undefined';
 }
 
-function varsayilanAyarlaraDon() {
-  return filtreAyarlariniSifirla();
+async function akisYanitiUret(request, akisUretici) {
+  if (!akisDestegiVarMi()) {
+    var butunMetin = await akisUretici(false);
+    return basariCevabiUret(request, {
+      akisaUygunOrtam: false,
+      metin: butunMetin
+    });
+  }
+
+  var kodlayici = new TextEncoder();
+
+  var akim = new ReadableStream({
+    async start(denetleyici) {
+      try {
+        denetleyici.enqueue(kodlayici.encode(sseSatiriUret('hazir', { ok: true, veri: { durum: 'hazir' }, hata: null })));
+
+        var sonuc = await akisUretici(true, function (olay, veri) {
+          denetleyici.enqueue(kodlayici.encode(sseSatiriUret(olay, veri)));
+        });
+
+        denetleyici.enqueue(kodlayici.encode(sseSatiriUret('bitti', { ok: true, veri: { metin: sonuc || '' }, hata: null })));
+        denetleyici.close();
+      } catch (hata) {
+        denetleyici.enqueue(kodlayici.encode(sseSatiriUret('hata', { ok: false, veri: null, hata: guvenliHataMesajiAl(hata) })));
+        denetleyici.close();
+      }
+    }
+  });
+
+  return new Response(akim, {
+    status: 200,
+    headers: Object.assign({}, corsBasliklariniHazirla(request), {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive'
+    })
+  });
 }
 
-function filtreAyarlariniDisaAktar(ayarlar = filtreAyarlariniGetir()) {
-  return JSON.stringify(ayarlar, null, 2);
+async function sohbetiCalistir(me, sohbetVerisi, akisModu, parcayiYolla) {
+  var secenekler = sohbetSecenekleriniHazirla(sohbetVerisi, akisModu);
+
+  if (!akisModu) {
+    var yanit = await me.puter.ai.chat(sohbetVerisi.mesajlar, secenekler);
+    return sohbetYanitiniMetneDonustur(yanit);
+  }
+
+  var akis = await me.puter.ai.chat(sohbetVerisi.mesajlar, secenekler);
+  var tumMetin = '';
+
+  for await (var parca of akis) {
+    if (parca && typeof parca.text === 'string' && parca.text) {
+      tumMetin += parca.text;
+      if (typeof parcayiYolla === 'function') {
+        parcayiYolla('parca', { ok: true, veri: { metin: parca.text }, hata: null });
+      }
+      continue;
+    }
+
+    if (parca && parca.type === 'tool_use' && typeof parcayiYolla === 'function') {
+      parcayiYolla('arac', {
+        ok: true,
+        veri: {
+          ad: String(parca.name || ''),
+          girdi: parca.input || null
+        },
+        hata: null
+      });
+    }
+  }
+
+  return tumMetin;
 }
 
-function filtreAyarlariniIceAktar(hamMetin) {
-  const varsayilan = varsayilanFiltreAyarlariGetir();
-  const cozulmus = JSON.parse(String(hamMetin || "{}"));
-  const birlesik = derinAyarBirlestir(varsayilan, cozulmus);
-  filtreAyarlariniKaydet(birlesik);
-  return birlesik;
-}
+router.options('/*yol', async function ({ request }) {
+  return secenekIsteginiYanitla(request);
+});
 
-function derinAyarBirlestir(varsayilan, gelen) {
-  const sonuc = JSON.parse(JSON.stringify(varsayilan));
-  for (const sayfaTuru of Object.keys(sonuc)) {
-    if (!gelen?.[sayfaTuru]) continue;
-    for (const anahtar of Object.keys(sonuc[sayfaTuru])) {
-      if (!gelen[sayfaTuru]?.[anahtar]) continue;
-      sonuc[sayfaTuru][anahtar] = {
-        ...sonuc[sayfaTuru][anahtar],
-        ...gelen[sayfaTuru][anahtar],
+router.get('/api/durum', async function ({ request, me }) {
+  try {
+    var ayarlar = await ayarlariGetir(me);
+    var ortakDurum = await ortakDurumuOku(me);
+
+    return basariCevabiUret(request, {
+      servis: 'amg',
+      durum: 'hazir',
+      mePuterOdakli: true,
+      yoneticiKurulu: yoneticiAnahtariVarMi(ayarlar),
+      ortakDurumVar: ortakDurum != null,
+      zaman: new Date().toISOString()
+    });
+  } catch (hata) {
+    guvenliLogYaz('durum-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
+
+router.get('/api/modeller', async function ({ request, me }) {
+  try {
+    var url = new URL(request.url);
+    var saglayici = String(url.searchParams.get('saglayici') || '').trim();
+    var ara = String(url.searchParams.get('ara') || '').trim().toLowerCase();
+    var sinir = sayiDonustur(url.searchParams.get('sinir'), 150, 1, 500);
+    var hamModeller = await me.puter.ai.listModels(saglayici || null);
+    var modeller = Array.isArray(hamModeller) ? hamModeller : [];
+
+    var duzeltilmis = modeller.map(function (model) {
+      return {
+        kimlik: model.id || '',
+        ad: model.name || model.id || '',
+        saglayici: model.provider || '',
+        baglam: model.context || null,
+        azamiToken: model.max_tokens || null,
+        maliyet: model.cost || null,
+        takmaAdlar: Array.isArray(model.aliases) ? model.aliases : []
       };
+    });
+
+    if (ara) {
+      duzeltilmis = duzeltilmis.filter(function (model) {
+        var havuz = [model.kimlik, model.ad, model.saglayici].concat(model.takmaAdlar || []).join(' ').toLowerCase();
+        return havuz.indexOf(ara) !== -1;
+      });
     }
+
+    duzeltilmis = duzeltilmis.slice(0, sinir);
+
+    return basariCevabiUret(request, {
+      toplam: duzeltilmis.length,
+      modeller: duzeltilmis
+    });
+  } catch (hata) {
+    guvenliLogYaz('model-listesi-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
-  return sonuc;
-}
+});
 
-function filtreEtkinMi(ayarlar, sayfaTuru, filtreAnahtari) {
-  return Boolean(ayarlar?.[sayfaTuru]?.[filtreAnahtari]?.etkin);
-}
-
-function filtreGorunurMu(ayarlar, sayfaTuru, filtreAnahtari) {
-  return Boolean(ayarlar?.[sayfaTuru]?.[filtreAnahtari]?.gorunur);
-}
-
-function filtreOneCikarilmisMi(ayarlar, sayfaTuru, filtreAnahtari) {
-  return Boolean(ayarlar?.[sayfaTuru]?.[filtreAnahtari]?.oneCikar);
-}
-
-function filtreZorunluMu(ayarlar, sayfaTuru, filtreAnahtari) {
-  return Boolean(ayarlar?.[sayfaTuru]?.[filtreAnahtari]?.zorunlu);
-}
-
-function filtreGelismisMi(ayarlar, sayfaTuru, filtreAnahtari) {
-  return Boolean(ayarlar?.[sayfaTuru]?.[filtreAnahtari]?.gelismis);
-}
-
-function filtreyiEtkinlestir(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "etkin", true);
-}
-
-function filtreyiPasiflestir(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "etkin", false);
-}
-
-function filtreyiGoster(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "gorunur", true);
-}
-
-function filtreyiGizle(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "gorunur", false);
-}
-
-function filtreyiOneCikar(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "oneCikar", true);
-}
-
-function filtreyiGeriAl(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "oneCikar", false);
-}
-
-function filtreyiZorunluYap(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "zorunlu", true);
-}
-
-function filtreyiOpsiyonelYap(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "zorunlu", false);
-}
-
-function filtreyiGelismisYap(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "gelismis", true);
-}
-
-function filtreyiTemelYap(ayarlar, sayfaTuru, filtreAnahtari) {
-  return filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, "gelismis", false);
-}
-
-function filtreAyarAlaniniGuncelle(ayarlar, sayfaTuru, filtreAnahtari, alan, deger) {
-  const yeni = JSON.parse(JSON.stringify(ayarlar));
-  if (!yeni?.[sayfaTuru]?.[filtreAnahtari]) return yeni;
-  yeni[sayfaTuru][filtreAnahtari][alan] = deger;
-  return yeni;
-}
-
-function filtreBagimliliklariniKontrolEt(ayarlar, sayfaTuru, filtreAnahtari) {
-  const filtre = sayfayaGoreFiltreleriGetir(sayfaTuru).find(
-    (x) => x.anahtar === filtreAnahtari
-  );
-  if (!filtre) return false;
-  if (!filtre.bagimliliklar || filtre.bagimliliklar.length === 0) return true;
-  return filtre.bagimliliklar.every((bagliAnahtar) =>
-    filtreEtkinMi(ayarlar, sayfaTuru, bagliAnahtar)
-  );
-}
-
-function filtreSirasiniBelirle(ayarlar, sayfaTuru, filtreler) {
-  return [...filtreler].sort((a, b) => {
-    const aSira = ayarlar?.[sayfaTuru]?.[a.anahtar]?.sira ?? 9999;
-    const bSira = ayarlar?.[sayfaTuru]?.[b.anahtar]?.sira ?? 9999;
-    return aSira - bSira;
-  });
-}
-
-function filtreyiYukariTasi(ayarlar, sayfaTuru, filtreAnahtari) {
-  const filtreler = filtreSirasiniBelirle(
-    ayarlar,
-    sayfaTuru,
-    sayfayaGoreFiltreleriGetir(sayfaTuru)
-  );
-  const index = filtreler.findIndex((f) => f.anahtar === filtreAnahtari);
-  if (index <= 0) return ayarlar;
-  return filtreSiralariniDegistir(
-    ayarlar,
-    sayfaTuru,
-    filtreAnahtari,
-    filtreler[index - 1].anahtar
-  );
-}
-
-function filtreyiAsagiTasi(ayarlar, sayfaTuru, filtreAnahtari) {
-  const filtreler = filtreSirasiniBelirle(
-    ayarlar,
-    sayfaTuru,
-    sayfayaGoreFiltreleriGetir(sayfaTuru)
-  );
-  const index = filtreler.findIndex((f) => f.anahtar === filtreAnahtari);
-  if (index < 0 || index >= filtreler.length - 1) return ayarlar;
-  return filtreSiralariniDegistir(
-    ayarlar,
-    sayfaTuru,
-    filtreAnahtari,
-    filtreler[index + 1].anahtar
-  );
-}
-
-function filtreSiralariniDegistir(ayarlar, sayfaTuru, birinciAnahtar, ikinciAnahtar) {
-  const yeni = JSON.parse(JSON.stringify(ayarlar));
-  const birinciSira = yeni?.[sayfaTuru]?.[birinciAnahtar]?.sira;
-  const ikinciSira = yeni?.[sayfaTuru]?.[ikinciAnahtar]?.sira;
-  if (birinciSira == null || ikinciSira == null) return ayarlar;
-  yeni[sayfaTuru][birinciAnahtar].sira = ikinciSira;
-  yeni[sayfaTuru][ikinciAnahtar].sira = birinciSira;
-  return yeni;
-}
-
-function fiyatBilgisiniOku(model) {
-  return {
-    girisFiyati: model?.girisFiyati ?? null,
-    cikisFiyati: model?.cikisFiyati ?? null,
-    paraBirimi: model?.fiyat?.paraBirimi ?? "",
-    tabanTokenMiktari: model?.fiyat?.tabanTokenMiktari ?? null,
-  };
-}
-
-function fiyatBilgisiniSayiyaCevir(deger) {
-  return guvenliSayi(deger, null);
-}
-
-function sayisalAraliktaMi(deger, min, max) {
-  if (deger == null) return false;
-  if (min != null && deger < min) return false;
-  if (max != null && deger > max) return false;
-  return true;
-}
-
-function tarihAraligindaMi(tarihMetni, baslangic, bitis) {
-  const tarih = guvenliTarih(tarihMetni);
-  if (!tarih) return false;
-  const zaman = Date.parse(tarih);
-  const baslangicZamani = baslangic ? Date.parse(baslangic) : null;
-  const bitisZamani = bitis ? Date.parse(bitis) : null;
-  if (baslangicZamani != null && zaman < baslangicZamani) return false;
-  if (bitisZamani != null && zaman > bitisZamani) return false;
-  return true;
-}
-
-function metinEslesiyorMu(hamMetin, arananMetin) {
-  if (!arananMetin) return true;
-  const kaynak = String(hamMetin || "").toLocaleLowerCase("tr");
-  const hedef = String(arananMetin || "").toLocaleLowerCase("tr");
-  return kaynak.includes(hedef);
-}
-
-function secimEslesiyorMu(deger, secilenler) {
-  if (!Array.isArray(secilenler) || secilenler.length === 0) return true;
-  return secilenler.includes(deger);
-}
-
-function mantiksalFiltreEslesiyorMu(modelDegeri, beklenenDeger) {
-  if (beklenenDeger === undefined || beklenenDeger === null) return true;
-  return Boolean(modelDegeri) === Boolean(beklenenDeger);
-}
-
-function tekFiltreyiUygula(model, filtreAnahtari, filtreDegeri) {
-  if (filtreAnahtari === "saglayici") {
-    return secimEslesiyorMu(model.saglayici, filtreDegeri);
-  }
-  if (filtreAnahtari === "model_adi") {
-    return metinEslesiyorMu(model.gorunenAd || model.modelKimligi, filtreDegeri);
-  }
-  if (filtreAnahtari === "takma_ad") {
-    return metinEslesiyorMu(model.takmaAdlar.join(" "), filtreDegeri);
-  }
-  if (filtreAnahtari === "metin_girdisi") {
-    return mantiksalFiltreEslesiyorMu(metinGirdisiVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "gorsel_girdisi") {
-    return mantiksalFiltreEslesiyorMu(gorselGirdisiVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "pdf_girdisi") {
-    return mantiksalFiltreEslesiyorMu(pdfGirdisiVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "ses_girdisi") {
-    return mantiksalFiltreEslesiyorMu(sesGirdisiVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "arac_cagirma") {
-    return mantiksalFiltreEslesiyorMu(aracCagirmaVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "akis_yanit") {
-    return mantiksalFiltreEslesiyorMu(akisYanitVarMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "coklu_modlu") {
-    return mantiksalFiltreEslesiyorMu(model?.modaliteler?.cokluModluMu, filtreDegeri);
-  }
-  if (filtreAnahtari === "baglam_kapasitesi") {
-    return sayisalAraliktaMi(
-      model.baglamKapasitesi,
-      filtreDegeri?.min ?? null,
-      filtreDegeri?.max ?? null
-    );
-  }
-  if (filtreAnahtari === "maksimum_cikti_tokeni") {
-    return sayisalAraliktaMi(
-      model.maksimumCiktiTokeni,
-      filtreDegeri?.min ?? null,
-      filtreDegeri?.max ?? null
-    );
-  }
-  if (filtreAnahtari === "hiz") {
-    return secimEslesiyorMu(model?.hiz?.hiz, filtreDegeri);
-  }
-  if (filtreAnahtari === "giris_fiyati") {
-    return sayisalAraliktaMi(
-      model.girisFiyati,
-      filtreDegeri?.min ?? null,
-      filtreDegeri?.max ?? null
-    );
-  }
-  if (filtreAnahtari === "cikis_fiyati") {
-    return sayisalAraliktaMi(
-      model.cikisFiyati,
-      filtreDegeri?.min ?? null,
-      filtreDegeri?.max ?? null
-    );
-  }
-  if (filtreAnahtari === "ucretsiz_mi") {
-    return mantiksalFiltreEslesiyorMu(ucretsizMi(model), filtreDegeri);
-  }
-  if (filtreAnahtari === "bilgi_tarihi") {
-    return tarihAraligindaMi(
-      model.bilgiTarihi,
-      filtreDegeri?.baslangic ?? null,
-      filtreDegeri?.bitis ?? null
-    );
-  }
-  if (filtreAnahtari === "yayin_tarihi") {
-    return tarihAraligindaMi(
-      model.yayinTarihi,
-      filtreDegeri?.baslangic ?? null,
-      filtreDegeri?.bitis ?? null
-    );
-  }
-  if (filtreAnahtari === "acik_agirlik") {
-    return mantiksalFiltreEslesiyorMu(model.acikAgirlik, filtreDegeri);
-  }
-  if (filtreAnahtari === "onerilen") {
-    return mantiksalFiltreEslesiyorMu(model.onerilen, filtreDegeri);
-  }
-  if (filtreAnahtari === "kalite_seviyesi") {
-    return secimEslesiyorMu(model.kaliteSeviyesi, filtreDegeri);
-  }
-  return true;
-}
-
-function filtreleriUygula(modeller, uygulananFiltreler = {}, ayarlar = null, sayfaTuru = VARSAYILAN_SAYFA_TURU) {
-  const aktifAyarlar = ayarlar || filtreAyarlariniGetir();
-  return guvenliDizi(modeller).filter((model) => {
-    for (const [filtreAnahtari, filtreDegeri] of Object.entries(uygulananFiltreler || {})) {
-      if (!filtreEtkinMi(aktifAyarlar, sayfaTuru, filtreAnahtari)) continue;
-      if (!filtreBagimliliklariniKontrolEt(aktifAyarlar, sayfaTuru, filtreAnahtari)) continue;
-      if (!tekFiltreyiUygula(model, filtreAnahtari, filtreDegeri)) return false;
+router.post('/api/sohbet', async function ({ request, me, user }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
     }
-    return true;
-  });
-}
 
-function onceligeGoreSirala(modeller, ayarlar = null, sayfaTuru = VARSAYILAN_SAYFA_TURU) {
-  const aktifAyarlar = ayarlar || filtreAyarlariniGetir();
-  const oneCikanlar = new Set(
-    sayfayaGoreFiltreleriGetir(sayfaTuru)
-      .filter((filtre) => filtreOneCikarilmisMi(aktifAyarlar, sayfaTuru, filtre.anahtar))
-      .map((filtre) => filtre.anahtar)
-  );
+    var dogrulama = sohbetGovdesiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
 
-  return [...modeller].sort((a, b) => {
-    const aPuan = modelOncelikPuaniHesapla(a, oneCikanlar);
-    const bPuan = modelOncelikPuaniHesapla(b, oneCikanlar);
-    return bPuan - aPuan;
-  });
-}
+    var sohbetVerisi = dogrulama.veri;
+    var istemciKimligi = sohbetVerisi.istemciKimligi || istemciKimliginiCikar(request, user);
+    var oranKontrolu = await istekSiniriniKontrolEt(me, istemciKimligi, 12);
 
-function modelOncelikPuaniHesapla(model, oneCikanlar) {
-  let puan = 0;
-  if (oneCikanlar.has("onerilen") && model.onerilen) puan += 50;
-  if (oneCikanlar.has("hiz")) puan += model?.hiz?.hizPuani || 0;
-  if (oneCikanlar.has("baglam_kapasitesi")) puan += (model.baglamKapasitesi || 0) / 10000;
-  if (oneCikanlar.has("kalite_seviyesi")) {
-    if (model.kaliteSeviyesi === "ust") puan += 30;
-    if (model.kaliteSeviyesi === "yuksek") puan += 20;
-    if (model.kaliteSeviyesi === "standart") puan += 10;
+    if (!oranKontrolu.uygun) {
+      return hataCevabiUret(request, 429, oranKontrolu.hata);
+    }
+
+    var metin = await sohbetiCalistir(me, sohbetVerisi, false);
+    var onbellekAnahtari = anahtariOlustur('onbellek', 'sohbet:' + Date.now());
+
+    await me.puter.kv.set(onbellekAnahtari, {
+      model: sohbetVerisi.model,
+      istemciKimligi: istemciKimligi,
+      soru: yaziIceriginiTopla(sohbetVerisi.mesajlar[sohbetVerisi.mesajlar.length - 1].content),
+      cevap: metniKirp(metin, 12000),
+      zaman: new Date().toISOString()
+    }, saniyeDamgasiAl() + 3600);
+
+    return basariCevabiUret(request, {
+      model: sohbetVerisi.model,
+      metin: metin,
+      oranSayisi: oranKontrolu.sayi,
+      onbellekAnahtari: onbellekAnahtari
+    });
+  } catch (hata) {
+    guvenliLogYaz('sohbet-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
-  return puan;
-}
+});
 
-function adaGoreSirala(modeller, artan = true) {
-  return [...modeller].sort((a, b) => {
-    const sonuc = (a.gorunenAd || "").localeCompare(b.gorunenAd || "", "tr");
-    return artan ? sonuc : -sonuc;
-  });
-}
+router.post('/api/sohbet/akis', async function ({ request, me, user }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
+    }
 
-function hizaGoreSirala(modeller, artan = false) {
-  return [...modeller].sort((a, b) => {
-    const sonuc = (a?.hiz?.hizPuani || 0) - (b?.hiz?.hizPuani || 0);
-    return artan ? sonuc : -sonuc;
-  });
-}
+    var dogrulama = sohbetGovdesiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
 
-function baglamaGoreSirala(modeller, artan = false) {
-  return [...modeller].sort((a, b) => {
-    const sonuc = (a.baglamKapasitesi || 0) - (b.baglamKapasitesi || 0);
-    return artan ? sonuc : -sonuc;
-  });
-}
+    var sohbetVerisi = dogrulama.veri;
+    var istemciKimligi = sohbetVerisi.istemciKimligi || istemciKimliginiCikar(request, user);
+    var oranKontrolu = await istekSiniriniKontrolEt(me, istemciKimligi, 8);
 
-function yayinTarihineGoreSirala(modeller, artan = false) {
-  return [...modeller].sort((a, b) => {
-    const sonuc = (Date.parse(a.yayinTarihi || "1970-01-01") || 0) - (Date.parse(b.yayinTarihi || "1970-01-01") || 0);
-    return artan ? sonuc : -sonuc;
-  });
-}
+    if (!oranKontrolu.uygun) {
+      return hataCevabiUret(request, 429, oranKontrolu.hata);
+    }
 
-function bilgiTarihineGoreSirala(modeller, artan = false) {
-  return [...modeller].sort((a, b) => {
-    const sonuc = (Date.parse(a.bilgiTarihi || "1970-01-01") || 0) - (Date.parse(b.bilgiTarihi || "1970-01-01") || 0);
-    return artan ? sonuc : -sonuc;
-  });
-}
+    return await akisYanitiUret(request, async function (gercekAkis, olayYayimla) {
+      var metin = await sohbetiCalistir(me, sohbetVerisi, gercekAkis, olayYayimla);
+      var onbellekAnahtari = anahtariOlustur('onbellek', 'akis:' + Date.now());
 
-function fiyataGoreSirala(modeller, alan = "giris", artan = true) {
-  const anahtar = alan === "cikis" ? "cikisFiyati" : "girisFiyati";
-  return [...modeller].sort((a, b) => {
-    const aDeger = a[anahtar] ?? Number.MAX_SAFE_INTEGER;
-    const bDeger = b[anahtar] ?? Number.MAX_SAFE_INTEGER;
-    const sonuc = aDeger - bDeger;
-    return artan ? sonuc : -sonuc;
-  });
-}
+      await me.puter.kv.set(onbellekAnahtari, {
+        model: sohbetVerisi.model,
+        istemciKimligi: istemciKimligi,
+        cevap: metniKirp(metin, 12000),
+        zaman: new Date().toISOString()
+      }, saniyeDamgasiAl() + 3600);
 
-function enUcuzdanPahaliyaSirala(modeller) {
-  return fiyataGoreSirala(modeller, "giris", true);
-}
-
-function enPahalidanUcuzaSirala(modeller) {
-  return fiyataGoreSirala(modeller, "giris", false);
-}
-
-function fiyatAraliginaGoreFiltrele(modeller, min = null, max = null, alan = "giris") {
-  const anahtar = alan === "cikis" ? "cikisFiyati" : "girisFiyati";
-  return guvenliDizi(modeller).filter((model) =>
-    sayisalAraliktaMi(model[anahtar], min, max)
-  );
-}
-
-function saglayiciyaGoreGrupla(modeller) {
-  const sonuc = {};
-  for (const model of guvenliDizi(modeller)) {
-    const anahtar = model.saglayici || "bilinmeyen";
-    if (!sonuc[anahtar]) sonuc[anahtar] = [];
-    sonuc[anahtar].push(model);
+      return metin;
+    });
+  } catch (hata) {
+    guvenliLogYaz('sohbet-akis-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
-  return sonuc;
-}
+});
 
-function grubaGoreToparla(modeller, alan) {
-  const sonuc = {};
-  for (const model of guvenliDizi(modeller)) {
-    const anahtar = model?.[alan] ?? "bilinmeyen";
-    if (!sonuc[anahtar]) sonuc[anahtar] = [];
-    sonuc[anahtar].push(model);
+router.post('/api/gorsel', async function ({ request, me, user }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
+    }
+
+    var dogrulama = gorselGovdesiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
+
+    var gorselVerisi = dogrulama.veri;
+    var istemciKimligi = gorselVerisi.istemciKimligi || istemciKimliginiCikar(request, user);
+    var oranKontrolu = await istekSiniriniKontrolEt(me, istemciKimligi, 4);
+
+    if (!oranKontrolu.uygun) {
+      return hataCevabiUret(request, 429, oranKontrolu.hata);
+    }
+
+    var secenekler = {
+      prompt: gorselVerisi.prompt,
+      test_mode: gorselVerisi.testModu,
+      quality: gorselVerisi.kalite,
+      width: gorselVerisi.genislik,
+      height: gorselVerisi.yukseklik,
+      n: gorselVerisi.adet
+    };
+
+    if (gorselVerisi.model) {
+      secenekler.model = gorselVerisi.model;
+    }
+
+    var gorselSonucu = await me.puter.ai.txt2img(secenekler);
+    var cozumlenmis = gorselCiktisiniCozumle(gorselSonucu);
+
+    await me.puter.kv.set(anahtariOlustur('onbellek', 'gorsel:' + Date.now()), {
+      model: gorselVerisi.model || 'varsayilan',
+      istemciKimligi: istemciKimligi,
+      prompt: metniKirp(gorselVerisi.prompt, 500),
+      url: cozumlenmis.url || '',
+      zaman: new Date().toISOString()
+    }, saniyeDamgasiAl() + 3600);
+
+    return basariCevabiUret(request, {
+      model: gorselVerisi.model || null,
+      prompt: gorselVerisi.prompt,
+      url: cozumlenmis.url,
+      ham: cozumlenmis.ham
+    });
+  } catch (hata) {
+    guvenliLogYaz('gorsel-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
-  return sonuc;
-}
+});
 
-function sayfaTuruneGoreGrupla(modeller) {
-  const sonuc = {};
-  for (const sayfaTuru of TUM_SAYFA_TURLERI) {
-    sonuc[sayfaTuru] = guvenliDizi(modeller).filter((model) =>
-      sayfaTuruneGoreUygunMu(model, sayfaTuru)
-    );
+router.get('/api/ayarlar/getir', async function ({ request, me }) {
+  try {
+    var ayarlar = await ayarlariGetir(me);
+    return basariCevabiUret(request, ayarlariDisariHazirla(ayarlar));
+  } catch (hata) {
+    guvenliLogYaz('ayar-getir-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
   }
-  return sonuc;
-}
+});
 
-function onerilenleriAyir(modeller) {
-  return {
-    onerilenler: guvenliDizi(modeller).filter((model) => model.onerilen),
-    digerleri: guvenliDizi(modeller).filter((model) => !model.onerilen),
-  };
-}
+router.post('/api/ayarlar/kaydet', async function ({ request, me }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
+    }
 
-function gelismisleriAyir(ayarlar, sayfaTuru, filtreler = null) {
-  const hedefFiltreler = filtreler || sayfayaGoreFiltreleriGetir(sayfaTuru);
-  return {
-    gelismisler: hedefFiltreler.filter((f) => filtreGelismisMi(ayarlar, sayfaTuru, f.anahtar)),
-    temeller: hedefFiltreler.filter((f) => !filtreGelismisMi(ayarlar, sayfaTuru, f.anahtar)),
-  };
-}
+    var dogrulama = ayarGirdisiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
 
-function zorunlulariAyir(ayarlar, sayfaTuru, filtreler = null) {
-  const hedefFiltreler = filtreler || sayfayaGoreFiltreleriGetir(sayfaTuru);
-  return {
-    zorunlular: hedefFiltreler.filter((f) => filtreZorunluMu(ayarlar, sayfaTuru, f.anahtar)),
-    opsiyoneller: hedefFiltreler.filter((f) => !filtreZorunluMu(ayarlar, sayfaTuru, f.anahtar)),
-  };
-}
+    var ayarVerisi = dogrulama.veri;
+    var mevcutAyarlar = await ayarlariGetir(me);
+    var kurulumVar = yoneticiAnahtariVarMi(mevcutAyarlar);
 
-function gorunurleriAyir(ayarlar, sayfaTuru, filtreler = null) {
-  const hedefFiltreler = filtreler || sayfayaGoreFiltreleriGetir(sayfaTuru);
-  return {
-    gorunenler: hedefFiltreler.filter((f) => filtreGorunurMu(ayarlar, sayfaTuru, f.anahtar)),
-    gizlenenler: hedefFiltreler.filter((f) => !filtreGorunurMu(ayarlar, sayfaTuru, f.anahtar)),
-  };
-}
+    if (kurulumVar) {
+      var yetki = await yoneticiYetkisiniDogrula(me, ayarVerisi.yoneticiAnahtari);
+      if (!yetki.uygun) {
+        return hataCevabiUret(request, 403, yetki.hata);
+      }
+    } else {
+      if (!ayarVerisi.yeniYoneticiAnahtari || ayarVerisi.yeniYoneticiAnahtari.length < 16) {
+        return hataCevabiUret(request, 400, 'İlk kurulum için en az 16 karakterlik yeniYoneticiAnahtari zorunludur.');
+      }
+    }
 
-function modeliSayfaIcinHazirla(model, sayfaTuru) {
-  return {
-    ...model,
-    sayfaTuru,
-    sayfaAdi: SAYFA_ADLARI[sayfaTuru],
-  };
-}
+    var yeniAyarlar = Object.assign({}, mevcutAyarlar, ayarVerisi.ayarlar);
 
-function modelListesiniSayfaIcinHazirla(modeller, sayfaTuru) {
-  return guvenliDizi(modeller)
-    .filter((model) => sayfaTuruneGoreUygunMu(model, sayfaTuru))
-    .map((model) => modeliSayfaIcinHazirla(model, sayfaTuru));
-}
+    if (ayarVerisi.yeniYoneticiAnahtari) {
+      yeniAyarlar.gizliYoneticiAnahtari = ayarVerisi.yeniYoneticiAnahtari;
+    }
 
-function kataloguHazirla(modeller, sayfaTuru, uygulananFiltreler = {}, ayarlar = null) {
-  const aktifAyarlar = ayarlar || filtreAyarlariniGetir();
-  let liste = modelListesiniSayfaIcinHazirla(modeller, sayfaTuru);
-  liste = liste.filter(fiyatiTamMi);
-  liste = filtreleriUygula(liste, uygulananFiltreler, aktifAyarlar, sayfaTuru);
-  liste = onceligeGoreSirala(liste, aktifAyarlar, sayfaTuru);
-  return liste;
-}
+    await ayarlariKaydet(me, yeniAyarlar);
 
-function chatIcinKatalogHazirla(modeller, uygulananFiltreler = {}, ayarlar = null) {
-  return kataloguHazirla(modeller, "chat", uygulananFiltreler, ayarlar);
-}
+    return basariCevabiUret(request, {
+      mesaj: 'Ayarlar kaydedildi.',
+      ayarlar: ayarlariDisariHazirla(yeniAyarlar)
+    });
+  } catch (hata) {
+    guvenliLogYaz('ayar-kaydet-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
 
-function resimIcinKatalogHazirla(modeller, uygulananFiltreler = {}, ayarlar = null) {
-  return kataloguHazirla(modeller, "resim", uygulananFiltreler, ayarlar);
-}
+router.get('/api/ortak-durum/oku', async function ({ request, me }) {
+  try {
+    var durum = await ortakDurumuOku(me);
+    return basariCevabiUret(request, { durum: durum });
+  } catch (hata) {
+    guvenliLogYaz('ortak-durum-oku-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
 
-function videoIcinKatalogHazirla(modeller, uygulananFiltreler = {}, ayarlar = null) {
-  return kataloguHazirla(modeller, "video", uygulananFiltreler, ayarlar);
-}
+router.post('/api/ortak-durum/yaz', async function ({ request, me }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
+    }
 
-function sesIcinKatalogHazirla(modeller, uygulananFiltreler = {}, ayarlar = null) {
-  return kataloguHazirla(modeller, "ses", uygulananFiltreler, ayarlar);
-}
+    var dogrulama = ortakDurumGovdesiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
 
-function ttsIcinKatalogHazirla(modeller, uygulananFiltreler = {}, ayarlar = null) {
-  return kataloguHazirla(modeller, "tts", uygulananFiltreler, ayarlar);
-}
+    var yetki = await yoneticiYetkisiniDogrula(me, dogrulama.veri.yoneticiAnahtari);
+    if (!yetki.uygun) {
+      return hataCevabiUret(request, 403, yetki.hata);
+    }
 
-function sayfaIcinKatalogHazirla(modeller, sayfaTuru, uygulananFiltreler = {}, ayarlar = null) {
-  if (sayfaTuru === "chat") return chatIcinKatalogHazirla(modeller, uygulananFiltreler, ayarlar);
-  if (sayfaTuru === "resim") return resimIcinKatalogHazirla(modeller, uygulananFiltreler, ayarlar);
-  if (sayfaTuru === "video") return videoIcinKatalogHazirla(modeller, uygulananFiltreler, ayarlar);
-  if (sayfaTuru === "ses") return sesIcinKatalogHazirla(modeller, uygulananFiltreler, ayarlar);
-  if (sayfaTuru === "tts") return ttsIcinKatalogHazirla(modeller, uygulananFiltreler, ayarlar);
-  return [];
-}
+    await ortakDurumuYaz(me, dogrulama.veri.durum);
 
-function ozetSayilariHesapla(modeller, ayarlar, sayfaTuru) {
-  const filtreler = sayfayaGoreFiltreleriGetir(sayfaTuru);
-  return {
-    toplamModel: guvenliDizi(modeller).length,
-    saglayiciSayisi: Object.keys(saglayiciyaGoreGrupla(modeller)).length,
-    filtreSayisi: filtreler.length,
-    etkinFiltreSayisi: filtreler.filter((f) => filtreEtkinMi(ayarlar, sayfaTuru, f.anahtar)).length,
-    gorunurFiltreSayisi: filtreler.filter((f) => filtreGorunurMu(ayarlar, sayfaTuru, f.anahtar)).length,
-    oneCikanFiltreSayisi: filtreler.filter((f) => filtreOneCikarilmisMi(ayarlar, sayfaTuru, f.anahtar)).length,
-    zorunluFiltreSayisi: filtreler.filter((f) => filtreZorunluMu(ayarlar, sayfaTuru, f.anahtar)).length,
-    gelismisFiltreSayisi: filtreler.filter((f) => filtreGelismisMi(ayarlar, sayfaTuru, f.anahtar)).length,
-  };
-}
+    return basariCevabiUret(request, {
+      mesaj: 'Ortak durum güncellendi.',
+      durum: dogrulama.veri.durum
+    });
+  } catch (hata) {
+    guvenliLogYaz('ortak-durum-yaz-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
 
-function filtreArabirimListesiniHazirla(ayarlar, sayfaTuru) {
-  const filtreler = filtreSirasiniBelirle(
-    ayarlar,
-    sayfaTuru,
-    sayfayaGoreFiltreleriGetir(sayfaTuru)
-  );
+router.post('/api/onbellek/sil', async function ({ request, me }) {
+  try {
+    var govde = await govdeyiCozumle(request);
+    if (govde === null) {
+      return hataCevabiUret(request, 400, 'Geçersiz JSON gövdesi.');
+    }
 
-  return filtreler.map((filtre) => ({
-    ...filtre,
-    ayar: ayarlar?.[sayfaTuru]?.[filtre.anahtar] || null,
-    bagimliliklarSaglandiMi: filtreBagimliliklariniKontrolEt(
-      ayarlar,
-      sayfaTuru,
-      filtre.anahtar
-    ),
-  }));
-}
+    var dogrulama = onbellekSilGovdesiniDogrula(govde);
+    if (!dogrulama.uygun) {
+      return hataCevabiUret(request, 400, dogrulama.hata);
+    }
 
-function arabirimeHazirVeriOlustur(modeller, saglayicilar, ayarlar, sayfaTuru) {
-  const sayfaModelListesi = sayfaIcinKatalogHazirla(modeller, sayfaTuru, {}, ayarlar);
-  return {
-    sayfaTuru,
-    sayfaAdi: SAYFA_ADLARI[sayfaTuru],
-    ozet: ozetSayilariHesapla(sayfaModelListesi, ayarlar, sayfaTuru),
-    filtreler: filtreArabirimListesiniHazirla(ayarlar, sayfaTuru),
-    saglayicilar,
-    modeller: sayfaModelListesi,
-    saglayiciGruplari: saglayiciyaGoreGrupla(sayfaModelListesi),
-  };
-}
+    var yetki = await yoneticiYetkisiniDogrula(me, dogrulama.veri.yoneticiAnahtari);
+    if (!yetki.uygun) {
+      return hataCevabiUret(request, 403, yetki.hata);
+    }
 
-async function modelKatalogunuHazirla() {
-  const [hamModeller, hamSaglayicilar] = await Promise.all([
-    modelleriGetir(),
-    saglayicilariGetir(),
-  ]);
+    await me.puter.kv.del(dogrulama.veri.anahtar);
 
-  const modeller = modelleriNormalizeEt(hamModeller)
-    .filter(modelGecerliMi)
-    .filter(fiyatiTamMi);
-
-  const saglayicilar = saglayicilariNormalizeEt(hamSaglayicilar)
-    .filter(saglayiciGecerliMi);
-
-  return {
-    modeller,
-    saglayicilar,
-    ayarlar: filtreAyarlariniGetir(),
-  };
-}
-
-async function filtrelenmisModelListesiOlustur(sayfaTuru = VARSAYILAN_SAYFA_TURU, uygulananFiltreler = {}) {
-  const { modeller, ayarlar } = await modelKatalogunuHazirla();
-  return sayfaIcinKatalogHazirla(modeller, sayfaTuru, uygulananFiltreler, ayarlar);
-}
-
-async function sayfaIcinHazirModelListesiOlustur(sayfaTuru = VARSAYILAN_SAYFA_TURU, uygulananFiltreler = {}) {
-  return filtrelenmisModelListesiOlustur(sayfaTuru, uygulananFiltreler);
-}
-
-async function sayfaVerisiniHazirla(sayfaTuru = VARSAYILAN_SAYFA_TURU, uygulananFiltreler = {}) {
-  const { modeller, saglayicilar, ayarlar } = await modelKatalogunuHazirla();
-  const filtrelenmisModeller = sayfaIcinKatalogHazirla(
-    modeller,
-    sayfaTuru,
-    uygulananFiltreler,
-    ayarlar
-  );
-
-  return {
-    sayfaTuru,
-    sayfaAdi: SAYFA_ADLARI[sayfaTuru],
-    ayarlar,
-    saglayicilar,
-    modeller: filtrelenmisModeller,
-    saglayiciGruplari: saglayiciyaGoreGrupla(filtrelenmisModeller),
-    filtreArabirimi: filtreArabirimListesiniHazirla(ayarlar, sayfaTuru),
-    ozet: ozetSayilariHesapla(filtrelenmisModeller, ayarlar, sayfaTuru),
-  };
-}
-
-function degisiklikYapiciOlustur(ayarlar) {
-  return {
-    filtreyiEtkinlestir: (sayfaTuru, anahtar) => filtreyiEtkinlestir(ayarlar, sayfaTuru, anahtar),
-    filtreyiPasiflestir: (sayfaTuru, anahtar) => filtreyiPasiflestir(ayarlar, sayfaTuru, anahtar),
-    filtreyiGoster: (sayfaTuru, anahtar) => filtreyiGoster(ayarlar, sayfaTuru, anahtar),
-    filtreyiGizle: (sayfaTuru, anahtar) => filtreyiGizle(ayarlar, sayfaTuru, anahtar),
-    filtreyiOneCikar: (sayfaTuru, anahtar) => filtreyiOneCikar(ayarlar, sayfaTuru, anahtar),
-    filtreyiGeriAl: (sayfaTuru, anahtar) => filtreyiGeriAl(ayarlar, sayfaTuru, anahtar),
-    filtreyiZorunluYap: (sayfaTuru, anahtar) => filtreyiZorunluYap(ayarlar, sayfaTuru, anahtar),
-    filtreyiOpsiyonelYap: (sayfaTuru, anahtar) => filtreyiOpsiyonelYap(ayarlar, sayfaTuru, anahtar),
-    filtreyiGelismisYap: (sayfaTuru, anahtar) => filtreyiGelismisYap(ayarlar, sayfaTuru, anahtar),
-    filtreyiTemelYap: (sayfaTuru, anahtar) => filtreyiTemelYap(ayarlar, sayfaTuru, anahtar),
-    filtreyiYukariTasi: (sayfaTuru, anahtar) => filtreyiYukariTasi(ayarlar, sayfaTuru, anahtar),
-    filtreyiAsagiTasi: (sayfaTuru, anahtar) => filtreyiAsagiTasi(ayarlar, sayfaTuru, anahtar),
-  };
-}
-
-const ChatAll = {
-  SABITLER: {
-    CHATALL_DEPO_ANAHTARI,
-    VARSAYILAN_SAYFA_TURU,
-    TUM_SAYFA_TURLERI,
-    SAYFA_ADLARI,
-    GRUP_ADLARI,
-  },
-
-  filtreTanimlariniGetir,
-  sayfayaGoreFiltreleriGetir,
-  varsayilanFiltreAyarlariGetir,
-
-  hamModelVerisiniGetir,
-  hamSaglayiciVerisiniGetir,
-  modelleriGetir,
-  saglayicilariGetir,
-
-  modeliNormalizeEt,
-  modelleriNormalizeEt,
-  saglayiciyiNormalizeEt,
-  saglayicilariNormalizeEt,
-
-  modelGecerliMi,
-  saglayiciGecerliMi,
-  metinGirdisiVarMi,
-  gorselGirdisiVarMi,
-  pdfGirdisiVarMi,
-  sesGirdisiVarMi,
-  aracCagirmaVarMi,
-  akisYanitVarMi,
-  baglamBilgisiVarMi,
-  maksimumCiktiBilgisiVarMi,
-  girisFiyatiVarMi,
-  cikisFiyatiVarMi,
-  fiyatiTamMi,
-  ucretsizMi,
-
-  chatIcinUygunMu,
-  resimIcinUygunMu,
-  videoIcinUygunMu,
-  sesIcinUygunMu,
-  ttsIcinUygunMu,
-  sayfaTuruneGoreUygunMu,
-
-  filtreAyarlariniGetir,
-  filtreAyarlariniKaydet,
-  filtreAyarlariniSifirla,
-  varsayilanAyarlaraDon,
-  filtreAyarlariniDisaAktar,
-  filtreAyarlariniIceAktar,
-
-  filtreEtkinMi,
-  filtreGorunurMu,
-  filtreOneCikarilmisMi,
-  filtreZorunluMu,
-  filtreGelismisMi,
-  filtreyiEtkinlestir,
-  filtreyiPasiflestir,
-  filtreyiGoster,
-  filtreyiGizle,
-  filtreyiOneCikar,
-  filtreyiGeriAl,
-  filtreyiZorunluYap,
-  filtreyiOpsiyonelYap,
-  filtreyiGelismisYap,
-  filtreyiTemelYap,
-  filtreBagimliliklariniKontrolEt,
-  filtreyiYukariTasi,
-  filtreyiAsagiTasi,
-
-  fiyatBilgisiniOku,
-  fiyatBilgisiniSayiyaCevir,
-
-  tekFiltreyiUygula,
-  filtreleriUygula,
-  fiyataGoreSirala,
-  enUcuzdanPahaliyaSirala,
-  enPahalidanUcuzaSirala,
-  fiyatAraliginaGoreFiltrele,
-  onceligeGoreSirala,
-  adaGoreSirala,
-  hizaGoreSirala,
-  baglamaGoreSirala,
-  yayinTarihineGoreSirala,
-  bilgiTarihineGoreSirala,
-
-  saglayiciyaGoreGrupla,
-  grubaGoreToparla,
-  sayfaTuruneGoreGrupla,
-  onerilenleriAyir,
-  gelismisleriAyir,
-  zorunlulariAyir,
-  gorunurleriAyir,
-
-  kataloguHazirla,
-  chatIcinKatalogHazirla,
-  resimIcinKatalogHazirla,
-  videoIcinKatalogHazirla,
-  sesIcinKatalogHazirla,
-  ttsIcinKatalogHazirla,
-  sayfaIcinKatalogHazirla,
-  arabirimeHazirVeriOlustur,
-  modelKatalogunuHazirla,
-  filtrelenmisModelListesiOlustur,
-  sayfaIcinHazirModelListesiOlustur,
-  sayfaVerisiniHazirla,
-  degisiklikYapiciOlustur,
-};
-
-/* Puter Worker ortaminda import/export ve module.exports kullanilmaz; nesne globalThis uzerinden erisilebilir kalir. */
-globalThis.ChatAll = ChatAll;
+    return basariCevabiUret(request, {
+      mesaj: 'Önbellek kaydı silindi.',
+      anahtar: dogrulama.veri.anahtar
+    });
+  } catch (hata) {
+    guvenliLogYaz('onbellek-sil-hatasi', guvenliHataMesajiAl(hata));
+    return hataCevabiUret(request, 500, guvenliHataMesajiAl(hata));
+  }
+});
