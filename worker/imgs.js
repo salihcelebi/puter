@@ -1,6 +1,6 @@
 // imgs.js — v20.0.0
 // me.puter owner-pays image worker
-// Model catalog source: https://models-worker.puter.work/models
+// Model catalog source: /api/modeller
 // Storage strategy: try multiple candidate folders in order, use first successful real path
 
 const WORKER_NAME = 'imgs';
@@ -11,7 +11,7 @@ const KV_SAFE_LIMIT = 390000;
 const URL_EXPIRES_MS = 24 * 60 * 60 * 1000;
 const POLL_INTERVAL_HINT_MS = 1800;
 const MAX_GENERATION_ATTEMPTS = 4;
-const MODELS_WORKER_URL = 'https://models-worker.puter.work/models?limit=250';
+const MODELS_WORKER_URL = '/api/modeller?limit=250';
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-1';
 const DEFAULT_PROVIDER = 'openai-image-generation';

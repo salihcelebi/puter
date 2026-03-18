@@ -8,7 +8,7 @@ import { formatCredits, formatUsd, ModelCatalogItem } from '../../lib/aiWorkers'
 
 // TÜRKÇE NOT: Bu dosyanın parse hatası vermemesi için duplicate useAuth importu tek satıra indirildi.
 
-const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
+const MODEL_WORKER_URL = '/api/modeller';
 const VIDEO_MODEL_SESSION_KEY = 'nisai:selected-video-model';
 
 type VideoLocationState = {

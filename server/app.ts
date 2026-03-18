@@ -76,6 +76,8 @@ export async function createApiApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/billing", billingRouter);
   app.use("/api/ai", aiRouter);
+  // Bu alias mount, AMG/AMH sözleşmesindeki /api/modeller|/api/sohbet|/api/gorsel|/api/calistir yollarını aktif eder.
+  app.use("/api", aiRouter);
   app.use("/api/admin", adminRouter);
   app.use("/api/assets", assetsRouter);
   app.use("/api/user", userRouter);
