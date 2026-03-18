@@ -283,6 +283,29 @@ function ensureArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function prettyJson(value: unknown): string {
+  try {
+    const seen = new WeakSet<object>();
+    return JSON.stringify(
+      value,
+      (_key, current) => {
+        if (typeof current === 'object' && current !== null) {
+          if (seen.has(current)) return '[Circular]';
+          seen.add(current);
+        }
+        return current;
+      },
+      2,
+    );
+  } catch {
+    try {
+      return JSON.stringify(String(value ?? ''), null, 2);
+    } catch {
+      return '"[unserializable]"';
+    }
+  }
+}
+
 function formatDate(value?: string | null): string {
   if (!value) return '-';
   try {
