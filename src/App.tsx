@@ -53,7 +53,6 @@ import Account from './pages/Account';
 import UsageHistory from './pages/UsageHistory';
 import CreditHistory from './pages/CreditHistory';
 import Chat from './pages/AI/Chat';
-import Chat1 from './pages/AI/Chat1';
 import Image from './pages/AI/image';
 import VideoGen from './pages/AI/video';
 import TTS from './pages/AI/TTS';
@@ -86,7 +85,8 @@ export default function App() {
             <Route path="kullanim-gecmisi" element={<ProtectedRoute><UsageHistory /></ProtectedRoute>} />
             <Route path="kredi-gecmisi" element={<ProtectedRoute><CreditHistory /></ProtectedRoute>} />
 
-            <Route path="sohbet" element={<Chat1 />} />
+            {/* Chat1 kaldırıldı; tek aktif sohbet ekranı Chat.tsx olarak /sohbet/konus altında çalışır. */}
+            <Route path="sohbet" element={<Navigate to="/sohbet/konus" replace />} />
             <Route path="sohbet/konus" element={<Chat />} />
             <Route path="gorsel" element={<Image />} />
             <Route path="video" element={<VideoGen />} />

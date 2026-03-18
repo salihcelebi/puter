@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-type SayfaTuru = "chat" | "resim" | "video" | "ses" | "tts";
+export type SayfaTuru = "chat" | "resim" | "video" | "ses" | "tts";
 
-type GrupTuru =
+export type GrupTuru =
   | "kimlik"
   | "yetkinlik"
   | "girdi"
@@ -12,7 +12,7 @@ type GrupTuru =
   | "davranis"
   | "gelismis";
 
-type FiltreTanimi = {
+export type FiltreTanimi = {
   anahtar: string;
   ad: string;
   aciklama: string;
@@ -26,7 +26,7 @@ type FiltreTanimi = {
   bagimliliklar?: string[];
 };
 
-type FiltreDurumu = {
+export type FiltreDurumu = {
   etkin: boolean;
   gorunur: boolean;
   oneCikar: boolean;
@@ -35,10 +35,10 @@ type FiltreDurumu = {
   sira: number;
 };
 
-type SayfaFiltreAyarlari = Record<string, FiltreDurumu>;
-type TumAyarlar = Record<SayfaTuru, SayfaFiltreAyarlari>;
+export type SayfaFiltreAyarlari = Record<string, FiltreDurumu>;
+export type TumAyarlar = Record<SayfaTuru, SayfaFiltreAyarlari>;
 
-const FILTRE_TANIMLARI: FiltreTanimi[] = [
+export const FILTRE_TANIMLARI: FiltreTanimi[] = [
   {
     anahtar: "saglayici",
     ad: "Sağlayıcı",
@@ -314,13 +314,13 @@ const GRUP_ADLARI: Record<GrupTuru, string> = {
   gelismis: "Gelişmiş",
 };
 
-function sayfayaGoreFiltreleriGetir(sayfa: SayfaTuru) {
+export function sayfayaGoreFiltreleriGetir(sayfa: SayfaTuru) {
   return FILTRE_TANIMLARI.filter((filtre) =>
     filtre.desteklenenSayfalar.includes(sayfa)
   );
 }
 
-function varsayilanAyarOlustur(): TumAyarlar {
+export function varsayilanAyarOlustur(): TumAyarlar {
   const sayfalar: SayfaTuru[] = ["chat", "resim", "video", "ses", "tts"];
   const sonuc = {} as TumAyarlar;
 
@@ -343,7 +343,7 @@ function varsayilanAyarOlustur(): TumAyarlar {
   return sonuc;
 }
 
-function bagimliliklariSagliyorMu(
+export function bagimliliklariSagliyorMu(
   filtre: FiltreTanimi,
   ayarlar: SayfaFiltreAyarlari
 ) {

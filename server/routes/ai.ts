@@ -85,6 +85,50 @@ function sendError(res: any, error: RouteError) {
   });
 }
 
+function sendAmgError(res: any, error: RouteError) {
+  const mapped = normalizeError(error);
+  return res.status(mapped.status).json({
+    ok: false,
+    hata: {
+      kod: mapped.code,
+      mesaj: error.message || 'AI isteği başarısız',
+    },
+  });
+}
+
+function mapModelEnvelope(models: any[], req: any) {
+  return {
+    ok: true,
+    veri: {
+      items: models,
+      total: models.length,
+      limit: Number(req.query.limit || models.length || 0),
+      offset: Number(req.query.offset || 0),
+      hasMore: false,
+      facets: {
+        companies: Array.from(new Set(models.map((m: any) => m.company).filter(Boolean))),
+        badges: Array.from(new Set(models.flatMap((m: any) => Array.isArray(m.badges) ? m.badges : []))),
+        categories: Array.from(new Set(models.map((m: any) => m.categoryRaw).filter(Boolean))),
+      },
+      source: {
+        type: 'backend-visible-models',
+        totalModels: models.length,
+        sourceUrl: '/api/modeller',
+      },
+      filters: {
+        search: String(req.query.search || ''),
+        company: String(req.query.company || ''),
+        badge: String(req.query.badge || ''),
+        category: String(req.query.category || ''),
+        sort: String(req.query.sort || 'company_asc'),
+        modelId: String(req.query.modelId || ''),
+      },
+    },
+    hata: null,
+    meta: { provider: 'AMG' },
+  };
+}
+
 aiRouter.get('/models', async (req, res) => {
   try {
     const models = await aiService.listVisibleModels({
@@ -96,6 +140,20 @@ aiRouter.get('/models', async (req, res) => {
     res.json(models);
   } catch (error: any) {
     sendError(res, error);
+  }
+});
+
+aiRouter.get('/modeller', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const models = await aiService.listVisibleModels({
+      feature: 'chat',
+      provider: req.query.company as string | undefined,
+      q: req.query.search as string | undefined,
+      sort: req.query.sort as string | undefined,
+    });
+    return res.json(mapModelEnvelope(models, req));
+  } catch (error: any) {
+    return sendAmgError(res, error);
   }
 });
 
@@ -135,6 +193,76 @@ aiRouter.post('/chat', requireAuth, requirePermission('use_chat'), async (req: A
   }
 });
 
+aiRouter.post('/sohbet', requireAuth, requirePermission('use_chat'), async (req: AuthRequest, res) => {
+  try {
+    const body = req.body || {};
+    const promptFromMessages = Array.isArray(body.messages)
+      ? String(body.messages[body.messages.length - 1]?.content || '')
+      : '';
+    const prompt = String(body.prompt || promptFromMessages || '').trim();
+    if (!prompt) fail('prompt alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'chat',
+      userId: req.user.id,
+      modelId: body.model || body.modelId,
+      clientRequestId: body?.meta?.clientRequestId || body?.clientRequestId,
+      payload: { prompt, sourcePage: 'amg:/api/sohbet' },
+    });
+
+    return res.json({
+      ok: true,
+      veri: {
+        type: 'chat.result',
+        model: body.model || body.modelId || '',
+        stream: false,
+        outputText: result?.text || result?.output || '',
+        messages: Array.isArray(body.messages) ? body.messages : [],
+        toolCalls: [],
+        raw: result,
+      },
+      hata: null,
+      meta: { provider: 'AMG' },
+    });
+  } catch (error: any) {
+    return sendAmgError(res, error);
+  }
+});
+
+aiRouter.post('/sohbet/akis', requireAuth, requirePermission('use_chat'), async (req: AuthRequest, res) => {
+  try {
+    const body = req.body || {};
+    const promptFromMessages = Array.isArray(body.messages)
+      ? String(body.messages[body.messages.length - 1]?.content || '')
+      : '';
+    const prompt = String(body.prompt || promptFromMessages || '').trim();
+    if (!prompt) fail('prompt alanı zorunludur', 'INVALID_INPUT');
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+
+    const model = String(body.model || body.modelId || '');
+    res.write(`event: hazir\\ndata: ${JSON.stringify({ ok: true, veri: { model } })}\\n\\n`);
+
+    const result = await aiService.runFeature({
+      feature: 'chat',
+      userId: req.user.id,
+      modelId: model,
+      clientRequestId: body?.meta?.clientRequestId || body?.clientRequestId,
+      payload: { prompt, sourcePage: 'amg:/api/sohbet/akis' },
+    });
+
+    const outputText = String(result?.text || result?.output || '');
+    res.write(`event: parca\\ndata: ${JSON.stringify({ ok: true, veri: { chunkIndex: 0, deltaText: outputText } })}\\n\\n`);
+    res.write(`event: bitti\\ndata: ${JSON.stringify({ ok: true, veri: { model, outputText, chunkCount: 1 } })}\\n\\n`);
+    res.end();
+  } catch (error: any) {
+    res.write(`event: hata\\ndata: ${JSON.stringify({ ok: false, hata: { mesaj: error?.message || 'Sohbet akışı başarısız' } })}\\n\\n`);
+    res.end();
+  }
+});
+
 aiRouter.post('/image', requireAuth, requirePermission('use_image'), async (req: AuthRequest, res) => {
   try {
     const { prompt, modelId, clientRequestId } = req.body || {};
@@ -151,6 +279,89 @@ aiRouter.post('/image', requireAuth, requirePermission('use_image'), async (req:
     res.json(result);
   } catch (error: any) {
     sendError(res, error);
+  }
+});
+
+aiRouter.post('/gorsel', requireAuth, requirePermission('use_image'), async (req: AuthRequest, res) => {
+  try {
+    const { prompt, modelId, clientRequestId } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') fail('prompt alanı zorunludur', 'INVALID_INPUT');
+
+    const result = await aiService.runFeature({
+      feature: 'image',
+      userId: req.user.id,
+      modelId,
+      clientRequestId,
+      payload: { prompt, sourcePage: 'amg:/api/gorsel' },
+    });
+
+    return res.json({
+      ok: true,
+      veri: {
+        url: result?.url || '',
+        assetId: result?.assetId || result?.id || '',
+        requestId: result?.requestId || clientRequestId || '',
+        modelId: modelId || '',
+      },
+      hata: null,
+      meta: { provider: 'AMG' },
+    });
+  } catch (error: any) {
+    return sendAmgError(res, error);
+  }
+});
+
+aiRouter.post('/calistir', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const body = req.body || {};
+    const serviceType = String(body.serviceType || body.hizmetTuru || 'CHAT').toUpperCase();
+
+    if (serviceType === 'CHAT') {
+      const promptFromMessages = Array.isArray(body.messages)
+        ? String(body.messages[body.messages.length - 1]?.content || '')
+        : '';
+      const prompt = String(body.prompt || promptFromMessages || '').trim();
+      if (!prompt) fail('prompt alanı zorunludur', 'INVALID_INPUT');
+      const result = await aiService.runFeature({
+        feature: 'chat',
+        userId: req.user.id,
+        modelId: body.model || body.modelId,
+        clientRequestId: body?.meta?.clientRequestId || body?.clientRequestId,
+        payload: { prompt, sourcePage: 'amh:/api/calistir' },
+      });
+      return res.json({
+        ok: true,
+        veri: { outputText: result?.text || result?.output || '', model: body.model || body.modelId || '' },
+        hata: null,
+        meta: { provider: 'AMH', serviceType: 'CHAT' },
+      });
+    }
+
+    if (serviceType === 'IMG' || serviceType === 'IMAGE') {
+      const prompt = String(body.prompt || '').trim();
+      if (!prompt) fail('prompt alanı zorunludur', 'INVALID_INPUT');
+      const result = await aiService.runFeature({
+        feature: 'image',
+        userId: req.user.id,
+        modelId: body.model || body.modelId,
+        clientRequestId: body?.meta?.clientRequestId || body?.clientRequestId,
+        payload: { prompt, sourcePage: 'amh:/api/calistir' },
+      });
+      return res.json({
+        ok: true,
+        veri: {
+          url: result?.url || '',
+          assetId: result?.assetId || result?.id || '',
+          modelId: body.model || body.modelId || '',
+        },
+        hata: null,
+        meta: { provider: 'AMH', serviceType: 'IMG' },
+      });
+    }
+
+    return res.status(400).json({ ok: false, hata: { mesaj: 'Desteklenmeyen serviceType' }, meta: { serviceType } });
+  } catch (error: any) {
+    return sendAmgError(res, error);
   }
 });
 

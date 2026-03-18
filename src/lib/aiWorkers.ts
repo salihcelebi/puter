@@ -1,43 +1,34 @@
 // ===============================
 // src/lib/aiWorkers.ts
-// Bu yardımcı katman, katalog ve chat worker sözleşmesini tek yerde toplar.
-/*
-█████████████████████████████████████████████
-1) BU DOSYA, FRONTEND TARAFINDAKİ AI WORKER İLETİŞİM KATMANIDIR.
-2) CHAT_WORKER_URL VE MODEL_WORKER_URL SABİTLERİ, CHAT VE MODEL KATALOĞU SERVİSLERİNİN TEK MERKEZDEN TANIMLANMASINI SAĞLAR.
-3) CREDIT_RATE DEĞERİ, USD TABANLI FİYATI KREDİ BİRİMİNE ÇEVİRMEK İÇİN KULLANILIR.
-4) WorkerEnvelope TİPİ, TÜM WORKER YANITLARINI ok, code, data, error, meta, requestId, traceId YAPISINDA STANDARTLAŞTIRIR.
-5) ModelCatalogItem VE ModelCatalogPayload TİPLERİ, MODEL KATALOĞUNUN FRONTEND TARAFINDA GÜVENLİ KULLANILMASINI SAĞLAR.
-6) ModelCatalogQuery, search, company, badge, category, sort, limit, offset VE modelId FİLTRELERİNİ DESTEKLER.
-7) toQueryString() FONKSİYONU, BU FİLTRELERİ URL PARAMETRELERİNE ÇEVİRİR.
-8) fetchModelCatalog() FONKSİYONU, MODEL WORKER'A GET İSTEĞİ ATIP PARSE EDİLMİŞ DATA DÖNER.
-9) fetchChatModelById(), TEK BİR MODELİ modelId ÜZERİNDEN KATALOGDAN BULMAK İÇİN KULLANILIR.
-10) sendChatWorker(), CHAT WORKER'A JSON POST GÖNDEREREK NORMAL CHAT SONUCUNU ALIR.
-11) streamChatWorker(), SSE TABANLI STREAM YANITLARI ready, chunk VE done EVENT'LERİYLE PARÇALI OLARAK İŞLER.
-12) parseSseFrame() VE handleParsedFrame MANTIĞI, STREAM AKIŞINI FRONTEND CALLBACK'LERİNE DÖNÜŞTÜRÜR.
-13) readJsonResponse(), BOŞ VEYA GEÇERSİZ JSON YANITLARI İNSAN OKUNUR HATA MESAJINA ÇEVİRİR.
-14) priceToCredits(), formatUsd(), formatCredits() VE summarizeModel() GİBİ YARDIMCILAR UI SUNUMUNU KOLAYLAŞTIRIR.
-15) KISACA: BU DOSYA, AI MODEL KATALOĞU VE CHAT WORKER'LARI İÇİN TİPLİ, HATA KONTROLLÜ VE STREAM DESTEKLİ ANA FRONTEND KÖPRÜSÜDÜR.
-█████████████████████████████████████████████
-*/
+// AMG/AMH adapter katmanı: Chat sayfası worker detaylarını bilmeden çalışır.
 // ===============================
-export const CHAT_WORKER_URL = 'https://chat.puter.work/chat';
-export const MODEL_WORKER_URL = 'https://models-worker.puter.work/models';
+
+export const AMG_ENDPOINTS = Object.freeze({
+  modeller: '/api/modeller',
+  sohbet: '/api/sohbet',
+  sohbetAkis: '/api/sohbet/akis',
+  gorsel: '/api/gorsel',
+});
+
+export const AMH_ENDPOINT = '/api/calistir';
 export const CREDIT_RATE = 200;
 
 export type WorkerEnvelope<T> = {
   ok: boolean;
-  code: string;
-  data: T;
+  code?: string;
+  data?: T;
+  veri?: T;
   error?: {
     type?: string;
     message?: string;
     details?: unknown;
     retryable?: boolean;
-  } | null;
+  } | string | null;
+  hata?: {
+    mesaj?: string;
+    detay?: unknown;
+  } | string | null;
   meta?: unknown;
-  requestId?: string;
-  traceId?: string;
 };
 
 export type CatalogSortKey =
@@ -166,6 +157,13 @@ export interface ChatStreamDonePayload {
   chunkCount: number;
 }
 
+export interface ImageResultPayload {
+  url: string;
+  assetId?: string;
+  requestId?: string;
+  modelId?: string;
+}
+
 type SseHandlers = {
   signal?: AbortSignal;
   onReady?: (payload: ChatStreamReadyPayload) => void;
@@ -178,25 +176,40 @@ function buildWorkerError(message: string) {
   return new Error(message || 'Worker isteği başarısız oldu.');
 }
 
-async function readJsonResponse<T>(response: Response): Promise<WorkerEnvelope<T>> {
-  const raw = await response.text();
+function envelopeErrorMessage(parsed: any) {
+  return (
+    parsed?.error?.message ||
+    parsed?.error ||
+    parsed?.hata?.mesaj ||
+    parsed?.hata ||
+    'Worker isteği başarısız oldu.'
+  );
+}
 
+async function readJson(response: Response) {
+  const raw = await response.text();
   if (!raw.trim()) {
     throw buildWorkerError('Worker boş yanıt döndü.');
   }
 
-  let parsed: WorkerEnvelope<T>;
   try {
-    parsed = JSON.parse(raw) as WorkerEnvelope<T>;
+    return JSON.parse(raw) as Record<string, any>;
   } catch {
     throw buildWorkerError('Worker geçerli JSON döndürmedi.');
   }
+}
 
-  if (!response.ok || !parsed.ok) {
-    throw buildWorkerError(parsed?.error?.message || 'Worker isteği başarısız oldu.');
+function unwrapData<T>(parsed: any): T {
+  // Bu adapter, AMG/AMH response zarfındaki data/veri farkını tek noktada normalize eder.
+  const payload = parsed?.veri ?? parsed?.data;
+  return payload as T;
+}
+
+function assertOk(response: Response, parsed: any) {
+  const ok = parsed?.ok !== false;
+  if (!response.ok || !ok) {
+    throw buildWorkerError(envelopeErrorMessage(parsed));
   }
-
-  return parsed;
 }
 
 function toQueryString(params: ModelCatalogQuery) {
@@ -214,9 +227,48 @@ function toQueryString(params: ModelCatalogQuery) {
   return search.toString();
 }
 
+function mapChatPayload(payload: ChatRequestPayload) {
+  return {
+    model: payload.model,
+    messages: payload.messages,
+    prompt: payload.prompt,
+    stream: Boolean(payload.stream),
+    temperature: payload.temperature,
+    maxTokens: payload.maxTokens,
+    // Bu adapter, temperature/maxTokens => sicaklik/azamiToken eşlemesini görünür kılar.
+    sicaklik: payload.temperature,
+    azamiToken: payload.maxTokens,
+    tools: payload.tools,
+    meta: payload.meta,
+  };
+}
+
+function normalizeChatResult(parsed: any, fallbackModel: string): ChatResultPayload {
+  const data = unwrapData<any>(parsed) || {};
+  const outputText =
+    data?.outputText ||
+    data?.ciktiMetni ||
+    data?.text ||
+    data?.cevap ||
+    data?.result ||
+    '';
+
+  const rawMessages = (data?.messages || data?.mesajlar || []) as ChatWorkerMessage[];
+
+  return {
+    type: 'chat.result',
+    model: data?.model || fallbackModel,
+    stream: false,
+    outputText,
+    messages: Array.isArray(rawMessages) ? rawMessages : [],
+    toolCalls: Array.isArray(data?.toolCalls) ? data.toolCalls : [],
+    raw: data,
+  };
+}
+
 export async function fetchModelCatalog(query: ModelCatalogQuery = {}): Promise<ModelCatalogPayload> {
   const qs = toQueryString(query);
-  const url = qs ? `${MODEL_WORKER_URL}?${qs}` : MODEL_WORKER_URL;
+  const url = qs ? `${AMG_ENDPOINTS.modeller}?${qs}` : AMG_ENDPOINTS.modeller;
   const response = await fetch(url, {
     method: 'GET',
     headers: {
@@ -224,8 +276,9 @@ export async function fetchModelCatalog(query: ModelCatalogQuery = {}): Promise<
     },
   });
 
-  const parsed = await readJsonResponse<ModelCatalogPayload>(response);
-  return parsed.data;
+  const parsed = await readJson(response);
+  assertOk(response, parsed);
+  return unwrapData<ModelCatalogPayload>(parsed);
 }
 
 export async function fetchChatModelById(modelId: string): Promise<ModelCatalogItem | null> {
@@ -238,17 +291,39 @@ export async function fetchChatModelById(modelId: string): Promise<ModelCatalogI
 }
 
 export async function sendChatWorker(payload: ChatRequestPayload): Promise<ChatResultPayload> {
-  const response = await fetch(CHAT_WORKER_URL, {
+  const mapped = mapChatPayload(payload);
+
+  // Bu katman chat için önce AMG sözleşmesini dener, başarısız olursa AMH orkestrasyonuna düşer.
+  const primary = await fetch(AMG_ENDPOINTS.sohbet, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(mapped),
   });
 
-  const parsed = await readJsonResponse<ChatResultPayload>(response);
-  return parsed.data;
+  const parsedPrimary = await readJson(primary);
+  if (primary.ok && parsedPrimary?.ok !== false) {
+    return normalizeChatResult(parsedPrimary, payload.model);
+  }
+
+  const fallback = await fetch(AMH_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      serviceType: 'CHAT',
+      hizmetTuru: 'CHAT',
+      ...mapped,
+    }),
+  });
+
+  const parsedFallback = await readJson(fallback);
+  assertOk(fallback, parsedFallback);
+  return normalizeChatResult(parsedFallback, payload.model);
 }
 
 type ParsedSseFrame = {
@@ -281,26 +356,37 @@ function parseSseFrame(frame: string): ParsedSseFrame | null {
 }
 
 export async function streamChatWorker(payload: ChatRequestPayload, handlers: SseHandlers): Promise<void> {
-  const response = await fetch(CHAT_WORKER_URL, {
+  const response = await fetch(AMG_ENDPOINTS.sohbetAkis, {
     method: 'POST',
     headers: {
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      ...payload,
+      ...mapChatPayload(payload),
       stream: true,
     }),
     signal: handlers.signal,
   });
 
-  if (!response.ok) {
-    const parsed = await readJsonResponse<unknown>(response);
-    throw buildWorkerError(parsed.error?.message || 'Stream başlatılamadı.');
-  }
-
-  if (!response.body) {
-    throw buildWorkerError('Stream gövdesi alınamadı.');
+  if (!response.ok || !response.body) {
+    const fallbackResult = await sendChatWorker({ ...payload, stream: false });
+    handlers.onReady?.({ type: 'chat.stream.ready', model: fallbackResult.model, stream: true });
+    handlers.onChunk?.({
+      type: 'chat.stream.chunk',
+      chunkIndex: 0,
+      deltaText: fallbackResult.outputText,
+      toolCalls: fallbackResult.toolCalls,
+      raw: fallbackResult.raw,
+    });
+    handlers.onDone?.({
+      type: 'chat.stream.done',
+      model: fallbackResult.model,
+      stream: true,
+      outputText: fallbackResult.outputText,
+      chunkCount: 1,
+    });
+    return;
   }
 
   const reader = response.body.getReader();
@@ -317,28 +403,46 @@ export async function streamChatWorker(payload: ChatRequestPayload, handlers: Ss
       return;
     }
 
-    if (!parsed.ok) {
-      handlers.onError?.(buildWorkerError(parsed.error?.message || 'Stream sırasında hata oluştu.'));
+    if (parsed.ok === false) {
+      handlers.onError?.(buildWorkerError(envelopeErrorMessage(parsed)));
       return;
     }
 
-    if (frame.event === 'ready') {
-      handlers.onReady?.(parsed.data as ChatStreamReadyPayload);
+    const data = unwrapData<any>(parsed) || {};
+    // Bu mapping, hazir/parca/bitti eventlerinin ready/chunk/done ile eşlenmesini tek noktada çözer.
+    if (frame.event === 'hazir' || frame.event === 'ready') {
+      handlers.onReady?.({
+        type: 'chat.stream.ready',
+        model: data?.model || payload.model,
+        stream: true,
+      });
       return;
     }
 
-    if (frame.event === 'chunk') {
-      handlers.onChunk?.(parsed.data as ChatStreamChunkPayload);
+    if (frame.event === 'parca' || frame.event === 'chunk') {
+      handlers.onChunk?.({
+        type: 'chat.stream.chunk',
+        chunkIndex: Number(data?.chunkIndex ?? data?.parcaIndex ?? 0),
+        deltaText: String(data?.deltaText ?? data?.parcaMetni ?? data?.text ?? ''),
+        toolCalls: Array.isArray(data?.toolCalls) ? data.toolCalls : [],
+        raw: data,
+      });
       return;
     }
 
-    if (frame.event === 'done') {
-      handlers.onDone?.(parsed.data as ChatStreamDonePayload);
+    if (frame.event === 'bitti' || frame.event === 'done') {
+      handlers.onDone?.({
+        type: 'chat.stream.done',
+        model: data?.model || payload.model,
+        stream: true,
+        outputText: String(data?.outputText ?? data?.ciktiMetni ?? data?.text ?? ''),
+        chunkCount: Number(data?.chunkCount ?? data?.parcaSayisi ?? 0),
+      });
       return;
     }
 
-    if (frame.event === 'error' || frame.event === 'warning') {
-      handlers.onError?.(buildWorkerError(parsed.error?.message || 'Stream sırasında hata oluştu.'));
+    if (frame.event === 'hata' || frame.event === 'error' || frame.event === 'warning') {
+      handlers.onError?.(buildWorkerError(envelopeErrorMessage(parsed)));
     }
   };
 
@@ -361,6 +465,56 @@ export async function streamChatWorker(payload: ChatRequestPayload, handlers: Ss
   }
 }
 
+export async function generateImageWorker(payload: {
+  prompt: string;
+  modelId?: string;
+  clientRequestId?: string;
+}): Promise<ImageResultPayload> {
+  const primary = await fetch(AMG_ENDPOINTS.gorsel, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const parsedPrimary = await readJson(primary);
+  if (primary.ok && parsedPrimary?.ok !== false) {
+    const data = unwrapData<any>(parsedPrimary) || {};
+    return {
+      url: data?.url || data?.imageUrl || '',
+      assetId: data?.assetId,
+      requestId: data?.requestId,
+      modelId: data?.modelId || payload.modelId,
+    };
+  }
+
+  const fallback = await fetch(AMH_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      serviceType: 'IMG',
+      hizmetTuru: 'IMG',
+      ...payload,
+    }),
+  });
+
+  const parsedFallback = await readJson(fallback);
+  assertOk(fallback, parsedFallback);
+  const data = unwrapData<any>(parsedFallback) || {};
+
+  return {
+    url: data?.url || data?.imageUrl || '',
+    assetId: data?.assetId,
+    requestId: data?.requestId,
+    modelId: data?.modelId || payload.modelId,
+  };
+}
+
 export function priceToCredits(price: number | null) {
   if (price === null || Number.isNaN(price)) return null;
   return Math.round(price * CREDIT_RATE);
@@ -379,4 +533,3 @@ export function formatCredits(value: number | null) {
 export function summarizeModel(model: ModelCatalogItem) {
   return `${model.company} • ${model.modelName}`;
 }
-
