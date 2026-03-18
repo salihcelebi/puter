@@ -64,6 +64,7 @@ import AdminLogs from './pages/Admin/AdminLogs';
 import AdminPayments from './pages/Admin/AdminPayments';
 import AdminPricing from './pages/Admin/AdminPricing';
 import AdminWorkersSec from './pages/Admin/admin_workers_sec';
+import SayfayaGoreFiltrelerYonetimi from './pages/Admin/Sayfaya_Gore_Filtreler';
 
 export default function App() {
   return (
@@ -153,6 +154,15 @@ export default function App() {
               element={
                 <ProtectedRoute requireAdmin>
                   <AdminPayments />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/sayfaya-gore-filtreler"
+              element={
+                <ProtectedRoute requireAdmin>
+                  {/* Bu rota yalnızca admin kullanıcıların Sayfaya Göre Filtreler ekranına erişmesi için eklenmiştir. */}
+                  <SayfayaGoreFiltrelerYonetimi />
                 </ProtectedRoute>
               }
             />

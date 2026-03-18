@@ -124,6 +124,11 @@ export default function Layout() {
                 <DollarSign size={18} />
                 <span>Fiyatlandırma</span>
               </Link>
+              {/* Bu menü bağlantısı, admin panelindeki filtre yönetim ekranını görünür kılar. */}
+              <Link to="/admin/sayfaya-gore-filtreler" onClick={closeSidebar} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-zinc-100 text-zinc-700">
+                <Shield size={18} />
+                <span>Sayfaya Göre Filtreler</span>
+              </Link>
             </>
           )}
         </nav>
