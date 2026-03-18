@@ -87,7 +87,7 @@ export default function AdminPricing() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Merkezi Fiyatlandırma</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Sistemdeki tüm kredi hesaplamaları için temel USD/Kredi oranını belirleyin. kaynak: models-worker.js (/models)
+            Sistemdeki tüm kredi hesaplamaları için temel USD/Kredi oranını belirleyin. kaynak: amg.js (/api/modeller)
           </p>
         </div>
       </div>
