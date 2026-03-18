@@ -1411,3 +1411,21 @@ Bu README, kaynak kodu görmeden **uyumlu yeniden uygulama geliştirmek için ye
 - **AMH** service resolution + timeout + retry + fallback + job tracking + diagnosis yapar
 - Bu README olmadan AI eksik kalır
 - Bu README ile AI kaynak kod görmeden ciddi ölçüde kod yazabilir
+
+
+HEM AMG HEM AMH İÇİN 
+EK BİLGİ — README.md İÇİN KALAN FONKSİYONLAR
+
+madde ( 1 )
+fonksiyon adı : basariCevabiUret
+amacı : ✅ Başarılı işlemler için standart JSON başarı cevabı üretir.
+→ Rota: /api/durum, /api/modeller, /api/sohbet, /api/sohbet/akis, /api/gorsel, /api/ayarlar/getir, /api/ayarlar/kaydet, /api/ortak-durum/oku, /api/ortak-durum/yaz, /api/onbellek/sil, /, /tumu, /api, /api/test/calisiyor, /api/test/saglik, /api/test/me-puter, /api/amac
+→ Fonksiyon: basariCevabiUret
+→ Görev zinciri: ✅ işlem sonucu oluşur → standart başarı gövdesi hazırlanır → JSON response olarak istemciye döner
+
+madde ( 2 )
+fonksiyon adı : hataCevabiUret
+amacı : 🚨 Hatalı işlemler için standart JSON hata cevabı üretir.
+→ Rota: /api/durum, /api/modeller, /api/sohbet, /api/sohbet/akis, /api/gorsel, /api/ayarlar/getir, /api/ayarlar/kaydet, /api/ortak-durum/oku, /api/ortak-durum/yaz, /api/onbellek/sil, /, /tumu, /api, /api/test/calisiyor, /api/test/saglik, /api/test/me-puter, /api/amac
+→ Fonksiyon: hataCevabiUret
+→ Görev zinciri: 🚨 hata yakalanır → güvenli hata mesajı ve ek veri gövdeye yerleştirilir → standart JSON hata response’u döner
