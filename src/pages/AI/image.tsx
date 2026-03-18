@@ -21,6 +21,21 @@ const QUICK_PROMPTS = [
 function buildUrl(base, path) {
   return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
+function getPuterWorkersExec() {
+  if (typeof window === "undefined") return null;
+  const hostWindow = window as any;
+  const puterApi = hostWindow;
+  const candidate = puterApi?.puter?.workers?.exec;
+  return typeof candidate === "function" ? candidate.bind(puterApi.puter.workers) : null;
+}
+async function executeWorkerRequest(base, path, init) {
+  const targetUrl = buildUrl(base, path);
+  const workersExec = getPuterWorkersExec();
+  if (workersExec) {
+    return workersExec(targetUrl, init);
+  }
+  return fetch(targetUrl, init);
+}
 function safeText(value, fallback = "") {
   const text = String(value ?? "").trim();
   return text || fallback;
@@ -150,7 +165,8 @@ async function parseJsonResponse(response) {
     throw new Error("Beklenmeyen HTML yan\u0131t\u0131 al\u0131nd\u0131. Worker URL veya endpoint y\xF6nlendirmesini kontrol et.");
   }
   if (!contentType.toLowerCase().includes("application/json")) {
-    throw new Error("JSON beklenirken farkl\u0131 i\xE7erik tipi d\xF6nd\xFC.");
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 140);
+    throw new Error(`JSON beklenirken farklı içerik tipi döndü. Content-Type: ${contentType || "bilinmiyor"}. Önizleme: ${preview || "boş"}`);
   }
   try {
     return JSON.parse(text);
@@ -162,7 +178,7 @@ async function requestAno(path, init) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 45e3);
   try {
-    const response = await fetch(buildUrl(ANO_BASE_URL, path), {
+    const response = await executeWorkerRequest(ANO_BASE_URL, path, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -184,7 +200,7 @@ async function requestBabo(path, init) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 9e4);
   try {
-    const response = await fetch(buildUrl(BABO_BASE_URL, path), {
+    const response = await executeWorkerRequest(BABO_BASE_URL, path, {
       ...init,
       signal: controller.signal,
       headers: {
