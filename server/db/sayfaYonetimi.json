@@ -1,0 +1,74 @@
+{
+  "sayfaYonetimi": [
+    {
+      "pageFile": "chat.tsx",
+      "pageTitle": "Sohbet",
+      "pageDescription": "Temel sohbet sayfasi.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "Sohbet",
+      "seoDescription": "AI sohbet ekrani"
+    },
+    {
+      "pageFile": "Chat1.tsx",
+      "pageTitle": "Gelişmis Sohbet",
+      "pageDescription": "Model secimli gelismis sohbet sayfasi.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "Gelişmis Sohbet",
+      "seoDescription": "Model kataloglu sohbet ekrani"
+    },
+    {
+      "pageFile": "image.tsx",
+      "pageTitle": "Gorsel Uret",
+      "pageDescription": "ANO ve BABO destekli gorsel uretim sayfasi.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "Gorsel Uret",
+      "seoDescription": "Metinden ve referanstan gorsel uretimi"
+    },
+    {
+      "pageFile": "video.tsx",
+      "pageTitle": "Video Uret",
+      "pageDescription": "Video uretim ve model secim sayfasi.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "Video Uret",
+      "seoDescription": "Metinden veya gorselden video olusturma"
+    },
+    {
+      "pageFile": "tts.tsx",
+      "pageTitle": "Metinden Ses",
+      "pageDescription": "TTS sayfasi.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "TTS",
+      "seoDescription": "Metni sese cevirme"
+    },
+    {
+      "pageFile": "ocr.tsx",
+      "pageTitle": "OCR",
+      "pageDescription": "Gorsel veya belge uzerinden metin okuma.",
+      "layoutKey": "ai",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "OCR",
+      "seoDescription": "Belge ve gorsel metin tanima"
+    },
+    {
+      "pageFile": "sayfa-yonetimi.tsx",
+      "pageTitle": "Sayfa Yonetimi",
+      "pageDescription": "Route, worker, filtre ve checklist merkezi.",
+      "layoutKey": "admin",
+      "visible": true,
+      "maintenanceMode": false,
+      "seoTitle": "Sayfa Yonetimi",
+      "seoDescription": "Admin sayfa yonetim paneli"
+    }
+  ]
+}
