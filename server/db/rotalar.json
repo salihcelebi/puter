@@ -1,0 +1,88 @@
+{
+  "rotalar": [
+    {
+      "id": "route-chat",
+      "label": "Sohbet",
+      "path": "/sohbet",
+      "pageFile": "chat.tsx",
+      "enabled": true,
+      "showInMenu": true,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 1,
+      "icon": "💬"
+    },
+    {
+      "id": "route-chat1",
+      "label": "Gelişmis Sohbet",
+      "path": "/sohbet-2",
+      "pageFile": "Chat1.tsx",
+      "enabled": true,
+      "showInMenu": true,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 2,
+      "icon": "🧠"
+    },
+    {
+      "id": "route-image",
+      "label": "Gorsel Uret",
+      "path": "/gorsel",
+      "pageFile": "image.tsx",
+      "enabled": true,
+      "showInMenu": true,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 3,
+      "icon": "🖼️"
+    },
+    {
+      "id": "route-video",
+      "label": "Video Uret",
+      "path": "/video",
+      "pageFile": "video.tsx",
+      "enabled": true,
+      "showInMenu": true,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 4,
+      "icon": "🎬"
+    },
+    {
+      "id": "route-tts",
+      "label": "Metinden Ses",
+      "path": "/tts",
+      "pageFile": "tts.tsx",
+      "enabled": true,
+      "showInMenu": false,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 5,
+      "icon": "🔊"
+    },
+    {
+      "id": "route-ocr",
+      "label": "OCR",
+      "path": "/ocr",
+      "pageFile": "ocr.tsx",
+      "enabled": true,
+      "showInMenu": false,
+      "requireAuth": false,
+      "redirectTo": "",
+      "order": 6,
+      "icon": "📄"
+    },
+    {
+      "id": "route-page-management",
+      "label": "Sayfa Yonetimi",
+      "path": "/admin/sayfa-yonetimi",
+      "pageFile": "sayfa-yonetimi.tsx",
+      "enabled": true,
+      "showInMenu": false,
+      "requireAuth": true,
+      "redirectTo": "",
+      "order": 7,
+      "icon": "🛠️"
+    }
+  ]
+}
