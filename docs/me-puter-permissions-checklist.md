@@ -4,7 +4,7 @@
 
 - `POST /api/admin/users/:userId/permissions/me-puter/grant`
 - `POST /api/admin/users/:userId/permissions/me-puter/revoke`
-- `PATCH /api/admin/users/:userId/permissions`
+- `PATCH /api/admin/users/:userId/permissions` 
 
 Örnek `PATCH` body:
 
