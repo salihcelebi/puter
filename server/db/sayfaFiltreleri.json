@@ -1,0 +1,139 @@
+{
+  "sayfaFiltreleri": [
+    {
+      "pageFile": "chat.tsx",
+      "filters": [
+        {
+          "id": "chat-model-search",
+          "label": "Model Ara",
+          "type": "text",
+          "required": false,
+          "enabled": true,
+          "order": 1,
+          "defaultValue": "",
+          "group": "genel",
+          "showWhen": ""
+        },
+        {
+          "id": "chat-auth-toggle",
+          "label": "Sadece Giris Yapanlar",
+          "type": "toggle",
+          "required": false,
+          "enabled": true,
+          "order": 2,
+          "defaultValue": "false",
+          "group": "guvenlik",
+          "showWhen": ""
+        }
+      ]
+    },
+    {
+      "pageFile": "Chat1.tsx",
+      "filters": [
+        {
+          "id": "chat1-provider",
+          "label": "Saglayici",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "order": 1,
+          "defaultValue": "all",
+          "group": "modeller",
+          "showWhen": ""
+        },
+        {
+          "id": "chat1-sort",
+          "label": "Siralama",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "order": 2,
+          "defaultValue": "company_asc",
+          "group": "modeller",
+          "showWhen": ""
+        }
+      ]
+    },
+    {
+      "pageFile": "image.tsx",
+      "filters": [
+        {
+          "id": "image-worker-mode",
+          "label": "Worker Modu",
+          "type": "select",
+          "required": true,
+          "enabled": true,
+          "order": 1,
+          "defaultValue": "ano",
+          "group": "worker",
+          "showWhen": ""
+        },
+        {
+          "id": "image-quality",
+          "label": "Kalite",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "order": 2,
+          "defaultValue": "medium",
+          "group": "uretim",
+          "showWhen": ""
+        },
+        {
+          "id": "image-ratio",
+          "label": "Oran",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "order": 3,
+          "defaultValue": "1:1",
+          "group": "uretim",
+          "showWhen": ""
+        }
+      ]
+    },
+    {
+      "pageFile": "video.tsx",
+      "filters": [
+        {
+          "id": "video-mode",
+          "label": "Video Modu",
+          "type": "select",
+          "required": true,
+          "enabled": true,
+          "order": 1,
+          "defaultValue": "text-video",
+          "group": "uretim",
+          "showWhen": ""
+        },
+        {
+          "id": "video-duration",
+          "label": "Sure",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "order": 2,
+          "defaultValue": "5",
+          "group": "uretim",
+          "showWhen": ""
+        }
+      ]
+    },
+    {
+      "pageFile": "sayfa-yonetimi.tsx",
+      "filters": [
+        {
+          "id": "admin-search",
+          "label": "Kayit Ara",
+          "type": "text",
+          "required": false,
+          "enabled": true,
+          "order": 1,
+          "defaultValue": "",
+          "group": "yonetim",
+          "showWhen": ""
+        }
+      ]
+    }
+  ]
+}
