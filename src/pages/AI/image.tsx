@@ -117,6 +117,20 @@ function normalizeCatalogModel(raw: any): CatalogModel | null {
   };
 }
 
+function isModelLikelyImageCapable(model: CatalogModel | null | undefined) {
+  if (!model) return false;
+  const outputs = ensureArray<string>(model.modalities?.output).map((item) => safeText(item).toLowerCase());
+  if (outputs.includes("image")) return true;
+  const haystack = [
+    model.puterId,
+    model.id,
+    model.name,
+    model.provider,
+    ...(model.aliases || [])
+  ].map((item) => safeText(item).toLowerCase()).join(" ");
+  return /(image|img|flux|sdxl|stable diffusion|stable-diffusion|dall|recraft|midjourney|playground)/.test(haystack);
+}
+
 function ratioFromSize(width: number, height: number) {
   const exact = RATIO_OPTIONS.find((item) => item.width === width && item.height === height);
   return exact?.key || "1:1";
@@ -341,13 +355,40 @@ export default function ImagePage() {
   const [baboRunPayload, setBaboRunPayload] = useState<Record<string, unknown> | null>(null);
   const [baboDiagnosis, setBaboDiagnosis] = useState<Record<string, unknown> | null>(null);
 
+  const filteredModels = useMemo(() => {
+    const providerNeedle = safeText(providerFilter).toLowerCase();
+    const searchNeedle = safeText(modelSearch).toLowerCase();
+    const next = models.filter((item) => {
+      if (providerNeedle && safeText(item.provider).toLowerCase() !== providerNeedle) {
+        return false;
+      }
+      if (searchNeedle) {
+        const haystack = [item.puterId, item.id, item.name, item.provider, ...(item.aliases || [])]
+          .map((part) => safeText(part).toLowerCase())
+          .join(" ");
+        if (!haystack.includes(searchNeedle)) {
+          return false;
+        }
+      }
+      return true;
+    });
+    return [...next].sort((left, right) => {
+      const leftScore = isModelLikelyImageCapable(left) ? 1 : 0;
+      const rightScore = isModelLikelyImageCapable(right) ? 1 : 0;
+      if (leftScore !== rightScore) return rightScore - leftScore;
+      const providerCompare = safeText(left.provider).localeCompare(safeText(right.provider), "tr");
+      if (providerCompare !== 0) return providerCompare;
+      return safeText(left.name).localeCompare(safeText(right.name), "tr");
+    });
+  }, [models, providerFilter, modelSearch]);
+
   const selectedModel = useMemo(
-    () => models.find((item) => item.id === selectedModelId) || null,
-    [models, selectedModelId]
+    () => filteredModels.find((item) => item.id === selectedModelId) || null,
+    [filteredModels, selectedModelId]
   );
 
   const providerOptions = useMemo(() => {
-    return Array.from(new Set(models.map((item) => safeText(item.provider)).filter(Boolean)));
+    return Array.from(new Set(models.map((item) => safeText(item.provider)).filter(Boolean))).sort((a, b) => a.localeCompare(b, "tr"));
   }, [models]);
 
   const anoTone = healthToneFromStatus(anoHealth?.durum, null);
@@ -407,32 +448,43 @@ export default function ImagePage() {
     setNotice("");
     try {
       const params = new URLSearchParams();
-      if (providerFilter) params.set("provider", providerFilter);
-      if (modelSearch.trim()) params.set("q", modelSearch.trim());
-      params.set("output", "image");
       params.set("limit", "500");
       const envelope = await requestAno(anoBaseUrl, `/api/modeller?${params.toString()}`);
       const nextModels = ensureArray<any>((envelope.veri as any)?.modeller)
         .map((item) => normalizeCatalogModel(item))
         .filter(Boolean) as CatalogModel[];
       const providerCount = new Set(nextModels.map((item) => safeText(item.provider)).filter(Boolean)).size;
+      const preferred = nextModels.find((item) => isModelLikelyImageCapable(item)) || nextModels[0] || null;
       setModels(nextModels);
-      setSelectedModelId((current) => (current && nextModels.some((item) => item.id === current) ? current : safeText(nextModels[0]?.id)));
+      setSelectedModelId((current) => (current && nextModels.some((item) => item.id === current) ? current : safeText(preferred?.id)));
       if (nextModels.length > 0) {
-        setNotice(`Model kataloğu başarıyla alındı. ${nextModels.length} model ve ${providerCount} sağlayıcı listelendi.`);
+        setNotice(`Model kataloğu başarıyla alındı. ${nextModels.length} model ve ${providerCount} sağlayıcı listelendi; önce tam listeyi gösteriyorum, filtreleme yalnız ekrandaki görünümü daraltır.`);
       } else {
-        setNotice("Model kataloğu başarıyla alındı. Ancak mevcut filtrelerle eşleşen model bulunamadı.");
+        setNotice("Model kataloğu boş döndü. ANO bu denemede model listesi üretmediği için sağlayıcı ve model alanları gösterilemedi.");
       }
     } catch (loadError) {
       setModels([]);
       setSelectedModelId("");
       const reason = extractErrorMessage(loadError, "Model listesi alınamadı.");
       setError(`Model kataloğu alınamadı. Sebep: ${reason}`);
-      setNotice("Model sağlayıcıları ve modelleri bu denemede yüklenemedi. Hata nedeni yukarıda açıkça gösteriliyor.");
+      setNotice("Model sağlayıcıları ve modelleri bu denemede yüklenemedi. Worker yanıtı veya runtime desteği yukarıda net sebebiyle gösteriliyor.");
     } finally {
       setModelsLoading(false);
     }
-  }, [anoBaseUrl, modelSearch, providerFilter]);
+  }, [anoBaseUrl]);
+
+  useEffect(() => {
+    if (!filteredModels.length) {
+      if (selectedModelId) {
+        setSelectedModelId("");
+      }
+      return;
+    }
+    if (!selectedModelId || !filteredModels.some((item) => item.id === selectedModelId)) {
+      const preferred = filteredModels.find((item) => isModelLikelyImageCapable(item)) || filteredModels[0];
+      setSelectedModelId(safeText(preferred?.id));
+    }
+  }, [filteredModels, models, selectedModelId]);
 
   const loadBaboArtifacts = useCallback(async (jobId: string) => {
     if (!jobId) return;
@@ -1193,12 +1245,15 @@ export default function ImagePage() {
 
                 <div className="field full">
                   <div className="label">Model</div>
-                  <select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)} disabled={modelsLoading || !models.length}>
-                    {!models.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Model yok"}</option> : null}
-                    {models.map((item) => (
+                  <select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)} disabled={modelsLoading || !filteredModels.length}>
+                    {!filteredModels.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Model yok"}</option> : null}
+                    {filteredModels.map((item) => (
                       <option key={item.id} value={item.id}>{item.name} · {safeText(item.provider, "-")}</option>
                     ))}
                   </select>
+                  {models.length > 0 && !filteredModels.length ? (
+                    <p className="helper error-text">Katalog yüklü ama seçili yerel filtrelerle eşleşen model görünmüyor. Sağlayıcı filtresini temizle veya arama metnini kısalt.</p>
+                  ) : null}
                   {selectedModel ? (
                     <div className="tiny">
                       {safeText(selectedModel.puterId, selectedModel.id)} · çıktı: {ensureArray(selectedModel.modalities?.output).join(", ") || "-"} · bağlam: {selectedModel.context ?? "-"}
@@ -1295,7 +1350,7 @@ export default function ImagePage() {
               </div>
 
               <div className="hint">
-                Model kataloğu ANO <span className="mono">GET /api/modeller?output=image&amp;limit=500</span> üstünden gelir.
+                Model kataloğu ANO <span className="mono">GET /api/modeller?limit=500</span> üstünden gelir.
                 TXT2IMG için ANO <span className="mono">POST /api/gorsel</span>, IMG2IMG için ANO <span className="mono">POST /api/gorsel/duzenle</span> kullanılır.
                 BABO her iki durumda da <span className="mono">POST /api/calistir</span> ile çalışır ve hizmet tipi olarak
                 <span className="mono"> {operation} </span> gönderilir.
