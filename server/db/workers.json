@@ -1,0 +1,60 @@
+{
+  "workers": [
+    {
+      "pageFile": "chat.tsx",
+      "primaryWorker": "chat",
+      "fallbackWorker": "ano",
+      "catalogWorker": "models",
+      "allowedWorkers": ["chat", "ano", "babo", "models"],
+      "notes": "Temel sohbet akisi icin chat worker once kullanilir."
+    },
+    {
+      "pageFile": "Chat1.tsx",
+      "primaryWorker": "chat",
+      "fallbackWorker": "ano",
+      "catalogWorker": "models",
+      "allowedWorkers": ["chat", "ano", "babo", "models"],
+      "notes": "Model secimli sohbet ekrani katalogu models worker'dan okur."
+    },
+    {
+      "pageFile": "image.tsx",
+      "primaryWorker": "ano",
+      "fallbackWorker": "babo",
+      "catalogWorker": "models",
+      "allowedWorkers": ["ano", "babo", "models", "image"],
+      "notes": "Gorsel akisi once ANO sonra BABO fallback ile calisir."
+    },
+    {
+      "pageFile": "video.tsx",
+      "primaryWorker": "video",
+      "fallbackWorker": "babo",
+      "catalogWorker": "models",
+      "allowedWorkers": ["video", "babo", "models", "ano"],
+      "notes": "Video uretim sayfasi katalogu models uzerinden alir."
+    },
+    {
+      "pageFile": "tts.tsx",
+      "primaryWorker": "tts",
+      "fallbackWorker": "babo",
+      "catalogWorker": "models",
+      "allowedWorkers": ["tts", "babo", "ano", "models"],
+      "notes": "TTS sayfasi metinden ses akisini yonetir."
+    },
+    {
+      "pageFile": "ocr.tsx",
+      "primaryWorker": "ocr",
+      "fallbackWorker": "babo",
+      "catalogWorker": "models",
+      "allowedWorkers": ["ocr", "babo", "ano", "models"],
+      "notes": "OCR sayfasi once OCR worker kullanir."
+    },
+    {
+      "pageFile": "sayfa-yonetimi.tsx",
+      "primaryWorker": "models",
+      "fallbackWorker": "babo",
+      "catalogWorker": "models",
+      "allowedWorkers": ["models", "babo", "ano", "chat", "image", "video", "tts", "ocr"],
+      "notes": "Yonetim paneli tum worker seceneklerini gorebilir."
+    }
+  ]
+}
