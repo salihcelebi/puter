@@ -2,7 +2,7 @@
 
 # ANO + BABO — KAYNAK KODU GÖRÜLMEDEN UYUMLU KODLAMA İÇİN TAM TEKNİK SÖZLEŞME
 
-## BU README.md NEDEN OLUŞTURULDU?
+## BU README.md NEDEN OLUŞTURULDU?  
 
 1. Bu README.md, ANO ve BABO worker’larının kaynak kodu açılmadan da yüksek doğrulukla yeniden kodlanabilmesi için oluşturuldu.
 2. Bu belge, bir yapay zekânın veya geliştiricinin sistemin dış davranışını anlayıp uyumlu kod üretebilmesi için hazırlandı.
