@@ -89,12 +89,21 @@ function storeWorkerUrl(key: string, value: string) {
   } catch {}
 }
 
+function resolveCatalogModelName(raw: any) {
+  const aliases = ensureArray<string>(raw?.aliases || raw?.takmaAdlar).map((item) => safeText(item)).filter(Boolean);
+  // Model adı tek alana bağlı kalmasın; listedeki ilk dolu kimlik görünür ad olsun.
+  const displayName = safeText(raw?.puterId || raw?.id || raw?.kimlik || aliases[0] || raw?.name || raw?.ad);
+  const stableId = safeText(raw?.id || raw?.kimlik || raw?.puterId || aliases[0] || raw?.name || raw?.ad);
+  return { aliases, displayName, stableId };
+}
+
 function normalizeCatalogModel(raw: any): CatalogModel | null {
-  const id = safeText(raw?.id || raw?.kimlik);
-  const name = safeText(raw?.name || raw?.ad || id);
+  const resolved = resolveCatalogModelName(raw);
+  const id = resolved.stableId;
+  const name = resolved.displayName;
   if (!id || !name) return null;
   const provider = safeText(raw?.provider || raw?.saglayici);
-  const aliases = ensureArray<string>(raw?.aliases || raw?.takmaAdlar).map((item) => safeText(item)).filter(Boolean);
+  const aliases = resolved.aliases;
   const input = ensureArray<string>(raw?.modalities?.input);
   const output = ensureArray<string>(raw?.modalities?.output);
   return {
@@ -535,13 +544,13 @@ function getFilterValueText(key: keyof FilterState, filters: FilterState) {
 function modelMatchesFilter(model: CatalogModel, filters: FilterState, def: FilterDefinition) {
   const facets = deriveModelFacets(model);
   const providerText = safeText(model.provider).toLowerCase();
-  const nameText = safeText(model.name).toLowerCase();
+  const nameSearchPool = [model.puterId, model.id, ...(model.aliases || []), model.name].map((item) => safeText(item).toLowerCase()).filter(Boolean).join(" ");
   const aliasPool = ensureArray<string>(model.aliases).map((item) => safeText(item).toLowerCase()).join(" ");
   switch (def.key) {
     case "provider":
       return !filters.provider || providerText === filters.provider.toLowerCase();
     case "modelName":
-      return !filters.modelName.trim() || nameText.includes(filters.modelName.trim().toLowerCase());
+      return !filters.modelName.trim() || nameSearchPool.includes(filters.modelName.trim().toLowerCase());
     case "alias":
       return !filters.alias.trim() || aliasPool.includes(filters.alias.trim().toLowerCase());
     case "imageInput":
@@ -1651,12 +1660,12 @@ export default function ImagePage() {
                   <select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)} disabled={modelsLoading || !filteredModels.length}>
                     {!filteredModels.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Filtre sonrası görünür model yok"}</option> : null}
                     {filteredModels.map((item) => (
-                      <option key={item.id} value={item.id}>{item.name} · {safeText(item.provider, "-")}</option>
+                      <option key={item.id} value={item.id}>{safeText(item.name || item.puterId || item.id, "Model adı yok")} · {safeText(item.provider, "-")}</option>
                     ))}
                   </select>
                   {selectedModel ? (
                     <div className="tiny">
-                      {safeText(selectedModel.puterId, selectedModel.id)} · çıktı: {ensureArray(selectedModel.modalities?.output).join(", ") || "-"} · bağlam: {selectedModel.context ?? "-"}
+                      {safeText(selectedModel.puterId || selectedModel.id || ensureArray(selectedModel.aliases)[0] || selectedModel.name, "-")} · çıktı: {ensureArray(selectedModel.modalities?.output).join(", ") || "-"} · bağlam: {selectedModel.context ?? "-"}
                     </div>
                   ) : null}
                 </div>
