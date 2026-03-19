@@ -72,6 +72,51 @@ function getClientId() {
   }
 }
 
+function readStoredWorkerUrl(key: string, fallback: string) {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const value = window.localStorage.getItem(key);
+    return safeText(value, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+function storeWorkerUrl(key: string, value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, safeText(value));
+  } catch {}
+}
+
+function normalizeCatalogModel(raw: any): CatalogModel | null {
+  const id = safeText(raw?.id || raw?.kimlik);
+  const name = safeText(raw?.name || raw?.ad || id);
+  if (!id || !name) return null;
+  const provider = safeText(raw?.provider || raw?.saglayici);
+  const aliases = ensureArray<string>(raw?.aliases || raw?.takmaAdlar).map((item) => safeText(item)).filter(Boolean);
+  const input = ensureArray<string>(raw?.modalities?.input);
+  const output = ensureArray<string>(raw?.modalities?.output);
+  return {
+    puterId: safeText(raw?.puterId),
+    id,
+    name,
+    provider,
+    aliases,
+    modalities: { input, output },
+    context: raw?.context ?? raw?.baglam ?? null,
+    max_tokens: raw?.max_tokens ?? raw?.azamiToken ?? null,
+    tool_call: typeof raw?.tool_call === "boolean" ? raw.tool_call : undefined,
+    open_weights: typeof raw?.open_weights === "boolean" ? raw.open_weights : undefined,
+    knowledge: safeText(raw?.knowledge),
+    release_date: safeText(raw?.release_date),
+    costs_currency: safeText(raw?.costs_currency),
+    input_cost_key: safeText(raw?.input_cost_key),
+    output_cost_key: safeText(raw?.output_cost_key),
+    costs: raw?.costs && typeof raw.costs === "object" ? raw.costs : undefined
+  };
+}
+
 function ratioFromSize(width: number, height: number) {
   const exact = RATIO_OPTIONS.find((item) => item.width === width && item.height === height);
   return exact?.key || "1:1";
@@ -260,8 +305,8 @@ export default function ImagePage() {
   const clientId = useMemo(() => getClientId(), []);
   const pollRef = useRef<number | null>(null);
 
-  const [anoBaseUrl, setAnoBaseUrl] = useState(DEFAULT_ANO_URL);
-  const [baboBaseUrl, setBaboBaseUrl] = useState(DEFAULT_BABO_URL);
+  const [anoBaseUrl, setAnoBaseUrl] = useState(() => readStoredWorkerUrl("image.tsx.anoBaseUrl", DEFAULT_ANO_URL));
+  const [baboBaseUrl, setBaboBaseUrl] = useState(() => readStoredWorkerUrl("image.tsx.baboBaseUrl", DEFAULT_BABO_URL));
   const [workerMode, setWorkerMode] = useState<"ano" | "babo">("ano");
   const [autoFallback, setAutoFallback] = useState(true);
   const [operation, setOperation] = useState<"TXT2IMG" | "IMG2IMG">("TXT2IMG");
@@ -309,6 +354,14 @@ export default function ImagePage() {
   const baboTone = healthToneFromStatus(baboHealth?.durum, safeNumber(baboHealth?.saglikPuani, NaN));
   const panelTone = healthToneFromStatus(baboPanel?.durum, safeNumber(baboPanel?.genelSaglikPuani, NaN));
 
+  useEffect(() => {
+    storeWorkerUrl("image.tsx.anoBaseUrl", anoBaseUrl);
+  }, [anoBaseUrl]);
+
+  useEffect(() => {
+    storeWorkerUrl("image.tsx.baboBaseUrl", baboBaseUrl);
+  }, [baboBaseUrl]);
+
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
       window.clearTimeout(pollRef.current);
@@ -351,6 +404,7 @@ export default function ImagePage() {
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
     setError("");
+    setNotice("");
     try {
       const params = new URLSearchParams();
       if (providerFilter) params.set("provider", providerFilter);
@@ -358,13 +412,23 @@ export default function ImagePage() {
       params.set("output", "image");
       params.set("limit", "500");
       const envelope = await requestAno(anoBaseUrl, `/api/modeller?${params.toString()}`);
-      const nextModels = ensureArray<CatalogModel>((envelope.veri as any)?.modeller).filter((item) => safeText(item.id) && safeText(item.name));
+      const nextModels = ensureArray<any>((envelope.veri as any)?.modeller)
+        .map((item) => normalizeCatalogModel(item))
+        .filter(Boolean) as CatalogModel[];
+      const providerCount = new Set(nextModels.map((item) => safeText(item.provider)).filter(Boolean)).size;
       setModels(nextModels);
       setSelectedModelId((current) => (current && nextModels.some((item) => item.id === current) ? current : safeText(nextModels[0]?.id)));
+      if (nextModels.length > 0) {
+        setNotice(`Model kataloğu başarıyla alındı. ${nextModels.length} model ve ${providerCount} sağlayıcı listelendi.`);
+      } else {
+        setNotice("Model kataloğu başarıyla alındı. Ancak mevcut filtrelerle eşleşen model bulunamadı.");
+      }
     } catch (loadError) {
       setModels([]);
       setSelectedModelId("");
-      setError(extractErrorMessage(loadError, "Model listesi alınamadı."));
+      const reason = extractErrorMessage(loadError, "Model listesi alınamadı.");
+      setError(`Model kataloğu alınamadı. Sebep: ${reason}`);
+      setNotice("Model sağlayıcıları ve modelleri bu denemede yüklenemedi. Hata nedeni yukarıda açıkça gösteriliyor.");
     } finally {
       setModelsLoading(false);
     }
