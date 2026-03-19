@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const DEFAULT_ANO_URL = "https://turk.puter.site/workers/all/ano.js";
-const DEFAULT_BABO_URL = "https://turk.puter.site/workers/all/babo.js";
+const DEFAULT_ANO_URL = "	https://ano.puter.work";
+const DEFAULT_BABO_URL = "https://babo.puter.work";
 const POLL_MS = 2000;
 const MAX_ANO_PROMPT = 2000;
 const MAX_BABO_PROMPT = 2500;
