@@ -1,0 +1,27 @@
+[
+  {
+    "id": "chat",
+    "name": "Sohbet",
+    "options": ["chat.tsx", "Chat1.tsx"]
+  },
+  {
+    "id": "media",
+    "name": "Medya",
+    "options": ["image.tsx", "video.tsx"]
+  },
+  {
+    "id": "audio",
+    "name": "Ses",
+    "options": ["tts.tsx"]
+  },
+  {
+    "id": "text",
+    "name": "Metin",
+    "options": ["ocr.tsx"]
+  },
+  {
+    "id": "admin",
+    "name": "Yönetim",
+    "options": ["sayfa-yonetimi.tsx"]
+  }
+]

@@ -1,0 +1,65 @@
+[
+  {
+    "id": "admin-page-management",
+    "route": "/admin/sayfa-yonetimi",
+    "page": "sayfa-yonetimi.tsx",
+    "worker": "chat-worker",
+    "filterGroup": "admin",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "chat-main",
+    "route": "/chat",
+    "page": "chat.tsx",
+    "worker": "chat-worker",
+    "filterGroup": "chat",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "chat-alt",
+    "route": "/chat1",
+    "page": "Chat1.tsx",
+    "worker": "chat-worker",
+    "filterGroup": "chat",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "image-main",
+    "route": "/gorsel",
+    "page": "image.tsx",
+    "worker": "image-worker",
+    "filterGroup": "media",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "video-main",
+    "route": "/video",
+    "page": "video.tsx",
+    "worker": "video-worker",
+    "filterGroup": "media",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "tts-main",
+    "route": "/tts",
+    "page": "tts.tsx",
+    "worker": "tts-worker",
+    "filterGroup": "audio",
+    "checklistGroup": "deploy",
+    "enabled": true
+  },
+  {
+    "id": "ocr-main",
+    "route": "/ocr",
+    "page": "ocr.tsx",
+    "worker": "ocr-worker",
+    "filterGroup": "text",
+    "checklistGroup": "deploy",
+    "enabled": true
+  }
+]

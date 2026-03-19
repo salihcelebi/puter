@@ -1,0 +1,32 @@
+[
+  {
+    "id": "chat-worker",
+    "name": "Chat Worker",
+    "endpoint": "/api/ai/chat",
+    "status": "active"
+  },
+  {
+    "id": "image-worker",
+    "name": "Image Worker",
+    "endpoint": "/api/ai/image",
+    "status": "active"
+  },
+  {
+    "id": "video-worker",
+    "name": "Video Worker",
+    "endpoint": "/api/ai/video",
+    "status": "active"
+  },
+  {
+    "id": "tts-worker",
+    "name": "TTS Worker",
+    "endpoint": "/api/ai/tts",
+    "status": "active"
+  },
+  {
+    "id": "ocr-worker",
+    "name": "OCR Worker",
+    "endpoint": "/api/ai/ocr",
+    "status": "passive"
+  }
+]

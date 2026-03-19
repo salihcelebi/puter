@@ -58,6 +58,7 @@ import Chat1 from './pages/AI/Chat1';
 import Image from './pages/AI/image';
 import VideoGen from './pages/AI/VideoGen';
 import TTS from './pages/AI/TTS';
+import OCR from './pages/AI/ocr';
 import Music from './pages/AI/Music';
 import AdminDashboard from './pages/Admin/AdminDashboard';
 import AdminUsers from './pages/Admin/AdminUsers';
@@ -65,6 +66,7 @@ import AdminModels from './pages/Admin/AdminModels';
 import AdminLogs from './pages/Admin/AdminLogs';
 import AdminPayments from './pages/Admin/AdminPayments';
 import AdminPricing from './pages/Admin/AdminPricing';
+import SayfaYonetimi from './pages/Admin/sayfa-yonetimi';
 
 export default function App() {
   return (
@@ -88,9 +90,12 @@ export default function App() {
 
             <Route path="sohbet" element={<Chat1 />} />
             <Route path="sohbet/konus" element={<Chat />} />
+            <Route path="chat" element={<Chat />} />
+            <Route path="chat1" element={<Chat1 />} />
             <Route path="gorsel" element={<Image />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="tts" element={<TTS />} />
+            <Route path="ocr" element={<OCR />} />
             <Route path="muzik" element={<ProtectedRoute><Music /></ProtectedRoute>} />
 
             <Route
@@ -122,6 +127,14 @@ export default function App() {
               element={
                 <ProtectedRoute requireAdmin>
                   <AdminModels />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="admin/sayfa-yonetimi"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <SayfaYonetimi />
                 </ProtectedRoute>
               }
             />
