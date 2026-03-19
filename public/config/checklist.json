@@ -1,0 +1,44 @@
+[
+  {
+    "id": "deploy",
+    "name": "Canlıya Alma Kontrolü",
+    "items": [
+      {
+        "id": "main-commit",
+        "label": "Main branch son commit referansı doğrulandı",
+        "done": false
+      },
+      {
+        "id": "cache-clear",
+        "label": "Build cache temizliği yapıldı",
+        "done": false
+      },
+      {
+        "id": "new-pages",
+        "label": "Yeni sayfalar build içine girdi",
+        "done": false
+      },
+      {
+        "id": "admin-route",
+        "label": "/admin/sayfa-yonetimi route canlıda erişilebilir",
+        "done": false
+      }
+    ]
+  },
+  {
+    "id": "integrity",
+    "name": "Yapı Bütünlüğü",
+    "items": [
+      {
+        "id": "route-worker-sync",
+        "label": "Route ve worker eşleşmeleri güncel",
+        "done": true
+      },
+      {
+        "id": "tsx-target-sync",
+        "label": "Hedef TSX listesi güncel",
+        "done": true
+      }
+    ]
+  }
+]

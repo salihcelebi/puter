@@ -1,0 +1,11 @@
+{
+  "pageTargets": [
+    "sayfa-yonetimi.tsx",
+    "chat.tsx",
+    "Chat1.tsx",
+    "image.tsx",
+    "video.tsx",
+    "tts.tsx",
+    "ocr.tsx"
+  ]
+}
