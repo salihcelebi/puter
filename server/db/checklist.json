@@ -1,0 +1,144 @@
+{
+  "checklists": [
+    {
+      "pageFile": "chat.tsx",
+      "items": [
+        {
+          "id": "chat-check-1",
+          "label": "Model secimi aktif",
+          "description": "Kullanici bir model secebilir.",
+          "group": "hazirlik",
+          "priority": "yuksek",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 1,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "chat,model"
+        },
+        {
+          "id": "chat-check-2",
+          "label": "Prompt bos degil",
+          "description": "Bos mesaj gonderimi engellenir.",
+          "group": "dogrulama",
+          "priority": "kritik",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 2,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "chat,prompt"
+        }
+      ]
+    },
+    {
+      "pageFile": "image.tsx",
+      "items": [
+        {
+          "id": "image-check-1",
+          "label": "Worker secimi tamam",
+          "description": "ANO veya BABO secimi yapildi.",
+          "group": "worker",
+          "priority": "kritik",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 1,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "image,worker"
+        },
+        {
+          "id": "image-check-2",
+          "label": "Prompt hazir",
+          "description": "Gorsel uretim promptu girildi.",
+          "group": "uretim",
+          "priority": "yuksek",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 2,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "image,prompt"
+        }
+      ]
+    },
+    {
+      "pageFile": "video.tsx",
+      "items": [
+        {
+          "id": "video-check-1",
+          "label": "Video modeli secildi",
+          "description": "Katalogtan uygun video modeli secildi.",
+          "group": "modeller",
+          "priority": "kritik",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 1,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "video,model"
+        },
+        {
+          "id": "video-check-2",
+          "label": "Sure ve oran kontrol edildi",
+          "description": "Video suresi ve oran ayari yapildi.",
+          "group": "uretim",
+          "priority": "orta",
+          "required": false,
+          "enabled": true,
+          "completed": false,
+          "order": 2,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "video,ayar"
+        }
+      ]
+    },
+    {
+      "pageFile": "sayfa-yonetimi.tsx",
+      "items": [
+        {
+          "id": "admin-check-1",
+          "label": "Route path benzersiz",
+          "description": "Ayni path birden fazla kayitta yok.",
+          "group": "dogrulama",
+          "priority": "kritik",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 1,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "admin,route"
+        },
+        {
+          "id": "admin-check-2",
+          "label": "Worker pageFile dolu",
+          "description": "Tum worker kayitlarinda pageFile ve primaryWorker var.",
+          "group": "dogrulama",
+          "priority": "yuksek",
+          "required": true,
+          "enabled": true,
+          "completed": false,
+          "order": 2,
+          "showWhen": "",
+          "hideWhen": "",
+          "dependsOn": "",
+          "tags": "admin,worker"
+        }
+      ]
+    }
+  ]
+}
