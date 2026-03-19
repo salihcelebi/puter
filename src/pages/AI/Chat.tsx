@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
+import { fetchApiJson } from '../../lib/apiClient';
 import {
   fetchModelCatalog,
-  generateImageWorker,
   ModelCatalogItem,
   ChatWorkerMessage,
   sendChatWorker,
@@ -12,13 +12,6 @@ import {
   ChatStreamChunkPayload,
   ChatStreamDonePayload,
 } from '../../lib/aiWorkers';
-import {
-  bagimliliklariSagliyorMu,
-  FiltreTanimi,
-  SayfaFiltreAyarlari,
-  sayfayaGoreFiltreleriGetir,
-  varsayilanAyarOlustur,
-} from '../Admin/Sayfaya_Gore_Filtreler';
 
 const CHAT_MODEL_SESSION_KEY = 'nisai:selected-chat-model';
 
@@ -44,13 +37,6 @@ type ImageResponse = {
   modelId?: string;
 };
 
-type FilterSortKey = 'company_asc' | 'name_asc' | 'input_price_asc' | 'speed_desc' | 'speed_asc';
-type FilterMode = 'all' | 'reasoning' | 'web';
-type ChatFilterRuntime = {
-  tanim: FiltreTanimi;
-  ayar: SayfaFiltreAyarlari[string];
-};
-
 type SpeechRecognitionInstance = {
   lang: string;
   continuous: boolean;
@@ -65,39 +51,6 @@ type SpeechRecognitionInstance = {
 
 function createMessageId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function getChatFilterSettings() {
-  const defaults = varsayilanAyarOlustur().chat;
-  try {
-    const raw = localStorage.getItem('sayfaya_gore_filtre_ayarlari');
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as { chat?: SayfaFiltreAyarlari };
-    const incoming = parsed?.chat || {};
-    return { ...defaults, ...incoming };
-  } catch {
-    return defaults;
-  }
-}
-
-function readChatFilterRuntime(): ChatFilterRuntime[] {
-  const ayarlar = getChatFilterSettings();
-  const chatFiltreleri = sayfayaGoreFiltreleriGetir('chat');
-
-  return [...chatFiltreleri]
-    .sort((a, b) => (ayarlar[a.anahtar]?.sira ?? 9999) - (ayarlar[b.anahtar]?.sira ?? 9999))
-    .map((tanim) => ({
-      tanim,
-      ayar: ayarlar[tanim.anahtar] || {
-        etkin: tanim.varsayilanEtkin,
-        gorunur: tanim.varsayilanGorunur,
-        oneCikar: tanim.varsayilanOneCikar,
-        zorunlu: tanim.varsayilanZorunlu,
-        gelismis: tanim.varsayilanGelismis,
-        sira: 9999,
-      },
-    }))
-    .filter(({ tanim, ayar }) => ayar.etkin && bagimliliklariSagliyorMu(tanim, ayarlar));
 }
 
 function escapeHtml(text: string) {
@@ -288,75 +241,17 @@ function ModelPickerPopover({
   open,
   models,
   selectedModelId,
-  search,
-  onSearchChange,
-  sort,
-  onSortChange,
-  filterMode,
-  onFilterModeChange,
-  adminFilters,
   onSelect,
 }: {
   open: boolean;
   models: ModelCatalogItem[];
   selectedModelId?: string;
-  search: string;
-  onSearchChange: (value: string) => void;
-  sort: FilterSortKey;
-  onSortChange: (value: FilterSortKey) => void;
-  filterMode: FilterMode;
-  onFilterModeChange: (value: FilterMode) => void;
-  adminFilters: ChatFilterRuntime[];
   onSelect: (model: ModelCatalogItem) => void;
 }) {
-  const isFilterVisible = (anahtar: string) => adminFilters.some((item) => item.tanim.anahtar === anahtar && item.ayar.gorunur);
-  const isOneCikarVisible = (anahtar: string) =>
-    adminFilters.some((item) => item.tanim.anahtar === anahtar && item.ayar.gorunur && item.ayar.oneCikar);
-  const isGelismisVisible = (anahtar: string) =>
-    adminFilters.some((item) => item.tanim.anahtar === anahtar && item.ayar.gorunur && item.ayar.gelismis);
-
-  const filteredModels = useMemo(() => {
-    let next = [...models];
-
-    if (filterMode === 'reasoning') {
-      next = next.filter((model) => {
-        const bag = [model.categoryRaw, model.standoutFeature, model.useCase, model.rivalAdvantage, ...model.badges, ...model.traits]
-          .join(' ')
-          .toLocaleLowerCase('tr');
-        return ['reasoning', 'muhakeme', 'analiz', 'strateji', 'deep', 'derin'].some((word) => bag.includes(word));
-      });
-    }
-
-    if (filterMode === 'web') {
-      next = next.filter((model) => {
-        const bag = [model.categoryRaw, model.standoutFeature, model.useCase, model.rivalAdvantage, ...model.badges, ...model.traits]
-          .join(' ')
-          .toLocaleLowerCase('tr');
-        return ['arama', 'search', 'web', 'araştırma', 'güncel', 'internet'].some((word) => bag.includes(word));
-      });
-    }
-
-    if (sort === 'company_asc') next.sort((a, b) => (a.provider || a.company).localeCompare((b.provider || b.company), 'tr'));
-    if (sort === 'name_asc') next.sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr'));
-    if (sort === 'input_price_asc') next.sort((a, b) => (a.prices.input ?? Number.MAX_SAFE_INTEGER) - (b.prices.input ?? Number.MAX_SAFE_INTEGER));
-    if (sort === 'speed_desc') next.sort((a, b) => b.speedScore - a.speedScore);
-    if (sort === 'speed_asc') next.sort((a, b) => a.speedScore - b.speedScore);
-
-    const q = search.trim().toLocaleLowerCase('tr');
-    if (!q) return next;
-
-    return next.filter((model) => {
-      const bag = [model.provider, model.company, model.modelName, model.modelId, ...(model.traits || []), ...(model.badges || [])]
-        .join(' ')
-        .toLocaleLowerCase('tr');
-      return bag.includes(q);
-    });
-  }, [filterMode, models, search, sort]);
-
   const providers = useMemo(() => {
     const groups = new Map<string, ModelCatalogItem[]>();
 
-    for (const model of filteredModels) {
+    for (const model of models) {
       const key = model.provider || model.company || 'Diğer';
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(model);
@@ -368,7 +263,7 @@ function ModelPickerPopover({
         items: [...items].sort((a, b) => a.modelName.localeCompare(b.modelName, 'tr')),
       }))
       .sort((a, b) => a.provider.localeCompare(b.provider, 'tr'));
-  }, [filteredModels]);
+  }, [models]);
 
   const [activeProvider, setActiveProvider] = useState<string>(providers[0]?.provider || '');
 
@@ -384,21 +279,6 @@ function ModelPickerPopover({
 
   return (
     <div className="model-picker-popover" role="dialog" aria-label="Model değiştir">
-      <div style={{ padding: '10px 12px', borderBottom: '1px solid #e5e7eb', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {isFilterVisible('model_adi') && (
-          <input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Model ara..."
-            style={{ flex: 1, minWidth: 180, border: '1px solid #d1d5db', borderRadius: 10, padding: '8px 10px', fontSize: 13 }}
-          />
-        )}
-        {isOneCikarVisible('giris_fiyati') && <button type="button" className="model-provider-item" onClick={() => onSortChange('input_price_asc')}>Fiyat ↑</button>}
-        {isOneCikarVisible('hiz_etiketi') && <button type="button" className="model-provider-item" onClick={() => onSortChange('speed_desc')}>Hız ↓</button>}
-        {isOneCikarVisible('saglayici') && <button type="button" className="model-provider-item" onClick={() => onSortChange('company_asc')}>Sağlayıcı</button>}
-        {isGelismisVisible('muhakeme') && <button type="button" className="model-provider-item" onClick={() => onFilterModeChange(filterMode === 'reasoning' ? 'all' : 'reasoning')}>Muhakeme</button>}
-        {isGelismisVisible('canli_web_arama') && <button type="button" className="model-provider-item" onClick={() => onFilterModeChange(filterMode === 'web' ? 'all' : 'web')}>Web</button>}
-      </div>
       <div className="model-picker-columns">
         <div className="model-picker-sidebar">
           <div className="model-picker-title">Sağlayıcılar</div>
@@ -471,10 +351,6 @@ export default function Chat() {
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [lastAssistantText, setLastAssistantText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [modelSearch, setModelSearch] = useState('');
-  const [modelSort, setModelSort] = useState<FilterSortKey>('company_asc');
-  const [modelFilterMode, setModelFilterMode] = useState<FilterMode>('all');
-  const [adminChatFilters, setAdminChatFilters] = useState<ChatFilterRuntime[]>([]);
 
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -484,8 +360,6 @@ export default function Chat() {
 
   useEffect(() => {
     let mounted = true;
-    // Bu ekran, filtre kaynağını admin Sayfaya Göre Filtreler ayarından okuyarak tek gerçeklik kullanır.
-    setAdminChatFilters(readChatFilterRuntime());
 
     const loadCatalog = async () => {
       try {
@@ -718,10 +592,13 @@ export default function Chat() {
     setImageGenerating(true);
 
     try {
-      const result: ImageResponse = await generateImageWorker({
-        prompt,
-        modelId: selectedImageModel.id,
-        clientRequestId: `image_${Date.now()}`,
+      const result = await fetchApiJson<ImageResponse>('/api/ai/image', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt,
+          modelId: selectedImageModel.id,
+          clientRequestId: `image_${Date.now()}`,
+        }),
       });
 
       setLastAssistantText('Görsel üretimi tamamlandı.');
@@ -761,7 +638,7 @@ export default function Chat() {
       id: createMessageId('user'),
       role: 'user',
       label: 'Kullanıcı sorusu',
-      content: trimmed,
+      content: value,
       kind: 'text',
     };
 
@@ -1623,13 +1500,6 @@ export default function Chat() {
                   open={showModelPicker}
                   models={chatModels}
                   selectedModelId={selectedModel?.modelId}
-                  search={modelSearch}
-                  onSearchChange={setModelSearch}
-                  sort={modelSort}
-                  onSortChange={setModelSort}
-                  filterMode={modelFilterMode}
-                  onFilterModeChange={setModelFilterMode}
-                  adminFilters={adminChatFilters}
                   onSelect={handleSelectModel}
                 />
               </div>
