@@ -64,6 +64,7 @@ import AdminPayments from './pages/Admin/AdminPayments';
 import AdminPricing from './pages/Admin/AdminPricing';
 import AdminWorkersSec from './pages/Admin/admin_workers_sec';
 import SayfayaGoreFiltrelerYonetimi from './pages/Admin/Sayfaya_Gore_Filtreler';
+import SayfaYonetimiPage from './pages/Admin/sayfa-yonetimi';
 
 export default function App() {
   return (
