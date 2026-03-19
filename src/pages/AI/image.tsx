@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-const ANO_BASE_URL = "https://turk.puter.site/workers/all/ano.js";
-const BABO_BASE_URL = "https://turk.puter.site/workers/all/babo.js";
-const POLL_MS = 2e3;
-const MAX_ANO_PROMPT = 2e3;
+
+const DEFAULT_ANO_URL = "https://turk.puter.site/workers/all/ano.js";
+const DEFAULT_BABO_URL = "https://turk.puter.site/workers/all/babo.js";
+const POLL_MS = 2000;
+const MAX_ANO_PROMPT = 2000;
 const MAX_BABO_PROMPT = 2500;
-const DEFAULT_BABO_TIMEOUT_MS = 6e4;
 const QUALITY_OPTIONS = ["low", "medium", "high"];
 const RATIO_OPTIONS = [
   { key: "1:1", label: "1:1", width: 1024, height: 1024 },
@@ -12,63 +12,53 @@ const RATIO_OPTIONS = [
   { key: "9:16", label: "9:16", width: 900, height: 1600 },
   { key: "4:5", label: "4:5", width: 1200, height: 1500 }
 ];
-const DEFAULT_PROVIDER_OPTIONS = ["", "openai-image-generation", "together", "gemini", "xai"];
 const QUICK_PROMPTS = [
-  "Sisli \u0130stanbul gecesi, \u0131slak ta\u015F sokaklar, neon yans\u0131malar, sinematik \u0131\u015F\u0131k, ger\xE7ek\xE7i detay.",
-  "Premium \xFCr\xFCn \xE7ekimi, siyah arka plan, yumu\u015Fak st\xFCdyo \u0131\u015F\u0131\u011F\u0131, l\xFCks reklam esteti\u011Fi.",
-  "Anime karakter, dinamik poz, g\xFC\xE7l\xFC kontrast, ayr\u0131nt\u0131l\u0131 kost\xFCm, poster kalitesi."
+  "Sisli İstanbul gecesi, ıslak taş sokaklar, neon yansımalar, sinematik ışık, gerçekçi detay.",
+  "Premium ürün çekimi, siyah arka plan, yumuşak stüdyo ışığı, lüks reklam estetiği.",
+  "Anime karakter, dinamik poz, güçlü kontrast, ayrıntılı kostüm, poster kalitesi."
 ];
-function buildUrl(base, path) {
-  return `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+
+function buildUrl(base: string, path: string) {
+  const safeBase = String(base || "").trim().replace(/\/$/, "");
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  return `${safeBase}${safePath}`;
 }
-function getPuterWorkersExec() {
-  if (typeof window === "undefined") return null;
-  const hostWindow = window as any;
-  const puterApi = hostWindow;
-  const candidate = puterApi?.puter?.workers?.exec;
-  return typeof candidate === "function" ? candidate.bind(puterApi.puter.workers) : null;
-}
-async function executeWorkerRequest(base, path, init) {
-  const targetUrl = buildUrl(base, path);
-  const workersExec = getPuterWorkersExec();
-  if (workersExec) {
-    return workersExec(targetUrl, init);
-  }
-  return fetch(targetUrl, init);
-}
-function safeText(value, fallback = "") {
+
+function safeText(value: unknown, fallback = "") {
   const text = String(value ?? "").trim();
   return text || fallback;
 }
-function safeNumber(value, fallback = 0) {
+
+function safeNumber(value: unknown, fallback = 0) {
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
 }
-function ensureArray(value) {
-  return Array.isArray(value) ? value : [];
+
+function ensureArray<T = unknown>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
-function formatDate(value) {
+
+function formatDate(value: unknown) {
   if (!value) return "-";
   try {
-    return new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+    return new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" }).format(new Date(String(value)));
   } catch {
-    return value;
+    return String(value);
   }
 }
-function prettyJson(value) {
+
+function prettyJson(value: unknown) {
   try {
     return JSON.stringify(value, null, 2);
   } catch {
-    try {
-      return String(value ?? "");
-    } catch {
-      return "";
-    }
+    return String(value ?? "");
   }
 }
-function randomId(prefix) {
+
+function randomId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
+
 function getClientId() {
   if (typeof window === "undefined") return "image-tsx";
   try {
@@ -81,291 +71,251 @@ function getClientId() {
     return randomId("imgui");
   }
 }
-function ratioFromSize(width, height) {
-  const label = `${Math.max(1, width)}:${Math.max(1, height)}`;
+
+function ratioFromSize(width: number, height: number) {
   const exact = RATIO_OPTIONS.find((item) => item.width === width && item.height === height);
-  if (exact) return exact.key;
-  if (label === "1024:1024") return "1:1";
-  return "1:1";
+  return exact?.key || "1:1";
 }
-function ratioLabel(ratio) {
-  return ratio;
+
+function resolveSizeFromRatio(ratio: string) {
+  return RATIO_OPTIONS.find((item) => item.key === ratio) || RATIO_OPTIONS[0];
 }
-function resolveSizeFromRatio(ratio) {
-  const found = RATIO_OPTIONS.find((item) => item.key === ratio) || RATIO_OPTIONS[0];
-  return { width: found.width, height: found.height };
-}
-function isHttpImage(value) {
+
+function isHttpAsset(value: unknown) {
   if (typeof value !== "string") return false;
   const text = value.trim();
   return /^https?:\/\//i.test(text) || text.startsWith("data:image/") || text.startsWith("blob:");
 }
-function collectImagesDeep(value, collector = /* @__PURE__ */ new Set()) {
-  if (isHttpImage(value)) {
-    collector.add(value);
+
+function collectImagesDeep(value: unknown, collector = new Set<string>()) {
+  if (isHttpAsset(value)) {
+    collector.add(String(value));
     return [...collector];
   }
+
   if (Array.isArray(value)) {
     value.forEach((item) => collectImagesDeep(item, collector));
     return [...collector];
   }
+
   if (value && typeof value === "object") {
-    const record = value;
+    const record = value as Record<string, unknown>;
     ["url", "src", "image_url"].forEach((key) => {
-      if (isHttpImage(record[key])) collector.add(record[key]);
+      if (isHttpAsset(record[key])) collector.add(String(record[key]));
     });
-    ["images", "gorseller", "parcaliSonuclar", "cikti", "sonuc", "ham"].forEach((key) => {
+    ["urls", "images", "gorseller", "sonuc", "ham", "cikti", "result"].forEach((key) => {
       if (record[key] != null) collectImagesDeep(record[key], collector);
     });
   }
+
   return [...collector];
 }
-function healthToneFromStatus(status, score) {
+
+function healthToneFromStatus(status: unknown, score?: number | null) {
   const text = safeText(status).toLowerCase();
   if (typeof score === "number") {
     if (score >= 85) return "ok";
     if (score >= 60) return "warn";
     return "bad";
   }
-  if (text === "hazir" || text === "ok" || text === "iyi") return "ok";
-  if (text === "uyari" || text === "izlenmeli") return "warn";
+  if (["hazir", "ok", "iyi"].includes(text)) return "ok";
+  if (["uyari", "izlenmeli"].includes(text)) return "warn";
   if (text) return "bad";
   return "idle";
 }
-function toneText(tone) {
-  if (tone === "ok") return "\xC7evrimi\xE7i";
-  if (tone === "warn") return "Uyar\u0131";
+
+function toneText(tone: string) {
+  if (tone === "ok") return "Çevrimiçi";
+  if (tone === "warn") return "Uyarı";
   if (tone === "bad") return "Sorun";
   return "Kontrol ediliyor";
 }
-function runStatusText(status) {
+
+function runStatusText(status: unknown) {
   const value = safeText(status).toLowerCase();
-  if (["tamamlandi", "completed"].includes(value)) return "Tamamland\u0131";
-  if (["hazirlaniyor"].includes(value)) return "Haz\u0131rlan\u0131yor";
-  if (["isleniyor", "running", "processing"].includes(value)) return "\u0130\u015Fleniyor";
+  if (["tamamlandi", "completed"].includes(value)) return "Tamamlandı";
+  if (["hazirlaniyor"].includes(value)) return "Hazırlanıyor";
+  if (["isleniyor", "running", "processing"].includes(value)) return "İşleniyor";
   if (["yeniden_denemede"].includes(value)) return "Yeniden deneniyor";
-  if (["basarisiz", "failed"].includes(value)) return "Ba\u015Far\u0131s\u0131z";
-  if (["duraklatildi", "cancelled"].includes(value)) return "Duraklat\u0131ld\u0131";
-  if (["queued", "kuyrukta"].includes(value)) return "S\u0131rada";
+  if (["basarisiz", "failed"].includes(value)) return "Başarısız";
+  if (["duraklatildi", "cancelled"].includes(value)) return "Duraklatıldı";
+  if (["queued", "kuyrukta"].includes(value)) return "Sırada";
   return safeText(status, "Bilinmiyor");
 }
-function isBaboTerminal(status) {
+
+function isBaboTerminal(status: unknown) {
   const value = safeText(status).toLowerCase();
   return ["tamamlandi", "basarisiz", "duraklatildi", "completed", "failed", "cancelled"].includes(value);
 }
-function extractErrorMessage(error, fallback) {
-  if (error instanceof DOMException && error.name === "AbortError") return "\u0130stek zaman a\u015F\u0131m\u0131na u\u011Frad\u0131.";
-  if (error instanceof Error) return safeText(error.message, fallback);
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "İstek zaman aşımına uğradı.";
+  }
+  if (error instanceof Error) {
+    return safeText(error.message, fallback);
+  }
   return fallback;
 }
-async function parseJsonResponse(response) {
+
+async function parseJsonResponse(response: Response) {
   const text = await response.text();
-  const contentType = response.headers.get("content-type") || "";
+  const contentType = (response.headers.get("content-type") || "").toLowerCase();
+  const preview = text.slice(0, 180).replace(/\s+/g, " ").trim();
+
   if (/<!doctype|<html/i.test(text)) {
-    throw new Error("Beklenmeyen HTML yan\u0131t\u0131 al\u0131nd\u0131. Worker URL veya endpoint y\xF6nlendirmesini kontrol et.");
+    throw new Error(`Beklenmeyen HTML yanıtı alındı. Worker URL veya endpoint yönlendirmesini kontrol et. Önizleme: ${preview || "(boş)"}`);
   }
-  if (!contentType.toLowerCase().includes("application/json")) {
-    const preview = text.replace(/\s+/g, " ").trim().slice(0, 140);
-    throw new Error(`JSON beklenirken farklı içerik tipi döndü. Content-Type: ${contentType || "bilinmiyor"}. Önizleme: ${preview || "boş"}`);
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(`JSON beklenirken farklı içerik tipi döndü: ${contentType || "(yok)"}. Önizleme: ${preview || "(boş)"}`);
   }
+
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Worker ge\xE7erli JSON d\xF6nd\xFCrmedi.");
+    throw new Error(`Worker geçerli JSON döndürmedi. Önizleme: ${preview || "(boş)"}`);
   }
 }
-async function requestAno(path, init) {
+
+async function requestAno(baseUrl: string, path: string, init?: RequestInit) {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 45e3);
+  const timer = window.setTimeout(() => controller.abort(), 45000);
   try {
-    const response = await executeWorkerRequest(ANO_BASE_URL, path, {
+    const response = await fetch(buildUrl(baseUrl, path), {
       ...init,
       signal: controller.signal,
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        ...init?.headers || {}
+        ...(init?.headers || {})
       }
     });
     const payload = await parseJsonResponse(response);
     if (!response.ok || payload.ok === false) {
-      throw new Error(safeText(payload.hata, `ANO iste\u011Fi ba\u015Far\u0131s\u0131z oldu (${response.status}).`));
+      throw new Error(safeText(payload.hata, `ANO isteği başarısız oldu (${response.status}).`));
     }
     return payload;
   } finally {
     window.clearTimeout(timer);
   }
 }
-async function requestBabo(path, init) {
+
+async function requestBabo(baseUrl: string, path: string, init?: RequestInit, timeoutMs = 90000) {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 9e4);
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await executeWorkerRequest(BABO_BASE_URL, path, {
+    const response = await fetch(buildUrl(baseUrl, path), {
       ...init,
       signal: controller.signal,
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        ...init?.headers || {}
+        ...(init?.headers || {})
       }
     });
     const payload = await parseJsonResponse(response);
     if (!response.ok || payload.ok === false) {
-      throw new Error(safeText(payload.hata?.mesaj, `BABO iste\u011Fi ba\u015Far\u0131s\u0131z oldu (${response.status}).`));
+      throw new Error(safeText(payload.hata?.mesaj, `BABO isteği başarısız oldu (${response.status}).`));
     }
     return payload;
   } finally {
     window.clearTimeout(timer);
   }
 }
-function ImagePage() {
+
+type CatalogModel = {
+  puterId?: string;
+  id: string;
+  name: string;
+  provider?: string;
+  aliases?: string[];
+  modalities?: { input?: string[]; output?: string[] };
+  context?: number | null;
+  max_tokens?: number | null;
+  tool_call?: boolean;
+  open_weights?: boolean;
+  knowledge?: string;
+  release_date?: string;
+  costs_currency?: string;
+  input_cost_key?: string;
+  output_cost_key?: string;
+  costs?: Record<string, unknown>;
+};
+
+type ResultState = {
+  source: "ANO" | "BABO";
+  serviceType: "TXT2IMG" | "IMG2IMG";
+  status: string;
+  message: string;
+  images: string[];
+  model: string;
+  provider: string;
+  prompt: string;
+  fallbackUsed?: boolean;
+  raw?: unknown;
+};
+
+export default function ImagePage() {
   const clientId = useMemo(() => getClientId(), []);
-  const pollRef = useRef(null);
-  const [workerMode, setWorkerMode] = useState("ano");
+  const pollRef = useRef<number | null>(null);
+
+  const [anoBaseUrl, setAnoBaseUrl] = useState(DEFAULT_ANO_URL);
+  const [baboBaseUrl, setBaboBaseUrl] = useState(DEFAULT_BABO_URL);
+  const [workerMode, setWorkerMode] = useState<"ano" | "babo">("ano");
   const [autoFallback, setAutoFallback] = useState(true);
+  const [operation, setOperation] = useState<"TXT2IMG" | "IMG2IMG">("TXT2IMG");
   const [providerFilter, setProviderFilter] = useState("");
   const [modelSearch, setModelSearch] = useState("");
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState<CatalogModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [style, setStyle] = useState("");
   const [referenceImageUrl, setReferenceImageUrl] = useState("");
+  const [maskImageUrl, setMaskImageUrl] = useState("");
   const [quality, setQuality] = useState("medium");
   const [ratio, setRatio] = useState("1:1");
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
   const [count, setCount] = useState(1);
   const [testMode, setTestMode] = useState(false);
-  const [baboTimeoutMs, setBaboTimeoutMs] = useState(DEFAULT_BABO_TIMEOUT_MS);
+  const [timeoutMs, setTimeoutMs] = useState(60000);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [anoHealth, setAnoHealth] = useState(null);
-  const [baboHealth, setBaboHealth] = useState(null);
-  const [baboPanel, setBaboPanel] = useState(null);
-  const [result, setResult] = useState(null);
-  const [localHistory, setLocalHistory] = useState([]);
+  const [anoHealth, setAnoHealth] = useState<Record<string, unknown> | null>(null);
+  const [baboHealth, setBaboHealth] = useState<Record<string, unknown> | null>(null);
+  const [baboPanel, setBaboPanel] = useState<Record<string, unknown> | null>(null);
+  const [anoServices, setAnoServices] = useState<any[]>([]);
+  const [result, setResult] = useState<ResultState | null>(null);
+  const [localHistory, setLocalHistory] = useState<any[]>([]);
   const [baboJobId, setBaboJobId] = useState("");
-  const [baboJobStatus, setBaboJobStatus] = useState(null);
-  const [baboHistory, setBaboHistory] = useState([]);
-  const [baboArchive, setBaboArchive] = useState(null);
-  const [baboRunPayload, setBaboRunPayload] = useState(null);
+  const [baboJobStatus, setBaboJobStatus] = useState<Record<string, unknown> | null>(null);
+  const [baboHistory, setBaboHistory] = useState<any[]>([]);
+  const [baboArchive, setBaboArchive] = useState<Record<string, unknown> | null>(null);
+  const [baboRunPayload, setBaboRunPayload] = useState<Record<string, unknown> | null>(null);
+  const [baboDiagnosis, setBaboDiagnosis] = useState<Record<string, unknown> | null>(null);
+
   const selectedModel = useMemo(
-    () => models.find((item) => item.kimlik === selectedModelId) || null,
+    () => models.find((item) => item.id === selectedModelId) || null,
     [models, selectedModelId]
   );
+
   const providerOptions = useMemo(() => {
-    const dynamic = Array.from(new Set(models.map((item) => safeText(item.saglayici)).filter(Boolean)));
-    return Array.from(/* @__PURE__ */ new Set([...DEFAULT_PROVIDER_OPTIONS, ...dynamic]));
+    return Array.from(new Set(models.map((item) => safeText(item.provider)).filter(Boolean)));
   }, [models]);
-  const anoTone = healthToneFromStatus(anoHealth?.durum ?? anoHealth?.servis ?? null, null);
-  const baboTone = healthToneFromStatus(baboHealth?.durum ?? null, baboHealth?.saglik?.saglikPuani ?? null);
-  const panelTone = healthToneFromStatus(baboPanel?.durum ?? null, baboPanel?.genelSaglikPuani ?? null);
+
+  const anoTone = healthToneFromStatus(anoHealth?.durum, null);
+  const baboTone = healthToneFromStatus(baboHealth?.durum, safeNumber(baboHealth?.saglikPuani, NaN));
+  const panelTone = healthToneFromStatus(baboPanel?.durum, safeNumber(baboPanel?.genelSaglikPuani, NaN));
+
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
       window.clearTimeout(pollRef.current);
       pollRef.current = null;
     }
   }, []);
-  const loadWorkerHealth = useCallback(async () => {
-    try {
-      const [anoDurum, baboDurum, panel] = await Promise.all([
-        requestAno("/api/durum"),
-        requestBabo("/api/durum"),
-        requestBabo("/api/panel")
-      ]);
-      setAnoHealth(anoDurum.veri || null);
-      setBaboHealth(baboDurum.veri || null);
-      setBaboPanel(panel.veri || null);
-    } catch (loadError) {
-      console.error(loadError);
-    }
-  }, []);
-  const loadModels = useCallback(async () => {
-    setModelsLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (providerFilter) params.set("saglayici", providerFilter);
-      if (modelSearch.trim()) params.set("ara", modelSearch.trim());
-      params.set("sinir", "200");
-      const envelope = await requestAno(`/api/modeller?${params.toString()}`);
-      const nextModels = ensureArray(envelope.veri?.modeller).filter((item) => safeText(item.kimlik) && safeText(item.ad));
-      setModels(nextModels);
-      setSelectedModelId((current) => current && nextModels.some((item) => item.kimlik === current) ? current : safeText(nextModels[0]?.kimlik));
-    } catch (loadError) {
-      setError(extractErrorMessage(loadError, "Model listesi al\u0131namad\u0131."));
-    } finally {
-      setModelsLoading(false);
-    }
-  }, [modelSearch, providerFilter]);
-  const loadBaboArtifacts = useCallback(async (jobId) => {
-    if (!jobId) return;
-    try {
-      const [statusEnvelope, historyEnvelope, archiveEnvelope, panelEnvelope] = await Promise.all([
-        requestBabo(`/api/is/${encodeURIComponent(jobId)}`),
-        requestBabo(`/api/is/${encodeURIComponent(jobId)}/gecmis`),
-        requestBabo(`/api/is/${encodeURIComponent(jobId)}/arsiv`),
-        requestBabo("/api/panel")
-      ]);
-      setBaboJobStatus(statusEnvelope.veri || null);
-      setBaboHistory(ensureArray(historyEnvelope.veri?.gecmis));
-      setBaboArchive(archiveEnvelope.veri?.arsiv || null);
-      setBaboPanel(panelEnvelope.veri || null);
-      const archiveImages = collectImagesDeep(archiveEnvelope.veri?.arsiv?.sonuc);
-      if (archiveImages.length) {
-        setResult((current) => ({
-          source: "BABO",
-          status: runStatusText(statusEnvelope.veri?.durum),
-          message: safeText(archiveEnvelope.veri?.arsiv?.sonMesaj, current?.message || "BABO i\u015Fi g\xFCncellendi."),
-          images: archiveImages,
-          model: safeText(baboRunPayload?.etkinAyar?.model, current?.model || safeText(selectedModel?.ad, "-")),
-          provider: safeText(baboRunPayload?.etkinAyar?.saglayici, current?.provider || safeText(selectedModel?.saglayici, "-")),
-          prompt,
-          fallbackUsed: current?.fallbackUsed,
-          raw: archiveEnvelope.veri?.arsiv,
-          meta: current?.meta || null,
-          settings: baboRunPayload?.etkinAyar || current?.settings || null,
-          orchestration: baboRunPayload?.orkestra || current?.orchestration || null,
-          correlationId: current?.correlationId || null,
-          timeoutMs: current?.timeoutMs || null,
-          job: statusEnvelope.veri || current?.job || null,
-          panel: panelEnvelope.veri || current?.panel || null
-        }));
-      }
-    } catch (artifactError) {
-      console.error(artifactError);
-    }
-  }, [baboRunPayload, prompt, selectedModel]);
-  const pollBaboJob = useCallback(async (jobId) => {
-    stopPolling();
-    if (!jobId) return;
-    try {
-      const envelope = await requestBabo(`/api/is/${encodeURIComponent(jobId)}/izle`);
-      const payload = envelope.veri || null;
-      setBaboJobStatus(payload);
-      setResult((current) => {
-        if (!current || current.source !== "BABO") return current;
-        return {
-          ...current,
-          status: runStatusText(payload?.durum),
-          message: safeText(payload?.aktifAdim, current.message || "BABO i\u015Fi s\xFCr\xFCyor."),
-          job: payload || current.job || null
-        };
-      });
-      if (!payload || isBaboTerminal(payload.durum) || safeNumber(payload.yuzde, 0) >= 100) {
-        await loadBaboArtifacts(jobId);
-        setSubmitting(false);
-        return;
-      }
-      pollRef.current = window.setTimeout(() => {
-        void pollBaboJob(jobId);
-      }, POLL_MS);
-    } catch (pollError) {
-      setSubmitting(false);
-      setError(extractErrorMessage(pollError, "BABO i\u015F durumu al\u0131namad\u0131."));
-    }
-  }, [loadBaboArtifacts, stopPolling]);
+
   const resetResultState = useCallback(() => {
     stopPolling();
     setResult(null);
@@ -374,26 +324,164 @@ function ImagePage() {
     setBaboHistory([]);
     setBaboArchive(null);
     setBaboRunPayload(null);
+    setBaboDiagnosis(null);
   }, [stopPolling]);
-  useEffect(() => {
-    void loadWorkerHealth();
-  }, [loadWorkerHealth]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadModels();
-    }, 240);
-    return () => window.clearTimeout(timer);
-  }, [loadModels]);
-  useEffect(() => () => stopPolling(), [stopPolling]);
-  const pushLocalHistory = useCallback((entry) => {
+
+  const pushLocalHistory = useCallback((entry: any) => {
     setLocalHistory((current) => [entry, ...current].slice(0, 12));
   }, []);
-  const anoGenerate = useCallback(async () => {
-    if (!selectedModel) throw new Error("Model se\xE7melisin.");
+
+  const loadWorkerHealth = useCallback(async () => {
+    try {
+      const [ano, babo, panel, services] = await Promise.all([
+        requestAno(anoBaseUrl, "/api/durum"),
+        requestBabo(baboBaseUrl, "/api/durum"),
+        requestBabo(baboBaseUrl, "/api/panel"),
+        requestAno(anoBaseUrl, "/api/hizmetler")
+      ]);
+      setAnoHealth((ano.veri as any) || null);
+      setBaboHealth((babo.veri as any) || null);
+      setBaboPanel((panel.veri as any) || null);
+      setAnoServices(ensureArray((services.veri as any)?.hizmetler));
+    } catch (loadError) {
+      console.error(loadError);
+    }
+  }, [anoBaseUrl, baboBaseUrl]);
+
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true);
+    setError("");
+    try {
+      const params = new URLSearchParams();
+      if (providerFilter) params.set("provider", providerFilter);
+      if (modelSearch.trim()) params.set("q", modelSearch.trim());
+      params.set("output", "image");
+      params.set("limit", "500");
+      const envelope = await requestAno(anoBaseUrl, `/api/modeller?${params.toString()}`);
+      const nextModels = ensureArray<CatalogModel>((envelope.veri as any)?.modeller).filter((item) => safeText(item.id) && safeText(item.name));
+      setModels(nextModels);
+      setSelectedModelId((current) => (current && nextModels.some((item) => item.id === current) ? current : safeText(nextModels[0]?.id)));
+    } catch (loadError) {
+      setModels([]);
+      setSelectedModelId("");
+      setError(extractErrorMessage(loadError, "Model listesi alınamadı."));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [anoBaseUrl, modelSearch, providerFilter]);
+
+  const loadBaboArtifacts = useCallback(async (jobId: string) => {
+    if (!jobId) return;
+    try {
+      const [statusEnvelope, historyEnvelope, archiveEnvelope, panelEnvelope] = await Promise.all([
+        requestBabo(baboBaseUrl, `/api/is/${encodeURIComponent(jobId)}`),
+        requestBabo(baboBaseUrl, `/api/is/${encodeURIComponent(jobId)}/gecmis`),
+        requestBabo(baboBaseUrl, `/api/is/${encodeURIComponent(jobId)}/arsiv`),
+        requestBabo(baboBaseUrl, "/api/panel")
+      ]);
+      setBaboJobStatus((statusEnvelope.veri as any) || null);
+      setBaboHistory(ensureArray((historyEnvelope.veri as any)?.gecmis));
+      setBaboArchive(((archiveEnvelope.veri as any)?.arsiv as any) || null);
+      setBaboPanel((panelEnvelope.veri as any) || null);
+
+      const archiveImages = collectImagesDeep((archiveEnvelope.veri as any)?.arsiv?.sonuc);
+      if (archiveImages.length) {
+        setResult((current) => ({
+          source: "BABO",
+          serviceType: operation,
+          status: runStatusText((statusEnvelope.veri as any)?.durum),
+          message: safeText((archiveEnvelope.veri as any)?.arsiv?.sonMesaj, current?.message || "BABO işi güncellendi."),
+          images: archiveImages,
+          model: safeText((baboRunPayload as any)?.etkinAyar?.model, current?.model || safeText(selectedModel?.name, "-")),
+          provider: safeText((baboRunPayload as any)?.etkinAyar?.saglayici, current?.provider || safeText(selectedModel?.provider, "-")),
+          prompt: prompt.trim(),
+          fallbackUsed: current?.fallbackUsed,
+          raw: (archiveEnvelope.veri as any)?.arsiv
+        }));
+      }
+    } catch (artifactError) {
+      console.error(artifactError);
+    }
+  }, [baboBaseUrl, baboRunPayload, operation, prompt, selectedModel]);
+
+  const pollBaboJob = useCallback(async (jobId: string) => {
+    stopPolling();
+    if (!jobId) return;
+
+    try {
+      const envelope = await requestBabo(baboBaseUrl, `/api/is/${encodeURIComponent(jobId)}/izle`);
+      const payload = (envelope.veri as any) || null;
+      setBaboJobStatus(payload);
+      setResult((current) => {
+        if (!current || current.source !== "BABO") return current;
+        return {
+          ...current,
+          status: runStatusText(payload?.durum),
+          message: safeText(payload?.aktifAdim, current.message || "BABO işi sürüyor.")
+        };
+      });
+
+      if (!payload || isBaboTerminal(payload.durum) || safeNumber(payload.yuzde, 0) >= 100) {
+        await loadBaboArtifacts(jobId);
+        setSubmitting(false);
+        return;
+      }
+
+      pollRef.current = window.setTimeout(() => {
+        void pollBaboJob(jobId);
+      }, POLL_MS);
+    } catch (pollError) {
+      setSubmitting(false);
+      setError(extractErrorMessage(pollError, "BABO iş durumu alınamadı."));
+    }
+  }, [baboBaseUrl, loadBaboArtifacts, stopPolling]);
+
+  const generateAno = useCallback(async () => {
+    if (!selectedModel) throw new Error("Model seçmelisin.");
+
+    if (operation === "IMG2IMG") {
+      const sourceImage = safeText(referenceImageUrl);
+      if (!sourceImage) throw new Error("IMG2IMG için referans görsel zorunlu.");
+      const payload = {
+        prompt: prompt.trim(),
+        sourceImage,
+        maskImage: safeText(maskImageUrl),
+        model: selectedModel.id,
+        provider: safeText(selectedModel.provider),
+        kalite: quality,
+        adet: count,
+        n: count,
+        testModu: testMode,
+        test_mode: testMode,
+        istemciKimligi: clientId
+      };
+      const envelope = await requestAno(anoBaseUrl, "/api/gorsel/duzenle", {
+        method: "POST",
+        headers: { "X-Istemci-Kimligi": clientId },
+        body: JSON.stringify(payload)
+      });
+      const images = collectImagesDeep((envelope.veri as any)?.ham || (envelope.veri as any)?.urls || (envelope.veri as any)?.url || envelope.veri);
+      if (!images.length) throw new Error("ANO IMG2IMG görsel URL döndürmedi.");
+      const nextResult: ResultState = {
+        source: "ANO",
+        serviceType: "IMG2IMG",
+        status: "Tamamlandı",
+        message: "ANO doğrudan IMG2IMG üretimi tamamladı.",
+        images,
+        model: safeText((envelope.veri as any)?.model, selectedModel.name),
+        provider: safeText((envelope.veri as any)?.provider, selectedModel.provider || "-"),
+        prompt: prompt.trim(),
+        raw: envelope.veri
+      };
+      setResult(nextResult);
+      pushLocalHistory({ id: randomId("run"), at: new Date().toISOString(), ...nextResult });
+      return;
+    }
+
     const payload = {
       prompt: prompt.trim(),
-      model: selectedModel.kimlik,
-      modelId: selectedModel.kimlik,
+      model: selectedModel.id,
+      provider: safeText(selectedModel.provider),
       kalite: quality,
       genislik: width,
       yukseklik: height,
@@ -403,79 +491,81 @@ function ImagePage() {
       test_mode: testMode,
       istemciKimligi: clientId
     };
-    const envelope = await requestAno("/api/gorsel", {
+    const envelope = await requestAno(anoBaseUrl, "/api/gorsel", {
       method: "POST",
-      headers: {
-        "X-Istemci-Kimligi": clientId
-      },
+      headers: { "X-Istemci-Kimligi": clientId },
       body: JSON.stringify(payload)
     });
-    const imageUrl = safeText(envelope.veri?.url);
-    const images = imageUrl ? [imageUrl] : collectImagesDeep(envelope.veri?.ham);
-    if (!images.length) {
-      throw new Error("ANO g\xF6rsel URL d\xF6nd\xFCrmedi.");
-    }
-    const nextResult = {
+    const imageUrl = safeText((envelope.veri as any)?.url);
+    const images = imageUrl ? [imageUrl] : collectImagesDeep((envelope.veri as any)?.ham);
+    if (!images.length) throw new Error("ANO görsel URL döndürmedi.");
+
+    const nextResult: ResultState = {
       source: "ANO",
-      status: "Tamamland\u0131",
-      message: "ANO do\u011Frudan \xFCretimi tamamlad\u0131.",
+      serviceType: "TXT2IMG",
+      status: "Tamamlandı",
+      message: "ANO doğrudan TXT2IMG üretimi tamamladı.",
       images,
-      model: safeText(envelope.veri?.model, selectedModel.ad),
-      provider: safeText(selectedModel.saglayici, "-"),
+      model: safeText((envelope.veri as any)?.model, selectedModel.name),
+      provider: safeText((envelope.veri as any)?.provider, selectedModel.provider || "-"),
       prompt: prompt.trim(),
-      raw: envelope.veri,
-      meta: null,
-      settings: null,
-      orchestration: null,
-      correlationId: null,
-      timeoutMs: null,
-      job: null
+      raw: envelope.veri
     };
     setResult(nextResult);
-    pushLocalHistory({
-      id: randomId("run"),
-      source: "ANO",
-      status: nextResult.status,
-      prompt: nextResult.prompt,
-      images: nextResult.images,
-      model: nextResult.model,
-      provider: nextResult.provider,
-      at: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  }, [clientId, count, prompt, pushLocalHistory, quality, selectedModel, testMode, width, height]);
-  const baboGenerate = useCallback(async (fallbackUsed = false) => {
-    if (!selectedModel) throw new Error("Model se\xE7melisin.");
+    pushLocalHistory({ id: randomId("run"), at: new Date().toISOString(), ...nextResult });
+  }, [anoBaseUrl, clientId, count, maskImageUrl, operation, prompt, pushLocalHistory, quality, referenceImageUrl, selectedModel, testMode, width, height]);
+
+  const generateBabo = useCallback(async (fallbackUsed = false) => {
+    if (!selectedModel) throw new Error("Model seçmelisin.");
     const correlationId = randomId("corr");
-    const body = {
-      serviceType: "IMG",
-      hizmetTuru: "IMG",
+    const serviceType = operation;
+    const body: Record<string, unknown> = {
+      serviceType,
+      hizmetTuru: serviceType,
       prompt: prompt.trim(),
-      model: selectedModel.kimlik,
-      saglayici: safeText(selectedModel.saglayici),
+      model: selectedModel.id,
+      provider: safeText(selectedModel.provider),
+      saglayici: safeText(selectedModel.provider),
       kalite: quality,
-      oran: ratioLabel(ratio),
+      quality,
+      oran: ratio,
+      width,
+      height,
       adet: count,
       n: count,
-      stil: style.trim(),
-      referansGorsel: safeText(referenceImageUrl) || null,
       testModu: testMode,
       test_mode: testMode,
-      timeoutMs: safeNumber(baboTimeoutMs, DEFAULT_BABO_TIMEOUT_MS),
-      kullaniciKimligi: clientId
+      kullaniciKimligi: clientId,
+      istemciKimligi: clientId,
+      timeoutMs
     };
-    const envelope = await requestBabo("/api/calistir", {
+
+    if (operation === "IMG2IMG") {
+      const sourceImage = safeText(referenceImageUrl);
+      if (!sourceImage) throw new Error("BABO IMG2IMG için referans görsel zorunlu.");
+      body.input_image = sourceImage;
+      body.referansGorsel = sourceImage;
+      body.imageUrl = sourceImage;
+      if (safeText(maskImageUrl)) {
+        body.mask_image_url = safeText(maskImageUrl);
+        body.maskImageUrl = safeText(maskImageUrl);
+      }
+    }
+
+    const envelope = await requestBabo(baboBaseUrl, "/api/calistir", {
       method: "POST",
       headers: {
         "X-Istemci-Kimligi": clientId,
         "X-Korelasyon-Anahtari": correlationId,
-        "X-Saglayici": safeText(selectedModel.saglayici),
+        "X-Saglayici": safeText(selectedModel.provider),
         "X-Kalite-Seviyesi": quality,
-        "X-Timeout-Ms": String(safeNumber(baboTimeoutMs, DEFAULT_BABO_TIMEOUT_MS))
+        "X-Timeout-Ms": String(timeoutMs)
       },
       body: JSON.stringify(body)
-    });
-    const payload = envelope.veri || null;
-    const nextJobId = safeText(payload?.baglam?.isKimligi || envelope.meta?.isKimligi);
+    }, Math.max(90000, timeoutMs + 15000));
+
+    const payload = (envelope.veri as any) || null;
+    const nextJobId = safeText(payload?.baglam?.isKimligi || (envelope.meta as any)?.isKimligi);
     const images = collectImagesDeep(payload?.sonuc);
     setBaboRunPayload(payload);
     setBaboJobId(nextJobId);
@@ -483,36 +573,36 @@ function ImagePage() {
       isKimligi: nextJobId,
       durum: images.length ? "tamamlandi" : "isleniyor",
       yuzde: images.length ? 100 : 20,
-      aktifAdim: images.length ? "tamamland\u0131" : "i\u015Fleniyor",
-      sonGuncelleme: (/* @__PURE__ */ new Date()).toISOString()
+      aktifAdim: images.length ? "tamamlandı" : "işleniyor",
+      sonGuncelleme: new Date().toISOString(),
+      tahminiBitis: null,
+      sonHata: null
     });
+
     setResult({
       source: "BABO",
-      status: images.length ? "Tamamland\u0131" : "\u0130\u015Fleniyor",
-      message: images.length ? "BABO orkestra \xFCretimi tamamlad\u0131." : "BABO i\u015Fi ba\u015Flat\u0131ld\u0131 ve izleniyor.",
+      serviceType,
+      status: images.length ? "Tamamlandı" : "İşleniyor",
+      message: images.length ? `BABO ${serviceType} orkestrasyonunu tamamladı.` : "BABO işi başlatıldı ve izleniyor.",
       images,
-      model: safeText(payload?.etkinAyar?.model, selectedModel.ad),
-      provider: safeText(payload?.etkinAyar?.saglayici, selectedModel.saglayici),
+      model: safeText(payload?.etkinAyar?.model, selectedModel.name),
+      provider: safeText(payload?.etkinAyar?.saglayici, selectedModel.provider || "-"),
       prompt: prompt.trim(),
       fallbackUsed,
-      raw: payload,
-      meta: envelope.meta || null,
-      settings: payload?.etkinAyar || null,
-      orchestration: payload?.orkestra || null,
-      correlationId: correlationId,
-      timeoutMs: safeNumber(baboTimeoutMs, DEFAULT_BABO_TIMEOUT_MS),
-      job: payload?.baglam || null
+      raw: payload
     });
+
     if (nextJobId) {
       pushLocalHistory({
         id: nextJobId,
+        at: new Date().toISOString(),
         source: "BABO",
-        status: images.length ? "Tamamland\u0131" : "\u0130\u015Fleniyor",
+        serviceType,
+        status: images.length ? "Tamamlandı" : "İşleniyor",
         prompt: prompt.trim(),
         images,
-        model: safeText(payload?.etkinAyar?.model, selectedModel.ad),
-        provider: safeText(payload?.etkinAyar?.saglayici, selectedModel.saglayici),
-        at: (/* @__PURE__ */ new Date()).toISOString(),
+        model: safeText(payload?.etkinAyar?.model, selectedModel.name),
+        provider: safeText(payload?.etkinAyar?.saglayici, selectedModel.provider || "-"),
         fallbackUsed
       });
       await loadBaboArtifacts(nextJobId);
@@ -520,67 +610,118 @@ function ImagePage() {
         await pollBaboJob(nextJobId);
       }
     }
-  }, [baboTimeoutMs, clientId, count, loadBaboArtifacts, pollBaboJob, prompt, pushLocalHistory, quality, ratio, referenceImageUrl, selectedModel, style, testMode]);
+  }, [baboBaseUrl, clientId, count, loadBaboArtifacts, maskImageUrl, operation, pollBaboJob, prompt, pushLocalHistory, quality, ratio, referenceImageUrl, selectedModel, testMode, timeoutMs, width, height]);
+
+  const runDiagnosis = useCallback(async () => {
+    if (!selectedModel) {
+      setError("Teşhis için önce model seçmelisin.");
+      return;
+    }
+    setError("");
+    try {
+      const serviceType = operation;
+      const payload: Record<string, unknown> = {
+        serviceType,
+        hizmetTuru: serviceType,
+        prompt: prompt.trim() || "teşhis",
+        model: selectedModel.id,
+        provider: safeText(selectedModel.provider),
+        kalite: quality,
+        oran: ratio,
+        width,
+        height,
+        adet: count,
+        n: count,
+        timeoutMs,
+        kullaniciKimligi: clientId
+      };
+      if (operation === "IMG2IMG" && safeText(referenceImageUrl)) {
+        payload.input_image = safeText(referenceImageUrl);
+      }
+      const envelope = await requestBabo(baboBaseUrl, "/api/teshis", {
+        method: "POST",
+        headers: {
+          "X-Istemci-Kimligi": clientId,
+          "X-Saglayici": safeText(selectedModel.provider),
+          "X-Kalite-Seviyesi": quality,
+          "X-Timeout-Ms": String(timeoutMs)
+        },
+        body: JSON.stringify(payload)
+      });
+      setBaboDiagnosis((envelope.veri as any) || null);
+      setNotice("BABO teşhis raporu yenilendi.");
+    } catch (diagError) {
+      setError(extractErrorMessage(diagError, "BABO teşhis raporu alınamadı."));
+    }
+  }, [baboBaseUrl, clientId, count, operation, prompt, quality, ratio, referenceImageUrl, selectedModel, timeoutMs, width, height]);
+
   const handleGenerate = useCallback(async () => {
     const trimmedPrompt = prompt.trim();
     setError("");
     setNotice("");
+
     if (!trimmedPrompt) {
       setError("Prompt zorunlu.");
       return;
     }
+
+    if (operation === "IMG2IMG" && !safeText(referenceImageUrl)) {
+      setError("IMG2IMG için referans görsel URL zorunlu.");
+      return;
+    }
+
     if (trimmedPrompt.length > MAX_BABO_PROMPT) {
-      setError(`Prompt ${MAX_BABO_PROMPT} karakteri a\u015Famaz.`);
+      setError(`Prompt ${MAX_BABO_PROMPT} karakteri aşamaz.`);
       return;
     }
+
     if (!selectedModel) {
-      setError("Model se\xE7melisin.");
+      setError("Model seçmelisin.");
       return;
     }
+
     resetResultState();
     setSubmitting(true);
+
     try {
       if (workerMode === "ano") {
         try {
           if (trimmedPrompt.length > MAX_ANO_PROMPT) {
-            throw new Error(`ANO prompt s\u0131n\u0131r\u0131 ${MAX_ANO_PROMPT} karakter. BABO fallback kullan\u0131lacak.`);
+            throw new Error(`ANO prompt sınırı ${MAX_ANO_PROMPT} karakter. BABO fallback kullanılacak.`);
           }
-          await anoGenerate();
-          setNotice("Birincil worker ANO kullan\u0131ld\u0131.");
-        } catch (amgError) {
-          if (!autoFallback) throw amgError;
-          setNotice(`ANO hata verdi, BABO fallback devreye al\u0131nd\u0131: ${extractErrorMessage(amgError, "ANO ba\u015Far\u0131s\u0131z oldu.")}`);
-          await baboGenerate(true);
+          await generateAno();
+          setNotice(`Birincil worker ANO kullanıldı (${operation}).`);
+        } catch (anoError) {
+          if (!autoFallback) throw anoError;
+          setNotice(`ANO hata verdi, BABO fallback devreye alındı: ${extractErrorMessage(anoError, "ANO başarısız oldu.")}`);
+          await generateBabo(true);
         }
       } else {
-        await baboGenerate(false);
-        setNotice("BABO orkestrasyon ak\u0131\u015F\u0131 kullan\u0131ld\u0131.");
+        await generateBabo(false);
+        setNotice(`BABO orkestrasyon akışı kullanıldı (${operation}).`);
       }
       await loadWorkerHealth();
     } catch (generateError) {
-      setError(extractErrorMessage(generateError, "G\xF6rsel \xFCretimi ba\u015Flat\u0131lamad\u0131."));
+      setError(extractErrorMessage(generateError, "Görsel üretimi başlatılamadı."));
     } finally {
       setSubmitting(false);
     }
-  }, [anoGenerate, baboGenerate, autoFallback, loadWorkerHealth, prompt, resetResultState, selectedModel, workerMode]);
-  const loadHistoryRecord = useCallback(async (entry) => {
+  }, [autoFallback, generateAno, generateBabo, loadWorkerHealth, operation, prompt, referenceImageUrl, resetResultState, selectedModel, workerMode]);
+
+  const loadHistoryRecord = useCallback(async (entry: any) => {
     setError("");
     setNotice("");
     setResult({
       source: entry.source,
+      serviceType: entry.serviceType,
       status: entry.status,
-      message: "Ge\xE7mi\u015F kay\u0131t a\xE7\u0131ld\u0131.",
+      message: "Geçmiş kayıt açıldı.",
       images: entry.images,
       model: entry.model,
       provider: entry.provider,
       prompt: entry.prompt,
       fallbackUsed: entry.fallbackUsed,
-      meta: null,
-      settings: null,
-      orchestration: null,
-      correlationId: null,
-      timeoutMs: null,
-      job: null
+      raw: entry.raw
     });
     if (entry.source === "BABO") {
       setBaboJobId(entry.id);
@@ -593,7 +734,31 @@ function ImagePage() {
       setBaboRunPayload(null);
     }
   }, [loadBaboArtifacts]);
-  return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("style", null, `
+
+  useEffect(() => {
+    void loadWorkerHealth();
+  }, [loadWorkerHealth]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadModels();
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [loadModels]);
+
+  useEffect(() => {
+    return () => stopPolling();
+  }, [stopPolling]);
+
+  useEffect(() => {
+    const next = resolveSizeFromRatio(ratio);
+    setWidth(next.width);
+    setHeight(next.height);
+  }, [ratio]);
+
+  return (
+    <>
+      <style>{`
         :root {
           --bg: #f4f6f8;
           --panel: #ffffff;
@@ -675,7 +840,7 @@ function ImagePage() {
         .dot.idle { background: #98a2b3; }
         .grid {
           display: grid;
-          grid-template-columns: 1.1fr 0.9fr;
+          grid-template-columns: 1.08fr 0.92fr;
           gap: 16px;
         }
         .section {
@@ -692,10 +857,7 @@ function ImagePage() {
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 12px;
         }
-        .field {
-          display: grid;
-          gap: 8px;
-        }
+        .field { display: grid; gap: 8px; }
         .field.full { grid-column: 1 / -1; }
         .label {
           font-size: 13px;
@@ -825,10 +987,7 @@ function ImagePage() {
           height: 100%;
           object-fit: cover;
         }
-        .result-meta {
-          display: grid;
-          gap: 10px;
-        }
+        .result-meta { display: grid; gap: 10px; }
         .meta-list { display: grid; gap: 8px; font-size: 14px; color: #475467; }
         .list {
           display: grid;
@@ -849,11 +1008,10 @@ function ImagePage() {
           border: none;
           text-align: left;
           cursor: pointer;
+          background: transparent;
+          padding: 0;
         }
-        .tiny {
-          font-size: 12px;
-          color: #667085;
-        }
+        .tiny { font-size: 12px; color: #667085; }
         .mono {
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
           word-break: break-word;
@@ -876,113 +1034,326 @@ function ImagePage() {
           .header, .section { padding-left: 16px; padding-right: 16px; }
           .title { font-size: 24px; }
         }
-      `), /* @__PURE__ */ React.createElement("div", { className: "shell" }, /* @__PURE__ */ React.createElement("div", { className: "app" }, /* @__PURE__ */ React.createElement("section", { className: "panel header" }, /* @__PURE__ */ React.createElement("div", { className: "title-row" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "title" }, "IMAGE.TSX"), /* @__PURE__ */ React.createElement("div", { className: "subtitle" }, "Birincil worker ANO. \u0130kincil/orchestrator worker BABO. Model listesi ANO ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "GET /api/modeller"), " ile, \xFCretim ANO ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "POST /api/gorsel"), " ile; orkestrasyon ise BABO ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "POST /api/calistir"), " ile y\xFCr\xFCt\xFCl\xFCr.")), /* @__PURE__ */ React.createElement("div", { className: "badge-row" }, /* @__PURE__ */ React.createElement("div", { className: "badge" }, /* @__PURE__ */ React.createElement("span", { className: `dot ${anoTone}` }), " ANO \xB7 ", toneText(anoTone)), /* @__PURE__ */ React.createElement("div", { className: "badge" }, /* @__PURE__ */ React.createElement("span", { className: `dot ${baboTone}` }), " BABO \xB7 ", toneText(baboTone)), /* @__PURE__ */ React.createElement("div", { className: "badge" }, /* @__PURE__ */ React.createElement("span", { className: `dot ${panelTone}` }), " Panel \xB7 ", toneText(panelTone)))), /* @__PURE__ */ React.createElement("div", { className: "tiny" }, "ANO durum: ", safeText(anoHealth?.durum, "-"), " \xB7 BABO sa\u011Fl\u0131k puan\u0131: ", safeNumber(baboHealth?.saglik?.saglikPuani, 0) || "-", " \xB7 Panel aktif i\u015F: ", safeNumber(baboPanel?.aktifIsSayisi, 0))), error ? /* @__PURE__ */ React.createElement("div", { className: "error-box" }, error) : null, notice ? /* @__PURE__ */ React.createElement("div", { className: "notice-box" }, notice) : null, /* @__PURE__ */ React.createElement("div", { className: "grid" }, /* @__PURE__ */ React.createElement("section", { className: "panel section" }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "\xDCretim Formu"), /* @__PURE__ */ React.createElement("div", { className: "field full" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Prompt"), /* @__PURE__ */ React.createElement(
-    "textarea",
-    {
-      placeholder: "Ne \xFCretilece\u011Fini a\xE7\u0131k yaz. Stil, \u0131\u015F\u0131k, kompozisyon ve kullan\u0131m amac\u0131 ekle.",
-      value: prompt,
-      onChange: (event) => setPrompt(event.target.value)
-    }
-  ), /* @__PURE__ */ React.createElement("div", { className: "tiny" }, "ANO s\u0131n\u0131r\u0131 ", MAX_ANO_PROMPT, ", BABO IMG s\u0131n\u0131r\u0131 ", MAX_BABO_PROMPT, " karakter.")), /* @__PURE__ */ React.createElement("div", { className: "chips" }, QUICK_PROMPTS.map((item) => /* @__PURE__ */ React.createElement("button", { key: item, type: "button", className: "chip", onClick: () => setPrompt(item) }, "H\u0131zl\u0131 prompt"))), /* @__PURE__ */ React.createElement("div", { className: "controls-grid" }, /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "\xC7al\u0131\u015Fma modu"), /* @__PURE__ */ React.createElement("div", { className: "chips" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: `chip ${workerMode === "ano" ? "active" : ""}`, onClick: () => setWorkerMode("ano") }, "ANO birincil"), /* @__PURE__ */ React.createElement("button", { type: "button", className: `chip ${workerMode === "babo" ? "active" : ""}`, onClick: () => setWorkerMode("babo") }, "BABO orkestra"))), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Sa\u011Flay\u0131c\u0131 filtresi"), /* @__PURE__ */ React.createElement("select", { value: providerFilter, onChange: (event) => setProviderFilter(event.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "T\xFCm\xFC"), providerOptions.filter(Boolean).map((provider) => /* @__PURE__ */ React.createElement("option", { key: provider, value: provider }, provider)))), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Model arama"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: modelSearch,
-      onChange: (event) => setModelSearch(event.target.value),
-      placeholder: "ANO /api/modeller \xFCzerinde ara"
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Model"), /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      value: selectedModelId,
-      onChange: (event) => setSelectedModelId(event.target.value),
-      disabled: modelsLoading || !models.length
-    },
-    !models.length ? /* @__PURE__ */ React.createElement("option", { value: "" }, modelsLoading ? "Modeller y\xFCkleniyor..." : "Model bulunamad\u0131") : null,
-    models.map((item) => /* @__PURE__ */ React.createElement("option", { key: item.kimlik, value: item.kimlik }, item.ad, " \xB7 ", item.saglayici))
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Kalite"), /* @__PURE__ */ React.createElement("div", { className: "chips" }, QUALITY_OPTIONS.map((item) => /* @__PURE__ */ React.createElement("button", { key: item, type: "button", className: `chip ${quality === item ? "active" : ""}`, onClick: () => setQuality(item) }, item)))), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Oran"), /* @__PURE__ */ React.createElement("div", { className: "chips" }, RATIO_OPTIONS.map((item) => /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      key: item.key,
-      type: "button",
-      className: `chip ${ratio === item.key ? "active" : ""}`,
-      onClick: () => {
-        setRatio(item.key);
-        setWidth(item.width);
-        setHeight(item.height);
-      }
-    },
-    item.label
-  )))), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Geni\u015Flik"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      min: 256,
-      max: 2048,
-      step: 1,
-      value: width,
-      onChange: (event) => {
-        const nextWidth = Math.max(256, Math.min(2048, safeNumber(event.target.value, 1024)));
-        setWidth(nextWidth);
-        setRatio(ratioFromSize(nextWidth, height));
-      }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Y\xFCkseklik"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      min: 256,
-      max: 2048,
-      step: 1,
-      value: height,
-      onChange: (event) => {
-        const nextHeight = Math.max(256, Math.min(2048, safeNumber(event.target.value, 1024)));
-        setHeight(nextHeight);
-        setRatio(ratioFromSize(width, nextHeight));
-      }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Adet"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      min: 1,
-      max: 4,
-      step: 1,
-      value: count,
-      onChange: (event) => setCount(Math.max(1, Math.min(4, safeNumber(event.target.value, 1))))
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Stil (BABO normalize eder; provider etkisi s\u0131n\u0131rl\u0131 olabilir)"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: style,
-      onChange: (event) => setStyle(event.target.value),
-      placeholder: "\xF6r. cinematic, anime, photoreal"
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field full" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "Referans g\xF6rsel URL (BABO request alan\u0131)"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: referenceImageUrl,
-      onChange: (event) => setReferenceImageUrl(event.target.value),
-      placeholder: "https://..."
-    }
-  )), /* @__PURE__ */ React.createElement("div", { className: "field" }, /* @__PURE__ */ React.createElement("div", { className: "label" }, "BABO timeout ms"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      min: 1000,
-      max: 300000,
-      step: 1000,
-      value: baboTimeoutMs,
-      onChange: (event) => setBaboTimeoutMs(Math.max(1000, Math.min(3e5, safeNumber(event.target.value, DEFAULT_BABO_TIMEOUT_MS))))
-    }
-  ))), /* @__PURE__ */ React.createElement("div", { className: "switch-row" }, /* @__PURE__ */ React.createElement("label", { className: "switch" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: testMode, onChange: (event) => setTestMode(event.target.checked) }), "Test modu"), /* @__PURE__ */ React.createElement("label", { className: "switch" }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: autoFallback, onChange: (event) => setAutoFallback(event.target.checked), disabled: workerMode !== "ano" }), "ANO hata verirse BABO fallback")), /* @__PURE__ */ React.createElement("div", { className: "actions" }, /* @__PURE__ */ React.createElement("button", { className: "primary", type: "button", onClick: () => void handleGenerate(), disabled: submitting || modelsLoading }, submitting ? "\xC7al\u0131\u015F\u0131yor..." : workerMode === "ano" ? "ANO ile \xFCret" : "BABO ile \xFCret"), /* @__PURE__ */ React.createElement("button", { className: "secondary", type: "button", onClick: () => {
-    resetResultState();
-    setError("");
-    setNotice("");
-  }, disabled: submitting }, "Sonucu temizle"), /* @__PURE__ */ React.createElement("button", { className: "secondary", type: "button", onClick: () => {
-    void loadModels();
-    void loadWorkerHealth();
-  }, disabled: submitting }, "Modelleri ve durumu yenile")), /* @__PURE__ */ React.createElement("div", { className: "info-box brand" }, "Sayfa art\u0131k ANO i\xE7in ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/modeller"), ", ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/gorsel"), " ve ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/durum"), " kullan\u0131r. BABO taraf\u0131nda ise ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/calistir"), ", ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/durum"), ", ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/api/panel"), ",", /* @__PURE__ */ React.createElement("span", { className: "mono" }, " /api/is/:isKimligi"), ", ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/gecmis"), ", ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/arsiv"), " ve ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "/izle"), " kullan\u0131l\u0131r. BABO iste\u011Finde ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "X-Korelasyon-Anahtari"), " ve ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, "X-Timeout-Ms"), " da ta\u015F\u0131n\u0131r.")), /* @__PURE__ */ React.createElement("section", { className: "panel section" }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "Aktif Sonu\xE7 ve \u0130zleme"), result ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "result-meta" }, /* @__PURE__ */ React.createElement("div", { className: "meta-list" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Kaynak:"), " ", result.source, result.fallbackUsed ? " \xB7 fallback" : ""), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Durum:"), " ", result.status), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Model:"), " ", result.model), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Sa\u011Flay\u0131c\u0131:"), " ", result.provider), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Mesaj:"), " ", result.message), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "\u0130\u015F kimli\u011Fi:"), " ", safeText(result.job?.isKimligi || result.meta?.isKimligi, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Korelasyon:"), " ", safeText(result.correlationId || result.job?.korelasyonAnahtari, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "S\xFCre:"), " ", result.meta?.sureMs != null ? `${result.meta?.sureMs} ms` : "-"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Maliyet:"), " ", result.meta?.maliyet != null ? result.meta?.maliyet : "-"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Timeout:"), " ", result.timeoutMs != null ? `${result.timeoutMs} ms` : "-"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Fallback zinciri:"), " ", ensureArray(result.orchestration?.fallbackZinciri).join(" -> ") || "-")), /* @__PURE__ */ React.createElement("div", { className: "hint" }, result.prompt)), result.images.length ? /* @__PURE__ */ React.createElement("div", { className: "result-grid" }, result.images.map((src) => /* @__PURE__ */ React.createElement("div", { key: src, className: "image-card" }, /* @__PURE__ */ React.createElement("img", { src, alt: "\xDCretilen g\xF6rsel" })))) : /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "G\xF6rsel hen\xFCz d\xF6nmedi. BABO i\u015F takibi panelini a\u015Fa\u011F\u0131dan izle.")) : /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "Hen\xFCz aktif sonu\xE7 yok."), /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "BABO i\u015F durumu"), baboJobId ? /* @__PURE__ */ React.createElement("div", { className: "list-card" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "\u0130\u015F kimli\u011Fi:"), " ", /* @__PURE__ */ React.createElement("span", { className: "mono" }, baboJobId)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Durum:"), " ", runStatusText(baboJobStatus?.durum)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Y\xFCzde:"), " %", safeNumber(baboJobStatus?.yuzde, 0)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Aktif ad\u0131m:"), " ", safeText(baboJobStatus?.aktifAdim, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Son g\xFCncelleme:"), " ", formatDate(baboJobStatus?.sonGuncelleme)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Son hata:"), " ", safeText(baboJobStatus?.sonHata?.mesaj || baboJobStatus?.sonHata, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Tahmini biti\u015F:"), " ", formatDate(baboJobStatus?.tahminiBitis)), /* @__PURE__ */ React.createElement("div", { className: "actions" }, /* @__PURE__ */ React.createElement("button", { className: "secondary", type: "button", onClick: () => void loadBaboArtifacts(baboJobId) }, "Ge\xE7mi\u015F ve ar\u015Fivi yenile"), !isBaboTerminal(baboJobStatus?.durum) ? /* @__PURE__ */ React.createElement("button", { className: "secondary", type: "button", onClick: () => void pollBaboJob(baboJobId) }, "\u0130zlemeyi s\xFCrd\xFCr") : null)) : /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "BABO i\u015F kimli\u011Fi olu\u015Fmad\u0131ysa \u015Fu an ANO sonucu g\xF6steriliyor olabilir."))), /* @__PURE__ */ React.createElement("div", { className: "grid" }, /* @__PURE__ */ React.createElement("section", { className: "panel section" }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "BABO olay ge\xE7mi\u015Fi"), /* @__PURE__ */ React.createElement("div", { className: "list" }, !baboHistory.length ? /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "Hen\xFCz BABO olay ge\xE7mi\u015Fi yok.") : baboHistory.map((event) => /* @__PURE__ */ React.createElement("div", { key: safeText(event.olayKimligi, randomId("evt")), className: "list-card" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, safeText(event.olay, "olay"))), /* @__PURE__ */ React.createElement("div", { className: "tiny" }, formatDate(event.zamanDamgasi)), /* @__PURE__ */ React.createElement("pre", null, JSON.stringify(event.veri, null, 2)))))), /* @__PURE__ */ React.createElement("section", { className: "panel section" }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "BABO ar\u015Fiv \xF6zeti"), baboArchive ? /* @__PURE__ */ React.createElement("div", { className: "list-card" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Durum:"), " ", safeText(baboArchive.durum, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Ba\u015Flang\u0131\xE7:"), " ", formatDate(baboArchive.baslangicZamani)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Biti\u015F:"), " ", formatDate(baboArchive.bitisZamani)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Son mesaj:"), " ", safeText(baboArchive.sonMesaj, "-")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, "Hizmet t\xFCr\xFC:"), " ", safeText(baboArchive.hizmetTuru, "-")), /* @__PURE__ */ React.createElement("pre", null, JSON.stringify(baboArchive.sonuc, null, 2))) : /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "Ar\u015Fiv kayd\u0131 hen\xFCz yok."))), /* @__PURE__ */ React.createElement("section", { className: "panel section" }, /* @__PURE__ */ React.createElement("div", { className: "section-title" }, "Yerel ge\xE7mi\u015F"), /* @__PURE__ */ React.createElement("div", { className: "list" }, !localHistory.length ? /* @__PURE__ */ React.createElement("div", { className: "info-box" }, "Bu oturumda hen\xFCz \xFCretim ge\xE7mi\u015Fi yok.") : localHistory.map((entry) => /* @__PURE__ */ React.createElement("button", { key: entry.id, type: "button", className: "list-card history-button", onClick: () => void loadHistoryRecord(entry) }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("strong", null, entry.source), " \xB7 ", entry.status, entry.fallbackUsed ? " \xB7 fallback" : ""), /* @__PURE__ */ React.createElement("div", { className: "tiny" }, formatDate(entry.at)), /* @__PURE__ */ React.createElement("div", null, entry.prompt), /* @__PURE__ */ React.createElement("div", { className: "tiny" }, entry.model, " \xB7 ", entry.provider))))))));
+      `}</style>
+      <div className="shell">
+        <div className="app">
+          <section className="panel header">
+            <div className="title-row">
+              <div>
+                <div className="title">IMAGE.TSX</div>
+                <div className="subtitle">
+                  ANO hızlı ve doğrudan servis katmanı; BABO ise karar, takip ve orkestrasyon katmanı.
+                  Bu ekran yalnız görsel akışını açar ama sözleşme olarak ANO <span className="mono">/api/modeller</span>,
+                  <span className="mono"> /api/gorsel</span>, <span className="mono">/api/gorsel/duzenle</span> ve BABO
+                  <span className="mono"> /api/calistir</span>, <span className="mono">/api/is/:id*</span>, <span className="mono">/api/panel</span>
+                  yollarına birebir bağlıdır.
+                </div>
+              </div>
+              <div className="badge-row">
+                <div className="badge"><span className={`dot ${anoTone}`} /> ANO · {toneText(anoTone)}</div>
+                <div className="badge"><span className={`dot ${baboTone}`} /> BABO · {toneText(baboTone)}</div>
+                <div className="badge"><span className={`dot ${panelTone}`} /> Panel · {toneText(panelTone)}</div>
+              </div>
+            </div>
+            <div className="tiny">
+              ANO durum: {safeText(anoHealth?.durum, "-")} · BABO sağlık puanı: {safeNumber(baboHealth?.saglikPuani, 0) || "-"} · Panel aktif iş: {safeNumber(baboPanel?.aktifIsSayisi, 0)}
+            </div>
+            {error ? <div className="error-box">{error}</div> : null}
+            {notice ? <div className="notice-box">{notice}</div> : null}
+          </section>
+
+          <div className="grid">
+            <section className="panel section">
+              <div className="section-title">Üretim Formu</div>
+
+              <div className="controls-grid">
+                <div className="field full">
+                  <div className="label">ANO Worker URL</div>
+                  <input value={anoBaseUrl} onChange={(event) => setAnoBaseUrl(event.target.value)} placeholder={DEFAULT_ANO_URL} />
+                </div>
+                <div className="field full">
+                  <div className="label">BABO Worker URL</div>
+                  <input value={baboBaseUrl} onChange={(event) => setBaboBaseUrl(event.target.value)} placeholder={DEFAULT_BABO_URL} />
+                </div>
+              </div>
+
+              <div className="field full">
+                <div className="label">Prompt</div>
+                <textarea
+                  placeholder="Ne üretileceğini açık yaz. Stil, ışık, kompozisyon ve kullanım amacını ekle."
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+                <div className="tiny">ANO sınırı {MAX_ANO_PROMPT}, BABO sınırı {MAX_BABO_PROMPT} karakter.</div>
+              </div>
+
+              <div className="chips">
+                {QUICK_PROMPTS.map((item, index) => (
+                  <button key={`${index}-${item}`} type="button" className="chip" onClick={() => setPrompt(item)}>
+                    Hazır prompt
+                  </button>
+                ))}
+              </div>
+
+              <div className="controls-grid">
+                <div className="field">
+                  <div className="label">Çalışma modu</div>
+                  <div className="chips">
+                    <button type="button" className={`chip ${workerMode === "ano" ? "active" : ""}`} onClick={() => setWorkerMode("ano")}>ANO birincil</button>
+                    <button type="button" className={`chip ${workerMode === "babo" ? "active" : ""}`} onClick={() => setWorkerMode("babo")}>BABO orkestra</button>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="label">İşlem türü</div>
+                  <div className="chips">
+                    <button type="button" className={`chip ${operation === "TXT2IMG" ? "active" : ""}`} onClick={() => setOperation("TXT2IMG")}>TXT2IMG</button>
+                    <button type="button" className={`chip ${operation === "IMG2IMG" ? "active" : ""}`} onClick={() => setOperation("IMG2IMG")}>IMG2IMG</button>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="label">Sağlayıcı filtresi</div>
+                  <select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}>
+                    <option value="">Tümü</option>
+                    {providerOptions.map((provider) => (
+                      <option key={provider} value={provider}>{provider}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <div className="label">Model ara</div>
+                  <input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="ör. gpt-image" />
+                </div>
+
+                <div className="field full">
+                  <div className="label">Model</div>
+                  <select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)} disabled={modelsLoading || !models.length}>
+                    {!models.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Model yok"}</option> : null}
+                    {models.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name} · {safeText(item.provider, "-")}</option>
+                    ))}
+                  </select>
+                  {selectedModel ? (
+                    <div className="tiny">
+                      {safeText(selectedModel.puterId, selectedModel.id)} · çıktı: {ensureArray(selectedModel.modalities?.output).join(", ") || "-"} · bağlam: {selectedModel.context ?? "-"}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="field">
+                  <div className="label">Kalite</div>
+                  <div className="chips">
+                    {QUALITY_OPTIONS.map((item) => (
+                      <button key={item} type="button" className={`chip ${quality === item ? "active" : ""}`} onClick={() => setQuality(item)}>{item}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="label">Oran</div>
+                  <div className="chips">
+                    {RATIO_OPTIONS.map((item) => (
+                      <button key={item.key} type="button" className={`chip ${ratio === item.key ? "active" : ""}`} onClick={() => setRatio(item.key)}>{item.label}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="field">
+                  <div className="label">Genişlik</div>
+                  <input type="number" min={256} max={4096} step={1} value={width} onChange={(event) => {
+                    const nextWidth = Math.max(256, Math.min(4096, safeNumber(event.target.value, 1024)));
+                    setWidth(nextWidth);
+                    setRatio(ratioFromSize(nextWidth, height));
+                  }} />
+                </div>
+
+                <div className="field">
+                  <div className="label">Yükseklik</div>
+                  <input type="number" min={256} max={4096} step={1} value={height} onChange={(event) => {
+                    const nextHeight = Math.max(256, Math.min(4096, safeNumber(event.target.value, 1024)));
+                    setHeight(nextHeight);
+                    setRatio(ratioFromSize(width, nextHeight));
+                  }} />
+                </div>
+
+                <div className="field">
+                  <div className="label">Adet</div>
+                  <input type="number" min={1} max={4} step={1} value={count} onChange={(event) => setCount(Math.max(1, Math.min(4, safeNumber(event.target.value, 1))))} />
+                </div>
+
+                <div className="field">
+                  <div className="label">BABO timeout (ms)</div>
+                  <input type="number" min={1000} max={300000} step={1000} value={timeoutMs} onChange={(event) => setTimeoutMs(Math.max(1000, Math.min(300000, safeNumber(event.target.value, 60000))))} />
+                </div>
+
+                <div className="field full">
+                  <div className="label">Referans görsel URL</div>
+                  <input value={referenceImageUrl} onChange={(event) => setReferenceImageUrl(event.target.value)} placeholder="IMG2IMG için zorunlu. https://..." />
+                </div>
+
+                <div className="field full">
+                  <div className="label">Maske görsel URL</div>
+                  <input value={maskImageUrl} onChange={(event) => setMaskImageUrl(event.target.value)} placeholder="İsteğe bağlı maske URL" />
+                </div>
+              </div>
+
+              <div className="switch-row">
+                <label className="switch">
+                  <input type="checkbox" checked={testMode} onChange={(event) => setTestMode(event.target.checked)} />
+                  Test modu
+                </label>
+                <label className="switch">
+                  <input type="checkbox" checked={autoFallback} onChange={(event) => setAutoFallback(event.target.checked)} />
+                  ANO hata verirse BABO fallback
+                </label>
+              </div>
+
+              <div className="actions">
+                <button className="primary" type="button" onClick={() => void handleGenerate()} disabled={submitting || !selectedModel}>
+                  {submitting ? "Çalışıyor..." : workerMode === "ano" ? "ANO ile üret" : "BABO ile çalıştır"}
+                </button>
+                <button className="secondary" type="button" onClick={() => { setError(""); setNotice(""); resetResultState(); }}>
+                  Sonucu temizle
+                </button>
+                <button className="secondary" type="button" onClick={() => { void loadModels(); void loadWorkerHealth(); }}>
+                  Modelleri ve durumu yenile
+                </button>
+                <button className="secondary" type="button" onClick={() => void runDiagnosis()} disabled={!selectedModel}>
+                  BABO teşhis
+                </button>
+              </div>
+
+              <div className="info-box brand">
+                ANO hızlı yol ve sade JSON döner. BABO aynı hizmeti daha akıllı yürütür; timeout, retry, fallback, iş kimliği,
+                panel, geçmiş ve arşiv bilgisi taşır. Bu yüzden varsayılan kısa yol ANO, kontrollü yol BABO’dur.
+              </div>
+
+              <div className="hint">
+                Model kataloğu ANO <span className="mono">GET /api/modeller?output=image&amp;limit=500</span> üstünden gelir.
+                TXT2IMG için ANO <span className="mono">POST /api/gorsel</span>, IMG2IMG için ANO <span className="mono">POST /api/gorsel/duzenle</span> kullanılır.
+                BABO her iki durumda da <span className="mono">POST /api/calistir</span> ile çalışır ve hizmet tipi olarak
+                <span className="mono"> {operation} </span> gönderilir.
+              </div>
+            </section>
+
+            <section className="panel section">
+              <div className="section-title">Aktif Sonuç</div>
+              {result ? (
+                <>
+                  <div className="list-card result-meta">
+                    <div><strong>Kaynak:</strong> {result.source} · {result.serviceType}{result.fallbackUsed ? " · fallback" : ""}</div>
+                    <div><strong>Durum:</strong> {result.status}</div>
+                    <div><strong>Model:</strong> {result.model}</div>
+                    <div><strong>Sağlayıcı:</strong> {result.provider}</div>
+                    <div><strong>Mesaj:</strong> {result.message}</div>
+                  </div>
+                  <div className="hint">{result.prompt}</div>
+                  {result.images.length ? (
+                    <div className="result-grid">
+                      {result.images.map((src) => (
+                        <div key={src} className="image-card"><img src={src} alt="Üretilen görsel" /></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="info-box">Görsel henüz dönmedi. BABO iş takibi panelini aşağıdan izle.</div>
+                  )}
+                </>
+              ) : (
+                <div className="info-box">Henüz aktif sonuç yok.</div>
+              )}
+
+              <div className="section-title">BABO iş durumu</div>
+              {baboJobId ? (
+                <div className="list-card">
+                  <div><strong>İş kimliği:</strong> <span className="mono">{baboJobId}</span></div>
+                  <div><strong>Durum:</strong> {runStatusText(baboJobStatus?.durum)}</div>
+                  <div><strong>Yüzde:</strong> %{safeNumber(baboJobStatus?.yuzde, 0)}</div>
+                  <div><strong>Aktif adım:</strong> {safeText(baboJobStatus?.aktifAdim, "-")}</div>
+                  <div><strong>Son güncelleme:</strong> {formatDate(baboJobStatus?.sonGuncelleme)}</div>
+                  <div><strong>Tahmini bitiş:</strong> {formatDate(baboJobStatus?.tahminiBitis)}</div>
+                  <div><strong>Son hata:</strong> {safeText((baboJobStatus as any)?.sonHata?.mesaj || (baboJobStatus as any)?.sonHata, "-")}</div>
+                  <div className="actions">
+                    <button className="secondary" type="button" onClick={() => void loadBaboArtifacts(baboJobId)}>Geçmiş ve arşivi yenile</button>
+                    {!isBaboTerminal(baboJobStatus?.durum) ? <button className="secondary" type="button" onClick={() => void pollBaboJob(baboJobId)}>Canlı izle</button> : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="info-box">Aktif BABO işi yok.</div>
+              )}
+
+              <div className="section-title">BABO panel özeti</div>
+              <div className="list-card">
+                <div><strong>Aktif iş:</strong> {safeNumber(baboPanel?.aktifIsSayisi, 0)}</div>
+                <div><strong>Genel sağlık puanı:</strong> {safeNumber(baboPanel?.genelSaglikPuani, 0)}</div>
+                <div><strong>Durum:</strong> {safeText(baboPanel?.durum, "-")}</div>
+                <div><strong>Son hata:</strong> {safeText((baboPanel as any)?.sonHata?.mesaj || (baboPanel as any)?.sonHata, "-")}</div>
+              </div>
+            </section>
+          </div>
+
+          <div className="grid">
+            <section className="panel section">
+              <div className="section-title">Yerel geçmiş</div>
+              {localHistory.length ? (
+                <div className="list">
+                  {localHistory.map((entry) => (
+                    <button key={entry.id} className="list-card history-button" type="button" onClick={() => void loadHistoryRecord(entry)}>
+                      <div><strong>{entry.source}</strong> · {entry.serviceType} · {entry.status}</div>
+                      <div className="tiny">{formatDate(entry.at)} · {safeText(entry.model, "-")} · {safeText(entry.provider, "-")}</div>
+                      <div className="tiny">{safeText(entry.prompt, "-")}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : <div className="info-box">Yerel geçmiş boş.</div>}
+
+              <div className="section-title">ANO hizmet özeti</div>
+              {anoServices.length ? (
+                <div className="list">
+                  {anoServices.map((service) => (
+                    <div key={service.kod} className="list-card">
+                      <div><strong>{safeText(service.kod)}</strong> · {safeText(service.puter, "-")}</div>
+                      <div className="tiny">Route: <span className="mono">{safeText(service.route, "-")}</span> · Doğrudan: {service.dogrudan ? "evet" : "hayır"}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="info-box">ANO hizmet listesi henüz yüklenmedi.</div>}
+            </section>
+
+            <section className="panel section">
+              <div className="section-title">BABO geçmişi</div>
+              {baboHistory.length ? (
+                <div className="list">
+                  {baboHistory.map((entry) => (
+                    <div key={safeText(entry.olayKimligi, randomId("evt"))} className="list-card">
+                      <div><strong>{safeText(entry.olay, "olay")}</strong></div>
+                      <div className="tiny">{formatDate(entry.zamanDamgasi)}</div>
+                      <pre>{prettyJson(entry.veri)}</pre>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="info-box">BABO geçmişi boş.</div>}
+
+              <div className="section-title">BABO arşiv / teşhis / ham çıktı</div>
+              <div className="list">
+                <div className="list-card">
+                  <div><strong>Arşiv</strong></div>
+                  <pre>{prettyJson(baboArchive)}</pre>
+                </div>
+                <div className="list-card">
+                  <div><strong>Teşhis</strong></div>
+                  <pre>{prettyJson(baboDiagnosis)}</pre>
+                </div>
+                <div className="list-card">
+                  <div><strong>Aktif sonuç ham verisi</strong></div>
+                  <pre>{prettyJson(result?.raw)}</pre>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }
-export {
-  ImagePage as default
-};
