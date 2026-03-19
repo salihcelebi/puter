@@ -117,20 +117,6 @@ function normalizeCatalogModel(raw: any): CatalogModel | null {
   };
 }
 
-function isModelLikelyImageCapable(model: CatalogModel | null | undefined) {
-  if (!model) return false;
-  const outputs = ensureArray<string>(model.modalities?.output).map((item) => safeText(item).toLowerCase());
-  if (outputs.includes("image")) return true;
-  const haystack = [
-    model.puterId,
-    model.id,
-    model.name,
-    model.provider,
-    ...(model.aliases || [])
-  ].map((item) => safeText(item).toLowerCase()).join(" ");
-  return /(image|img|flux|sdxl|stable diffusion|stable-diffusion|dall|recraft|midjourney|playground)/.test(haystack);
-}
-
 function ratioFromSize(width: number, height: number) {
   const exact = RATIO_OPTIONS.find((item) => item.width === width && item.height === height);
   return exact?.key || "1:1";
@@ -302,6 +288,324 @@ type CatalogModel = {
   costs?: Record<string, unknown>;
 };
 
+type FilterGroupKey = "identity" | "capability" | "performance" | "cost" | "time" | "behavior";
+type FilterMode = "all" | "yes" | "no";
+type TierMode = "all" | "fast" | "balanced" | "deep";
+type PriceMode = "all" | "free" | "cheap" | "mid" | "premium";
+type DateMode = "all" | "new" | "recent" | "older";
+type QualityMode = "all" | "quick" | "balanced" | "premium";
+
+type FilterState = {
+  provider: string;
+  modelName: string;
+  alias: string;
+  imageInput: FilterMode;
+  multimodal: FilterMode;
+  speed: TierMode;
+  inputPrice: PriceMode;
+  outputPrice: PriceMode;
+  freeOnly: FilterMode;
+  releaseDate: DateMode;
+  openWeights: FilterMode;
+  recommended: FilterMode;
+  qualityLevel: QualityMode;
+};
+
+type FilterDefinition = {
+  key: keyof FilterState;
+  label: string;
+  group: FilterGroupKey;
+  order: number;
+  visibility: "always" | "imageInputOnly";
+  advanced: boolean;
+  dependency: keyof FilterState | null;
+  help: string;
+  control: "text" | "select";
+  options?: { value: string; label: string }[];
+};
+
+type FilterChecklistStep = {
+  group: FilterGroupKey;
+  label: string;
+  count: number;
+  activeCount: number;
+};
+
+type FilterReason = {
+  key: keyof FilterState;
+  label: string;
+  before: number;
+  after: number;
+  removed: number;
+  valueText: string;
+};
+
+type ModelFacets = {
+  hasImageInput: boolean;
+  isMultimodal: boolean;
+  speed: Exclude<TierMode, "all">;
+  inputPrice: PriceMode | "unknown";
+  outputPrice: PriceMode | "unknown";
+  isFree: boolean;
+  releaseDate: DateMode | "unknown";
+  openWeights: boolean;
+  recommended: boolean;
+  qualityLevel: Exclude<QualityMode, "all">;
+};
+
+const FILTER_GROUP_ORDER: FilterGroupKey[] = ["identity", "capability", "performance", "cost", "time", "behavior"];
+const FILTER_GROUP_LABELS: Record<FilterGroupKey, string> = {
+  identity: "1. Kimlik",
+  capability: "2. Girdi yeteneği",
+  performance: "3. Performans",
+  cost: "4. Maliyet",
+  time: "5. Zaman",
+  behavior: "6. Davranış"
+};
+
+const DEFAULT_FILTERS: FilterState = {
+  provider: "",
+  modelName: "",
+  alias: "",
+  imageInput: "all",
+  multimodal: "all",
+  speed: "all",
+  inputPrice: "all",
+  outputPrice: "all",
+  freeOnly: "all",
+  releaseDate: "all",
+  openWeights: "all",
+  recommended: "all",
+  qualityLevel: "all"
+};
+
+const FILTER_DEFINITIONS: FilterDefinition[] = [
+  { key: "provider", label: "Sağlayıcı", group: "identity", order: 10, visibility: "always", advanced: false, dependency: null, help: "Önce sağlayıcıyı gör, istersen listeyi tek sağlayıcıya indir.", control: "select" },
+  { key: "modelName", label: "Model Adı", group: "identity", order: 20, visibility: "always", advanced: false, dependency: null, help: "Model adında geçen kelimeye göre daraltır.", control: "text" },
+  { key: "alias", label: "Takma Ad", group: "identity", order: 30, visibility: "always", advanced: true, dependency: null, help: "Takma ad veya kısa model adıyla arama yapar.", control: "text" },
+  { key: "imageInput", label: "Görsel Girdisi", group: "capability", order: 40, visibility: "always", advanced: true, dependency: null, help: "Modelin görsel girdi kabul edip etmediğini seçersin.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "yes", label: "Evet" },
+    { value: "no", label: "Hayır" }
+  ] },
+  { key: "multimodal", label: "Çoklu Modlu", group: "capability", order: 50, visibility: "imageInputOnly", advanced: true, dependency: "imageInput", help: "Görsel girdiyi destekleyenler içinden çoklu modlu modelleri ayırır.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "yes", label: "Evet" },
+    { value: "no", label: "Hayır" }
+  ] },
+  { key: "speed", label: "Hız", group: "performance", order: 60, visibility: "always", advanced: true, dependency: null, help: "Ad ve model ipuçlarına göre hızlı, dengeli veya derin sınıfı gösterir.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "fast", label: "Hızlı" },
+    { value: "balanced", label: "Dengeli" },
+    { value: "deep", label: "Derin" }
+  ] },
+  { key: "qualityLevel", label: "Kalite Seviyesi", group: "performance", order: 70, visibility: "always", advanced: true, dependency: null, help: "Modeli hızlı, dengeli veya premium kalite sınıfında görmeni sağlar.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "quick", label: "Hızlı kalite" },
+    { value: "balanced", label: "Dengeli kalite" },
+    { value: "premium", label: "Premium kalite" }
+  ] },
+  { key: "inputPrice", label: "Giriş Fiyatı", group: "cost", order: 80, visibility: "always", advanced: true, dependency: null, help: "Giriş maliyetini kaba seviyelerde daraltır.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "free", label: "Ücretsiz" },
+    { value: "cheap", label: "Düşük" },
+    { value: "mid", label: "Orta" },
+    { value: "premium", label: "Yüksek" }
+  ] },
+  { key: "outputPrice", label: "Çıkış Fiyatı", group: "cost", order: 90, visibility: "always", advanced: true, dependency: null, help: "Çıkış maliyetini kaba seviyelerde daraltır.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "free", label: "Ücretsiz" },
+    { value: "cheap", label: "Düşük" },
+    { value: "mid", label: "Orta" },
+    { value: "premium", label: "Yüksek" }
+  ] },
+  { key: "freeOnly", label: "Ücretsiz Mi", group: "cost", order: 100, visibility: "always", advanced: true, dependency: null, help: "Hem giriş hem çıkış maliyeti sıfır olanları ayırır.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "yes", label: "Evet" },
+    { value: "no", label: "Hayır" }
+  ] },
+  { key: "releaseDate", label: "Yayın Tarihi", group: "time", order: 110, visibility: "always", advanced: true, dependency: null, help: "Yeni, son dönem veya eski modelleri ayrı görürsün.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "new", label: "Yeni" },
+    { value: "recent", label: "Son dönem" },
+    { value: "older", label: "Eski" }
+  ] },
+  { key: "openWeights", label: "Açık Ağırlık", group: "behavior", order: 120, visibility: "always", advanced: true, dependency: null, help: "Açık ağırlıklı modelleri ayrı gösterir.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "yes", label: "Evet" },
+    { value: "no", label: "Hayır" }
+  ] },
+  { key: "recommended", label: "Önerilen", group: "behavior", order: 130, visibility: "always", advanced: true, dependency: null, help: "Görsel üretim için öneri işareti taşıyan adayları öne çıkarır.", control: "select", options: [
+    { value: "all", label: "Fark etmez" },
+    { value: "yes", label: "Evet" },
+    { value: "no", label: "Hayır" }
+  ] }
+];
+
+function getModelCost(model: CatalogModel, kind: "input" | "output") {
+  const key = kind === "input" ? safeText(model.input_cost_key) : safeText(model.output_cost_key);
+  const record = model.costs && typeof model.costs === "object" ? model.costs : null;
+  if (!record) return null;
+  const directKey = key && typeof record[key] !== "undefined" ? record[key] : (typeof record[kind] !== "undefined" ? record[kind] : null);
+  const value = Number(directKey);
+  return Number.isFinite(value) ? value : null;
+}
+
+function detectSpeedTier(model: CatalogModel): Exclude<TierMode, "all"> {
+  const haystack = [model.id, model.name, model.puterId, ...(model.aliases || [])].join(" ").toLowerCase();
+  if (/(flash|turbo|nano|mini|lite|fast|swift)/.test(haystack)) return "fast";
+  if (/(pro|max|ultra|quality|hq|studio)/.test(haystack)) return "deep";
+  return "balanced";
+}
+
+function detectQualityLevel(model: CatalogModel): Exclude<QualityMode, "all"> {
+  const haystack = [model.id, model.name, model.puterId, ...(model.aliases || [])].join(" ").toLowerCase();
+  if (/(flash|turbo|nano|mini|lite|fast)/.test(haystack)) return "quick";
+  if (/(pro|max|ultra|hq|studio|quality)/.test(haystack)) return "premium";
+  return "balanced";
+}
+
+function detectPriceTier(value: number | null): PriceMode | "unknown" {
+  if (value == null) return "unknown";
+  if (value <= 0) return "free";
+  if (value <= 0.01) return "cheap";
+  if (value <= 0.05) return "mid";
+  return "premium";
+}
+
+function detectReleaseBucket(value: unknown): DateMode | "unknown" {
+  const text = safeText(value);
+  if (!text) return "unknown";
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  const diffDays = (Date.now() - date.getTime()) / 86400000;
+  if (diffDays <= 180) return "new";
+  if (diffDays <= 540) return "recent";
+  return "older";
+}
+
+function detectRecommended(model: CatalogModel) {
+  const haystack = [model.id, model.name, model.puterId, ...(model.aliases || [])].join(" ").toLowerCase();
+  return /(image|flux|recraft|dall|diffusion|imagen|ideogram|kandinsky|sdxl)/.test(haystack);
+}
+
+function deriveModelFacets(model: CatalogModel): ModelFacets {
+  const input = ensureArray<string>(model.modalities?.input).map((item) => safeText(item).toLowerCase()).filter(Boolean);
+  const output = ensureArray<string>(model.modalities?.output).map((item) => safeText(item).toLowerCase()).filter(Boolean);
+  const hasImageInput = input.includes("image");
+  const modalityPool = new Set([...input, ...output]);
+  const isMultimodal = modalityPool.size > 2 || hasImageInput || input.some((item) => item !== "text") || output.some((item) => item !== "text" && item !== "image");
+  const inputCost = getModelCost(model, "input");
+  const outputCost = getModelCost(model, "output");
+  return {
+    hasImageInput,
+    isMultimodal,
+    speed: detectSpeedTier(model),
+    inputPrice: detectPriceTier(inputCost),
+    outputPrice: detectPriceTier(outputCost),
+    isFree: (inputCost ?? 0) <= 0 && (outputCost ?? 0) <= 0,
+    releaseDate: detectReleaseBucket(model.release_date || model.knowledge),
+    openWeights: Boolean(model.open_weights),
+    recommended: detectRecommended(model),
+    qualityLevel: detectQualityLevel(model)
+  };
+}
+
+function isFilterVisible(def: FilterDefinition, filters: FilterState) {
+  if (def.visibility === "always") return true;
+  return filters.imageInput === "yes";
+}
+
+function isFilterActive(key: keyof FilterState, value: FilterState[keyof FilterState]) {
+  if (["provider", "modelName", "alias"].includes(String(key))) {
+    return safeText(value) !== "";
+  }
+  return safeText(value) !== "all";
+}
+
+function getFilterValueText(key: keyof FilterState, filters: FilterState) {
+  const value = filters[key];
+  if (typeof value !== "string") return "-";
+  if (value === "") return "-";
+  const def = FILTER_DEFINITIONS.find((item) => item.key === key);
+  const option = def?.options?.find((item) => item.value === value);
+  return option?.label || value;
+}
+
+function modelMatchesFilter(model: CatalogModel, filters: FilterState, def: FilterDefinition) {
+  const facets = deriveModelFacets(model);
+  const providerText = safeText(model.provider).toLowerCase();
+  const nameText = safeText(model.name).toLowerCase();
+  const aliasPool = ensureArray<string>(model.aliases).map((item) => safeText(item).toLowerCase()).join(" ");
+  switch (def.key) {
+    case "provider":
+      return !filters.provider || providerText === filters.provider.toLowerCase();
+    case "modelName":
+      return !filters.modelName.trim() || nameText.includes(filters.modelName.trim().toLowerCase());
+    case "alias":
+      return !filters.alias.trim() || aliasPool.includes(filters.alias.trim().toLowerCase());
+    case "imageInput":
+      return filters.imageInput === "all" || (filters.imageInput === "yes" ? facets.hasImageInput : !facets.hasImageInput);
+    case "multimodal":
+      return filters.multimodal === "all" || (filters.multimodal === "yes" ? facets.isMultimodal : !facets.isMultimodal);
+    case "speed":
+      return filters.speed === "all" || facets.speed === filters.speed;
+    case "inputPrice":
+      return filters.inputPrice === "all" || facets.inputPrice === filters.inputPrice;
+    case "outputPrice":
+      return filters.outputPrice === "all" || facets.outputPrice === filters.outputPrice;
+    case "freeOnly":
+      return filters.freeOnly === "all" || (filters.freeOnly === "yes" ? facets.isFree : !facets.isFree);
+    case "releaseDate":
+      return filters.releaseDate === "all" || facets.releaseDate === filters.releaseDate;
+    case "openWeights":
+      return filters.openWeights === "all" || (filters.openWeights === "yes" ? facets.openWeights : !facets.openWeights);
+    case "recommended":
+      return filters.recommended === "all" || (filters.recommended === "yes" ? facets.recommended : !facets.recommended);
+    case "qualityLevel":
+      return filters.qualityLevel === "all" || facets.qualityLevel === filters.qualityLevel;
+    default:
+      return true;
+  }
+}
+
+function buildFilterView(models: CatalogModel[], filters: FilterState) {
+  let current = [...models];
+  const reasons: FilterReason[] = [];
+  const checklist: FilterChecklistStep[] = [];
+
+  for (const group of FILTER_GROUP_ORDER) {
+    const defs = FILTER_DEFINITIONS
+      .filter((item) => item.group === group)
+      .filter((item) => isFilterVisible(item, filters))
+      .sort((a, b) => a.order - b.order);
+    const activeDefs = defs.filter((item) => isFilterActive(item.key, filters[item.key]));
+
+    for (const def of activeDefs) {
+      const before = current.length;
+      const next = current.filter((model) => modelMatchesFilter(model, filters, def));
+      reasons.push({
+        key: def.key,
+        label: def.label,
+        before,
+        after: next.length,
+        removed: Math.max(0, before - next.length),
+        valueText: getFilterValueText(def.key, filters)
+      });
+      current = next;
+    }
+
+    checklist.push({
+      group,
+      label: FILTER_GROUP_LABELS[group],
+      count: current.length,
+      activeCount: activeDefs.length
+    });
+  }
+
+  return { models: current, reasons, checklist };
+}
+
 type ResultState = {
   source: "ANO" | "BABO";
   serviceType: "TXT2IMG" | "IMG2IMG";
@@ -324,8 +628,8 @@ export default function ImagePage() {
   const [workerMode, setWorkerMode] = useState<"ano" | "babo">("ano");
   const [autoFallback, setAutoFallback] = useState(true);
   const [operation, setOperation] = useState<"TXT2IMG" | "IMG2IMG">("TXT2IMG");
-  const [providerFilter, setProviderFilter] = useState("");
-  const [modelSearch, setModelSearch] = useState("");
+  // Filtre sözleşmesini tek merkezde tutuyoruz; UI ve eleme mantığı aynı kaynaktan beslenir.
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState("");
@@ -355,45 +659,31 @@ export default function ImagePage() {
   const [baboRunPayload, setBaboRunPayload] = useState<Record<string, unknown> | null>(null);
   const [baboDiagnosis, setBaboDiagnosis] = useState<Record<string, unknown> | null>(null);
 
-  const filteredModels = useMemo(() => {
-    const providerNeedle = safeText(providerFilter).toLowerCase();
-    const searchNeedle = safeText(modelSearch).toLowerCase();
-    const next = models.filter((item) => {
-      if (providerNeedle && safeText(item.provider).toLowerCase() !== providerNeedle) {
-        return false;
-      }
-      if (searchNeedle) {
-        const haystack = [item.puterId, item.id, item.name, item.provider, ...(item.aliases || [])]
-          .map((part) => safeText(part).toLowerCase())
-          .join(" ");
-        if (!haystack.includes(searchNeedle)) {
-          return false;
-        }
-      }
-      return true;
-    });
-    return [...next].sort((left, right) => {
-      const leftScore = isModelLikelyImageCapable(left) ? 1 : 0;
-      const rightScore = isModelLikelyImageCapable(right) ? 1 : 0;
-      if (leftScore !== rightScore) return rightScore - leftScore;
-      const providerCompare = safeText(left.provider).localeCompare(safeText(right.provider), "tr");
-      if (providerCompare !== 0) return providerCompare;
-      return safeText(left.name).localeCompare(safeText(right.name), "tr");
-    });
-  }, [models, providerFilter, modelSearch]);
+  const providerOptions = useMemo(() => {
+    return Array.from(new Set(models.map((item) => safeText(item.provider)).filter(Boolean))).sort((a, b) => a.localeCompare(b, "tr"));
+  }, [models]);
+
+  // Katalog tam kalır; filtreleme yalnız ekrandaki görünümü daraltır.
+  const filterView = useMemo(() => buildFilterView(models, filters), [models, filters]);
+  const filteredModels = filterView.models;
+  const activeFilterCount = useMemo(() => filterView.reasons.length, [filterView.reasons.length]);
 
   const selectedModel = useMemo(
     () => filteredModels.find((item) => item.id === selectedModelId) || null,
     [filteredModels, selectedModelId]
   );
 
-  const providerOptions = useMemo(() => {
-    return Array.from(new Set(models.map((item) => safeText(item.provider)).filter(Boolean))).sort((a, b) => a.localeCompare(b, "tr"));
-  }, [models]);
-
   const anoTone = healthToneFromStatus(anoHealth?.durum, null);
   const baboTone = healthToneFromStatus(baboHealth?.durum, safeNumber(baboHealth?.saglikPuani, NaN));
   const panelTone = healthToneFromStatus(baboPanel?.durum, safeNumber(baboPanel?.genelSaglikPuani, NaN));
+
+  const setFilterValue = useCallback(<K extends keyof FilterState>(key: K, value: FilterState[K]) => {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }, []);
+
+  const resetAdvancedFilters = useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, []);
 
   useEffect(() => {
     storeWorkerUrl("image.tsx.anoBaseUrl", anoBaseUrl);
@@ -402,6 +692,18 @@ export default function ImagePage() {
   useEffect(() => {
     storeWorkerUrl("image.tsx.baboBaseUrl", baboBaseUrl);
   }, [baboBaseUrl]);
+
+
+  useEffect(() => {
+    if (filters.imageInput === "yes") return;
+    if (filters.multimodal !== "all") {
+      setFilters((current) => ({ ...current, multimodal: "all" }));
+    }
+  }, [filters.imageInput, filters.multimodal]);
+
+  useEffect(() => {
+    setSelectedModelId((current) => (current && filteredModels.some((item) => item.id === current) ? current : safeText(filteredModels[0]?.id)));
+  }, [filteredModels]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current != null) {
@@ -448,43 +750,29 @@ export default function ImagePage() {
     setNotice("");
     try {
       const params = new URLSearchParams();
+      params.set("output", "image");
       params.set("limit", "500");
       const envelope = await requestAno(anoBaseUrl, `/api/modeller?${params.toString()}`);
       const nextModels = ensureArray<any>((envelope.veri as any)?.modeller)
         .map((item) => normalizeCatalogModel(item))
         .filter(Boolean) as CatalogModel[];
       const providerCount = new Set(nextModels.map((item) => safeText(item.provider)).filter(Boolean)).size;
-      const preferred = nextModels.find((item) => isModelLikelyImageCapable(item)) || nextModels[0] || null;
       setModels(nextModels);
-      setSelectedModelId((current) => (current && nextModels.some((item) => item.id === current) ? current : safeText(preferred?.id)));
       if (nextModels.length > 0) {
-        setNotice(`Model kataloğu başarıyla alındı. ${nextModels.length} model ve ${providerCount} sağlayıcı listelendi; önce tam listeyi gösteriyorum, filtreleme yalnız ekrandaki görünümü daraltır.`);
+        setNotice(`Model kataloğu başarıyla alındı. ${nextModels.length} model ve ${providerCount} sağlayıcı hazır. Önce listeyi gör, sonra istersen gelişmiş filtrelerle kademeli daralt.`);
       } else {
-        setNotice("Model kataloğu boş döndü. ANO bu denemede model listesi üretmediği için sağlayıcı ve model alanları gösterilemedi.");
+        setNotice("Model kataloğu isteği tamamlandı ama görünür katalog boş geldi. Bu durumda sorun filtrede değil, doğrudan katalog verisindedir.");
       }
     } catch (loadError) {
       setModels([]);
       setSelectedModelId("");
       const reason = extractErrorMessage(loadError, "Model listesi alınamadı.");
       setError(`Model kataloğu alınamadı. Sebep: ${reason}`);
-      setNotice("Model sağlayıcıları ve modelleri bu denemede yüklenemedi. Worker yanıtı veya runtime desteği yukarıda net sebebiyle gösteriliyor.");
+      setNotice("Model sağlayıcıları ve modelleri bu denemede yüklenemedi. Hata nedeni yukarıda açıkça gösteriliyor.");
     } finally {
       setModelsLoading(false);
     }
   }, [anoBaseUrl]);
-
-  useEffect(() => {
-    if (!filteredModels.length) {
-      if (selectedModelId) {
-        setSelectedModelId("");
-      }
-      return;
-    }
-    if (!selectedModelId || !filteredModels.some((item) => item.id === selectedModelId)) {
-      const preferred = filteredModels.find((item) => isModelLikelyImageCapable(item)) || filteredModels[0];
-      setSelectedModelId(safeText(preferred?.id));
-    }
-  }, [filteredModels, models, selectedModelId]);
 
   const loadBaboArtifacts = useCallback(async (jobId: string) => {
     if (!jobId) return;
@@ -872,6 +1160,29 @@ export default function ImagePage() {
     setHeight(next.height);
   }, [ratio]);
 
+  const visibleFilterDefinitions = useMemo(() => {
+    return FILTER_GROUP_ORDER.map((group) => ({
+      group,
+      label: FILTER_GROUP_LABELS[group],
+      filters: FILTER_DEFINITIONS.filter((item) => item.group === group)
+        .filter((item) => isFilterVisible(item, filters))
+        .sort((a, b) => a.order - b.order)
+    })).filter((item) => item.filters.length > 0);
+  }, [filters]);
+
+  const filterSummaryText = useMemo(() => {
+    if (!models.length) {
+      return "Katalog boşsa önce worker’dan model verisinin gelip gelmediğini kontrol et. Filtreler boş katalog üretemez; yalnız görünümü daraltır.";
+    }
+    if (!activeFilterCount) {
+      return `Şu an ${models.length} modelin tamamını görüyorsun. Sağlayıcı ve model listesi önce açık bırakıldı; daraltma sonraki aşamaya bırakıldı.`;
+    }
+    if (!filteredModels.length) {
+      return "Katalog başarıyla geldi fakat aktif filtrelerin birleşimi görünür listeyi sıfıra indirdi. Aşağıdaki eleme özeti, listenin hangi checklist adımında daraldığını açıkça gösterir.";
+    }
+    return `${filteredModels.length} model görünür durumda. Bu liste ${activeFilterCount} aktif filtre ve ${filterView.checklist.length} checklist adımıyla kademeli daraltıldı.`;
+  }, [activeFilterCount, filterView.checklist.length, filteredModels.length, models.length]);
+
   return (
     <>
       <style>{`
@@ -973,6 +1284,42 @@ export default function ImagePage() {
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 12px;
         }
+        .filter-stage-grid {
+          display: grid;
+          gap: 12px;
+        }
+        .filter-stage-card {
+          border-radius: 18px;
+          border: 1px solid var(--line);
+          background: #fbfcfd;
+          padding: 14px;
+          display: grid;
+          gap: 12px;
+        }
+        .stage-title {
+          font-size: 14px;
+          font-weight: 800;
+          color: #344054;
+        }
+        .stage-fields {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+        .checklist-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .checklist-card {
+          border-radius: 16px;
+          border: 1px solid var(--line);
+          background: #fff;
+          padding: 12px 14px;
+          display: grid;
+          gap: 4px;
+        }
+        .compact-actions .secondary { min-height: 44px; }
         .field { display: grid; gap: 8px; }
         .field.full { grid-column: 1 / -1; }
         .label {
@@ -1143,7 +1490,7 @@ export default function ImagePage() {
           max-height: 260px;
         }
         @media (max-width: 1060px) {
-          .grid, .result-grid, .controls-grid { grid-template-columns: 1fr; }
+          .grid, .result-grid, .controls-grid, .stage-fields, .checklist-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 720px) {
           .shell { padding: 12px; }
@@ -1228,32 +1575,85 @@ export default function ImagePage() {
                   </div>
                 </div>
 
-                <div className="field">
-                  <div className="label">Sağlayıcı filtresi</div>
-                  <select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}>
-                    <option value="">Tümü</option>
-                    {providerOptions.map((provider) => (
-                      <option key={provider} value={provider}>{provider}</option>
+                <div className="field full">
+                  <div className="label">Gelişmiş filtreler</div>
+                  <div className="info-box">
+                    <strong>Filtreleme mantığı:</strong> önce kimlik, sonra girdi yeteneği, ardından performans, maliyet, zaman ve davranış adımları uygulanır.
+                    Kullanılan filtreler katalog verisini silmez; yalnız ekrandaki görünür listeyi daraltır.
+                  </div>
+                  <div className="filter-stage-grid">
+                    {visibleFilterDefinitions.map((groupItem) => (
+                      <div key={groupItem.group} className="filter-stage-card">
+                        <div className="stage-title">{groupItem.label}</div>
+                        <div className="stage-fields">
+                          {groupItem.filters.map((definition) => {
+                            const disabled = definition.key === "multimodal" && filters.imageInput !== "yes";
+                            return (
+                              <div key={definition.key} className="field">
+                                <div className="label">{definition.label}</div>
+                                {definition.control === "text" ? (
+                                  <input
+                                    value={String(filters[definition.key] || "")}
+                                    onChange={(event) => setFilterValue(definition.key, event.target.value as any)}
+                                    placeholder={definition.label === "Model Adı" ? "ör. gpt-image" : "takma ad ile ara"}
+                                  />
+                                ) : (
+                                  <select
+                                    value={String(filters[definition.key] || "all")}
+                                    onChange={(event) => setFilterValue(definition.key, event.target.value as any)}
+                                    disabled={disabled}
+                                  >
+                                    {definition.key === "provider" ? <option value="">Tümü</option> : null}
+                                    {definition.key === "provider"
+                                      ? providerOptions.map((provider) => <option key={provider} value={provider}>{provider}</option>)
+                                      : definition.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                  </select>
+                                )}
+                                <div className="tiny">{disabled ? "Bu filtreyi açmak için önce Görsel Girdisi = Evet seç." : definition.help}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <div className="label">Model ara</div>
-                  <input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="ör. gpt-image" />
+                  </div>
+                  <div className="actions compact-actions">
+                    <button type="button" className="secondary" onClick={resetAdvancedFilters}>Filtreleri sıfırla</button>
+                  </div>
+                  <div className="info-box brand">
+                    <strong>Checklist özeti:</strong> {filterSummaryText}
+                  </div>
+                  <div className="checklist-grid">
+                    {filterView.checklist.map((step) => (
+                      <div key={step.group} className="checklist-card">
+                        <strong>{step.label}</strong>
+                        <div className="tiny">Aktif filtre: {step.activeCount}</div>
+                        <div className="tiny">Kalan model: {step.count}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {activeFilterCount ? (
+                    <div className="list-card">
+                      <div className="section-title" style={{ fontSize: 16 }}>Eleme özeti</div>
+                      <div className="meta-list">
+                        {filterView.reasons.map((reason) => (
+                          <div key={String(reason.key)}>
+                            <strong>{reason.label}:</strong> {reason.valueText} seçildi; {reason.before} modelden {reason.after} model kaldı, {reason.removed} model bu adımda elendi.
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="field full">
                   <div className="label">Model</div>
                   <select value={selectedModelId} onChange={(event) => setSelectedModelId(event.target.value)} disabled={modelsLoading || !filteredModels.length}>
-                    {!filteredModels.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Model yok"}</option> : null}
+                    {!filteredModels.length ? <option value="">{modelsLoading ? "Modeller yükleniyor..." : "Filtre sonrası görünür model yok"}</option> : null}
                     {filteredModels.map((item) => (
                       <option key={item.id} value={item.id}>{item.name} · {safeText(item.provider, "-")}</option>
                     ))}
                   </select>
-                  {models.length > 0 && !filteredModels.length ? (
-                    <p className="helper error-text">Katalog yüklü ama seçili yerel filtrelerle eşleşen model görünmüyor. Sağlayıcı filtresini temizle veya arama metnini kısalt.</p>
-                  ) : null}
                   {selectedModel ? (
                     <div className="tiny">
                       {safeText(selectedModel.puterId, selectedModel.id)} · çıktı: {ensureArray(selectedModel.modalities?.output).join(", ") || "-"} · bağlam: {selectedModel.context ?? "-"}
@@ -1350,7 +1750,7 @@ export default function ImagePage() {
               </div>
 
               <div className="hint">
-                Model kataloğu ANO <span className="mono">GET /api/modeller?limit=500</span> üstünden gelir.
+                Model kataloğu ANO <span className="mono">GET /api/modeller?output=image&amp;limit=500</span> üstünden gelir.
                 TXT2IMG için ANO <span className="mono">POST /api/gorsel</span>, IMG2IMG için ANO <span className="mono">POST /api/gorsel/duzenle</span> kullanılır.
                 BABO her iki durumda da <span className="mono">POST /api/calistir</span> ile çalışır ve hizmet tipi olarak
                 <span className="mono"> {operation} </span> gönderilir.
